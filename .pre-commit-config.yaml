@@ -1,0 +1,14 @@
+# Usa o ruff do próprio projeto (versão travada no uv.lock), sem baixar nada.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff (análise)
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff (formatação)
+        entry: uv run ruff format
+        language: system
+        types: [python]

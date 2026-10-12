@@ -26,7 +26,7 @@ Seletor "Uso de processamento":
 * ( ) **75% (recomendado)**: deixa o PC utilizável durante o processo.
 * ( ) **100% (máximo)**: usa tudo; o PC fica praticamente inutilizável até terminar.
 
-Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `torch.set_num_threads` (DeepFilterNet), `num_thread` do Ollama e variáveis `OMP_NUM_THREADS`. GPU é usada quando existir e for compatível. As etapas rodam **em sequência**, nunca em paralelo, e cada modelo é descarregado da memória antes de carregar o próximo (Whisper → LLM).
+Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `num_thread` do Ollama e variáveis `OMP_NUM_THREADS` (o `deep-filter` não tem opção de threads). GPU é usada quando existir e for compatível. As etapas rodam **em sequência**, nunca em paralelo, e cada modelo é descarregado da memória antes de carregar o próximo (Whisper → LLM).
 
 ### 1.3 Fluxo geral do usuário
 
@@ -78,7 +78,7 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `t
 |---|---|---|
 | Interface | `customtkinter` | Tema escuro. Pipeline em subprocesso; a interface recebe eventos por fila. |
 | Áudio e vídeo | **FFmpeg** (binário externo) | Extração, cortes, concatenação, loudnorm, encode e queima de legendas ASS. |
-| Limpeza de áudio | `deepfilternet` + `torch` (build CPU) | Avaliar o `deepfilternet-slim` (sem PyTorch) na Fase 0. |
+| Limpeza de áudio | **`deep-filter`** (binário oficial do DeepFilterNet 0.5.6) | Sem Python nem torch. Baixado do GitHub oficial para `modelos/ferramentas/`, com SHA-256 conferido (`75E11FA16445F560CB6B021521DDB89E89270D13B83089705D98776F58FD7915`). Não tem assinatura digital. |
 | Transcrição | `faster-whisper` | GPU só NVIDIA com CUDA 12 + cuDNN 9; senão CPU `int8`. |
 | Análise de texto | `spacy` + `pt_core_news_md` | `sm` como alternativa leve. |
 | Seleção por IA | **Ollama** + cliente `ollama` | Saída em JSON estruturado (schema validado com `pydantic`). |
@@ -88,7 +88,7 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `t
 | Config / pastas | `pydantic` + TOML, `platformdirs` | Config do usuário fora do repositório. |
 | Qualidade | `pytest`, `ruff`, `pre-commit` | Fixture: vídeo de 20 s gerado pelo FFmpeg (não versionado). |
 
-Gerenciamento: **Python 3.11**, `uv` com lockfile, `pyproject.toml` com extras opcionais (`[ai]`, `[dev]`).
+Gerenciamento: **Python 3.11**, `uv` com lockfile, `pyproject.toml` com extras opcionais (`[ui]`, `[ai]`) e o grupo `dev` (instalado por padrão; o `instalar.bat` usa `--no-dev`).
 
 ### 1.6 Estrutura do repositório
 
@@ -128,14 +128,18 @@ Spurgeon/
 
 ## 2. Roadmap de Desenvolvimento (Passo a Passo)
 
-### Fase 0: Fundação do projeto (nova)
+### Fase 0: Fundação do projeto (nova) — concluída em 2026-10-12
+
+Instalado: Python 3.11.9, uv 0.13.0, FFmpeg 9.0.2 e Ollama 0.40.3. Núcleo em `src/spurgeon/core/` com 106 testes (`uv run pytest`). O que cada item virou:
 
 * Instalar Python 3.11, `uv`, FFmpeg e Ollama (via `winget`); `git init` e commit inicial.
 * Criar a estrutura da seção 1.6, `pyproject.toml`, `ruff`, `pytest` e `pre-commit`.
 * Implementar o **núcleo**: configuração (pydantic + TOML), log por projeto, `estado.json`, mapa de tempo, wrapper do FFmpeg, detecção de hardware e a pré-verificação.
 * Criar `instalar.bat` e `iniciar.bat` (opção mais leve para a v1).
-* Testar o `deepfilternet` x `deepfilternet-slim` no Windows e escolher um.
-* Investigar por que o Windows enxerga só 2 processadores lógicos (seção 5): é o maior ganho de desempenho disponível nesta máquina.
+* Testar as opções do DeepFilterNet no Windows e escolher uma (**feito**). Resultado:
+  * `deepfilternet` (PyPI) **não importa** com o torch/torchaudio atual (`torchaudio.backend` foi removido) e exigiria um torch antigo.
+  * `deepfilternet-slim` traz só a DLL e o modelo, sem API de áudio; é Alpha e de terceiro.
+  * **Escolhido: o binário oficial `deep-filter`.** Na amostra de teste (pt-BR, ruído forte), o ruído de banda larga caiu 19 dB e a faixa da voz mudou ~1 dB. Em 20 min de áudio: 0,12× do tempo real e pico de 482 MB de RAM.
 * Gerar a fixture de teste de 20 s.
 
 ### Fase 1: Interface Gráfica com CustomTkinter
@@ -183,7 +187,7 @@ Tema escuro, sem preview de vídeo, um vídeo por vez.
 ### Fase 2: Pré-processamento e Limpeza de Áudio
 
 * **Extração:** o FFmpeg extrai o áudio para `_work/audio_original.wav` (48 kHz, PCM, sem perdas).
-* **Limpeza (opcional, DeepFilterNet):** remove ruído de fundo (ventiladores, zumbidos) e melhora a nitidez da voz. Processa em blocos de alguns minutos para limitar a RAM, sobre o áudio de 1h30. Gera `_work/audio_limpo.wav`.
+* **Limpeza (opcional, DeepFilterNet):** remove ruído de fundo (ventiladores, zumbidos) e melhora a nitidez da voz. Roda o binário oficial `deep-filter -D` sobre o WAV (a opção `-D` compensa o atraso do filtro, para o áudio não ficar defasado do vídeo). Medido nesta máquina: ≈11 min e ≈2 GB de RAM estimados para 1h30. Gera `_work/audio_limpo.wav`.
 * **Normalização de volume (opcional):** `loudnorm` do FFmpeg em duas passagens. Alvo padrão: −16 LUFS no vídeo longo e −14 LUFS nos Shorts.
 * **Remoção de silêncios (pausas longas):**
   * Pausa = intervalo **sem fala** (VAD + lacunas entre palavras do Whisper), não apenas queda de volume, pois a sala tem ruído ambiente.
@@ -214,7 +218,7 @@ Tema escuro, sem preview de vídeo, um vídeo por vez.
   * O LLM recebe cada candidato **com o contexto anterior e o seguinte** e devolve, em JSON validado: categoria, nota de retenção e se o trecho é **autossuficiente**.
   * **Categorias:** pergunta-gancho, citação bíblica, aplicação prática, conclusão.
   * **Regras para não tirar de contexto:** descartar trechos que começam dependendo de algo dito antes ("então", "como eu dizia", pronomes sem referente) ou terminam no meio do argumento; incluir a citação bíblica quando o trecho a comenta; sinalizar com um **alerta de contexto** os trechos que, isolados, possam ser mal entendidos doutrinariamente.
-  * **Modelo (a confirmar por mini-benchmark com trechos reais de sermão):** candidato inicial `qwen3:8b` (≈5 GB; indicado como bom em pt-BR por uma única fonte fraca, sem benchmark). Enquanto o PC tiver só 2 processadores lógicos (seção 5), o padrão é `qwen3:4b`. Alternativas: `llama3.1:8b` e `gemma3:12b` (precisa de mais memória). Para saída estruturada, desligar o modo "thinking" do Qwen3.
+  * **Modelo (a confirmar por mini-benchmark com trechos reais de sermão):** candidato inicial `qwen3:8b` (≈5 GB; indicado como bom em pt-BR por uma única fonte fraca, sem benchmark). O `qwen3:4b` é a alternativa leve. Outras: `llama3.1:8b` e `gemma3:12b` (precisa de mais memória). Para saída estruturada, desligar o modo "thinking" do Qwen3.
   * Os modelos Llama 3 e Phi-3 do plano original foram descartados por serem mais fracos em português.
   * Seleção final: ordenar por nota, **sem sobreposição** entre Shorts, até o limite de segurança.
 * **Metadados por Short (LLM):** título, descrição e hashtags em pt-BR, mais um **nome de arquivo** (slug curto, sem acentos). Não é preciso registrar justificativa.
@@ -326,9 +330,9 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 ## 5. Hardware: pontos de atenção
 
 * **O PC-alvo da v1 é este PC de desenvolvimento.** Inspecionado em 2026-10-12: i7-6800K (6 núcleos/12 threads físicos), **15,8 GB de RAM**, **GTX 760 de 2 GB** (driver 456.71), **36 GB livres** no C:, placa-mãe Huananzhi X99 e Virtualization-based Security ativo (`HypervisorPresent=True`).
-* **O Windows enxerga só 2 processadores lógicos** (`NUMBER_OF_PROCESSORS=2`), embora o CPU tenha 12 threads. A causa pode estar na BIOS (núcleos ativos), no `msconfig` (Inicialização → Opções avançadas → "Número de processadores") ou no `bcdedit`. Não consegui confirmar a causa sem privilégio de administrador. Se for corrigível, o CPU rende até cerca de 6 vezes mais, então esta é a primeira tarefa de hardware, antes de qualquer benchmark.
-* A GTX 760 provavelmente não roda o faster-whisper atual (CUDA 12 + cuDNN 9; a compatibilidade precisa de teste) e, com um driver tão antigo, provavelmente não tem NVENC no FFmpeg atual. O **caminho só com CPU é o principal** desta máquina.
-* Com 2 threads, o Whisper, o encode `veryslow` e o LLM de 8B podem levar muitas vezes a duração do vídeo. O micro-benchmark da Fase 1 e os avisos de tempo da interface passam a ser requisitos, não extras.
+* **Limite de processadores corrigido em 2026-10-12.** Antes o Windows enxergava só 2 processadores lógicos, embora a BIOS já informasse 6 núcleos e 12 threads. Depois de reiniciar o PC, `NUMBER_OF_PROCESSORS=12`. Não sei qual ajuste resolveu (BIOS, `msconfig` ou `bcdedit`). Se o número voltar a cair, reveja essas três.
+* A GTX 760 provavelmente não roda o faster-whisper atual (CUDA 12 + cuDNN 9; a compatibilidade ainda precisa de teste na Fase 3). O **NVENC está confirmado como indisponível** (teste real com o FFmpeg 9.0.2, no `spurgeon doctor`): o encode é em libx264 na CPU. O **caminho só com CPU é o principal** desta máquina.
+* Mesmo com 12 threads, o caminho só com CPU deixa o Whisper, o encode `veryslow` e o LLM de 8B lentos (ainda não medi). O micro-benchmark da Fase 1 e os avisos de tempo da interface continuam sendo requisitos, não extras.
 * Recomendação inicial por hardware, para esta e futuras máquinas (a validar com benchmark):
 
   | Hardware | Whisper | LLM |
@@ -352,10 +356,10 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 * **Shorts:** mínimo de 30 s e máximo de 60 s, limite de segurança de 20 por vídeo, descarte de janelas com pausa interna maior que 3 s.
 * **Loudness:** −16 LUFS (vídeo longo) e −14 LUFS (Shorts).
 * **Qualidade padrão:** máxima (`veryslow`, CRF 16), com aviso de tempo estimado na interface.
-* **LLM:** `qwen3:8b` como candidato provisório (`qwen3:4b` enquanto o PC tiver só 2 processadores lógicos).
+* **LLM:** `qwen3:8b` como candidato provisório, com `qwen3:4b` como alternativa leve.
 
 ### Pendências técnicas
 
-1. **Limite de 2 processadores lógicos:** descobrir a causa (BIOS, `msconfig` ou `bcdedit`) e, se possível, liberar os 12 threads (seção 5).
-2. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
-3. **Teste da GTX 760** com o faster-whisper atual (esperado: sem suporte) e do NVENC no FFmpeg.
+1. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
+2. **Teste da GTX 760** com o faster-whisper atual (Fase 3; esperado: sem suporte). O NVENC já foi testado: indisponível.
+3. **Baixar e verificar o `deep-filter`** automaticamente (Fase 2): download do GitHub oficial, conferência do SHA-256 e guarda em `modelos/ferramentas/`.

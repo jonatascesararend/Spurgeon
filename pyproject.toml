@@ -1,0 +1,61 @@
+[project]
+name = "spurgeon"
+version = "0.1.0"
+description = "Studio Spurgeon: cortes e otimização de vídeos de sermões, aulas e Shorts"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "platformdirs>=4.2",
+    "psutil>=5.9",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+# Interface gráfica (Fase 1)
+ui = ["customtkinter>=5.2"]
+# Transcrição, NLP e seleção de cortes (Fases 3 e 4). A limpeza de áudio usa o
+# binário oficial `deep-filter` (não é pacote Python; ver Projeto.md).
+ai = [
+    "faster-whisper>=1.1",
+    "spacy>=3.7",
+    "ollama>=0.4",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "rapidfuzz>=3.9",
+]
+
+# Ferramentas de desenvolvimento: o uv instala por padrão; o instalar.bat usa --no-dev.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "pre-commit>=3.8",
+]
+
+[project.scripts]
+spurgeon = "spurgeon.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spurgeon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "ffmpeg: testes que precisam do FFmpeg instalado",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# Textos em pt-BR usam acentos e travessões que o RUF marca como "ambíguos".
+ignore = ["RUF001", "RUF002", "RUF003"]
