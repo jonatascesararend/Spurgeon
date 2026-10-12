@@ -63,8 +63,14 @@ def _config(_: argparse.Namespace) -> int:
 
 
 def _gui(_: argparse.Namespace) -> int:
-    print("A interface gráfica será criada na Fase 1. Por enquanto use: spurgeon doctor")
-    return 0
+    try:
+        from spurgeon.ui.app import executar
+    except ImportError:
+        print(
+            "A interface precisa do customtkinter. Instale com: uv sync --extra ui", file=sys.stderr
+        )
+        return 1
+    return executar()
 
 
 def main(argv: list[str] | None = None) -> int:

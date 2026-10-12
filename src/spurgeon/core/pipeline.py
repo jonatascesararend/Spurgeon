@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento
 from spurgeon.core.erros import Cancelado
@@ -23,6 +23,15 @@ from spurgeon.core.log import contexto_etapa
 from spurgeon.core.projeto import PastasProjeto
 
 _INTERVALO_SALVAR_PROGRESSO_S = 1.0
+_INTERVALO_PAUSA_S = 0.2
+
+
+class SinalControle(Protocol):
+    """O que o pipeline usa de um `threading.Event`; a interface manda os sinais por aqui."""
+
+    def is_set(self) -> bool: ...
+    def set(self) -> None: ...
+    def clear(self) -> None: ...
 
 
 class ResultadoEtapa(StrEnum):
@@ -46,14 +55,29 @@ class ContextoProjeto:
     opcoes: OpcoesProcessamento
     estado: Estado
     log: logging.Logger
-    cancelar: threading.Event = field(default_factory=threading.Event)
+    cancelar: SinalControle = field(default_factory=threading.Event)
+    pausar: SinalControle = field(default_factory=threading.Event)
     ao_progresso: Callable[[str, float], None] | None = None  # (id da etapa, fração 0..1)
+    ao_pausa: Callable[[bool], None] | None = None  # True ao parar, False ao seguir
     etapa_id: str = "-"
     _ultimo_salvamento: float = field(default=0.0, repr=False)
 
-    def verificar_cancelamento(self) -> None:
+    def ponto_seguro(self) -> None:
+        """Lugar onde a etapa aceita ser cancelada ou pausada. Chame entre blocos de trabalho."""
         if self.cancelar.is_set():
             raise Cancelado()
+        if not self.pausar.is_set():
+            return
+        self.log.info("Pausado pelo usuário.")
+        if self.ao_pausa is not None:
+            self.ao_pausa(True)
+        while self.pausar.is_set():
+            if self.cancelar.is_set():
+                raise Cancelado()
+            time.sleep(_INTERVALO_PAUSA_S)
+        self.log.info("Retomado.")
+        if self.ao_pausa is not None:
+            self.ao_pausa(False)
 
     def progresso(self, fracao: float) -> None:
         fracao = min(1.0, max(0.0, fracao))
@@ -77,6 +101,8 @@ class Etapa(ABC):
     depende_de: ClassVar[tuple[str, ...]] = ()
     #: campos de OpcoesProcessamento que mudam o resultado desta etapa.
     opcoes_relevantes: ClassVar[tuple[str, ...]] = ()
+    #: peso no progresso total e no tempo restante (a transcrição pesa mais que a extração).
+    peso: ClassVar[float] = 1.0
 
     def ativa(self, opcoes: OpcoesProcessamento) -> bool:
         return True
@@ -168,8 +194,10 @@ class Pipeline:
         registro.assinatura = ctx.opcoes.assinatura(etapa.opcoes_relevantes)
         ctx.salvar()
         ctx.log.info("Iniciando: %s", etapa.nome)
+        if ctx.ao_progresso is not None:
+            ctx.ao_progresso(etapa.id, 0.0)
         try:
-            ctx.verificar_cancelamento()
+            ctx.ponto_seguro()
             resultado = etapa.executar(ctx)
         except Cancelado:
             registro.status = StatusEtapa.CANCELADA
@@ -196,6 +224,8 @@ class Pipeline:
         registro.progresso = 1.0
         ctx.salvar()
         ctx.log.info("Concluído: %s", etapa.nome)
+        if ctx.ao_progresso is not None:
+            ctx.ao_progresso(etapa.id, 1.0)
         return None
 
     @staticmethod
@@ -209,9 +239,11 @@ class Pipeline:
         ctx.salvar()
         ctx.log.info("Revisão aprovada: %s", id_etapa)
 
-    @staticmethod
-    def progresso_total(ctx: ContextoProjeto) -> float:
+    def progresso_total(self, ctx: ContextoProjeto) -> float:
+        """Progresso 0..1 das etapas ativas, ponderado pelo `peso` de cada uma."""
+        pesos = {e.id: e.peso for e in self.etapas}
         registros = ctx.estado.etapas
-        if not registros:
+        total = sum(pesos[r.id] for r in registros)
+        if total <= 0:
             return 0.0
-        return sum(r.progresso for r in registros) / len(registros)
+        return sum(pesos[r.id] * r.progresso for r in registros) / total

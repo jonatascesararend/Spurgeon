@@ -14,13 +14,23 @@ uv run pytest                      # testes (precisam do FFmpeg; sem ele os marc
 uv run ruff check . && uv run ruff format .
 uv run spurgeon doctor             # pré-verificação do ambiente
 uv run spurgeon hardware           # hardware detectado e modelos recomendados
+uv run spurgeon gui                # abre a interface (iniciar.bat faz o mesmo)
+SPURGEON_DEMO=1 uv run spurgeon gui   # com etapas de mentira, para experimentar a tela
 ```
+
+Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfico; sem ele são pulados.
 
 ## Convenções
 
 - Nomes de módulos, funções e domínio em **português sem acento** (`estado`, `transcricao`,
   `calcular_trechos_mantidos`); textos para o usuário em pt-BR com acentos.
 - O núcleo (`src/spurgeon/core`) não importa a interface; o pipeline roda sem janela.
+- A interface só controla: o processamento roda em subprocesso (`core/trabalhador.py`, eventos em
+  JSON por linha; comandos `pausar`/`retomar`/`cancelar` pelo stdin). Etapas chamam
+  `ctx.ponto_seguro()` entre blocos de trabalho para aceitar pausa e cancelamento.
+- Widgets: nunca use `self._w`, `self.master` etc. como nome de atributo (colide com o Tk).
+  Threads de trabalho não mexem em widgets; agendam com `JanelaPrincipal._na_interface`.
+- Etapas reais se registram em `core/etapas.py`; painéis de revisão em `ui/revisao.py`.
 - Cada etapa do pipeline é uma `Etapa` (`core/pipeline.py`): idempotente, declara `depende_de`,
   `opcoes_relevantes` e `artefatos`. O estado fica em `estado.json` (escrita atômica).
 - Toda a transcrição acontece **uma vez, na linha do tempo original**; o `MapaTempo`

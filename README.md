@@ -8,7 +8,10 @@ O plano completo, as decisões e o roadmap estão em [Projeto.md](Projeto.md).
 
 ## Estado atual
 
-Fase 0 (fundação): núcleo do projeto, sem interface ainda.
+- Fase 0 (fundação) e Fase 1 (interface) concluídas.
+- A interface já cria o projeto, verifica o ambiente, pausa, cancela, retoma e mostra o
+  progresso. **As etapas de processamento (áudio, transcrição, Shorts, render) ainda não
+  existem**; chegam nas Fases 2 a 5. Para experimentar a tela: `SPURGEON_DEMO=1` antes de abrir.
 
 ## Requisitos
 

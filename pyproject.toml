@@ -48,6 +48,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "ffmpeg: testes que precisam do FFmpeg instalado",
+    "gui: testes que abrem a janela (pulados sem ambiente gráfico)",
 ]
 
 [tool.ruff]

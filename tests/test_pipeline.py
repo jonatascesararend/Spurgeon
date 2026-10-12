@@ -22,7 +22,7 @@ def criar_etapas(roteiro: Roteiro) -> list[Etapa]:
                 raise RuntimeError(f"falha em {self.id}")
             if roteiro.cancelar_em == self.id:
                 ctx.cancelar.set()
-                ctx.verificar_cancelamento()
+                ctx.ponto_seguro()
             (ctx.pastas.work / f"{self.id}.txt").write_text(self.id)
             if self.id in roteiro.revisar:
                 return ResultadoEtapa.AGUARDANDO_REVISAO
@@ -180,9 +180,73 @@ def test_etapa_em_andamento_apos_queda_do_programa_e_refeita(pipeline, roteiro, 
 
 
 def test_progresso_total_e_o_das_etapas_ativas(pipeline, contexto):
-    assert Pipeline.progresso_total(contexto) == 0.0
+    assert pipeline.progresso_total(contexto) == 0.0
     pipeline.executar(contexto)
-    assert Pipeline.progresso_total(contexto) == 1.0
+    assert pipeline.progresso_total(contexto) == 1.0
+
+
+def test_progresso_total_pondera_pelo_peso_da_etapa(roteiro, contexto):
+    a, b, _ = criar_etapas(roteiro)
+    type(a).peso = 1.0
+    type(b).peso = 3.0
+    pipeline = Pipeline([a, b])
+    pipeline.preparar(contexto)
+    contexto.estado.etapa("a").progresso = 1.0  # a (peso 1) pronta, b (peso 3) parada
+    assert pipeline.progresso_total(contexto) == pytest.approx(0.25)
+
+
+def test_avisa_o_progresso_no_inicio_e_no_fim_de_cada_etapa(pipeline, contexto):
+    recebido = []
+    contexto.ao_progresso = lambda id_etapa, fracao: recebido.append((id_etapa, fracao))
+    pipeline.executar(contexto)
+    assert recebido == [("a", 0.0), ("a", 1.0), ("b", 0.0), ("b", 1.0)]
+
+
+def test_pausa_segura_segura_a_etapa_ate_retomar(contexto):
+    import threading
+    import time
+
+    avisos = []
+    contexto.ao_pausa = avisos.append
+    contexto.pausar.set()
+    terminou = threading.Event()
+
+    def trabalhar():
+        contexto.ponto_seguro()
+        terminou.set()
+
+    fio = threading.Thread(target=trabalhar)
+    fio.start()
+    time.sleep(0.5)
+    assert not terminou.is_set()
+    assert avisos == [True]
+    contexto.pausar.clear()
+    fio.join(timeout=3)
+    assert terminou.is_set()
+    assert avisos == [True, False]
+
+
+def test_cancelar_durante_a_pausa_interrompe(contexto):
+    import threading
+    import time
+
+    from spurgeon.core.erros import Cancelado
+
+    contexto.pausar.set()
+    resultado = []
+
+    def trabalhar():
+        try:
+            contexto.ponto_seguro()
+        except Cancelado:
+            resultado.append("cancelado")
+
+    fio = threading.Thread(target=trabalhar)
+    fio.start()
+    time.sleep(0.4)
+    contexto.cancelar.set()
+    fio.join(timeout=3)
+    assert resultado == ["cancelado"]
 
 
 def test_progresso_chega_ao_callback(pipeline, roteiro, contexto):

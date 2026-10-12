@@ -142,9 +142,18 @@ Instalado: Python 3.11.9, uv 0.13.0, FFmpeg 9.0.2 e Ollama 0.40.3. Núcleo em `s
   * **Escolhido: o binário oficial `deep-filter`.** Na amostra de teste (pt-BR, ruído forte), o ruído de banda larga caiu 19 dB e a faixa da voz mudou ~1 dB. Em 20 min de áudio: 0,12× do tempo real e pico de 482 MB de RAM.
 * Gerar a fixture de teste de 20 s.
 
-### Fase 1: Interface Gráfica com CustomTkinter
+### Fase 1: Interface Gráfica com CustomTkinter — concluída em 2026-10-12
 
-Tema escuro, sem preview de vídeo, um vídeo por vez.
+Tema escuro, sem preview de vídeo, um vídeo por vez. Abre com `iniciar.bat` ou `uv run spurgeon gui`.
+
+**Como ficou (e o que diverge do plano original):**
+
+* **Processamento em subprocesso.** A interface não processa nada: ela inicia `python -m spurgeon.core.trabalhador` e conversa por linhas JSON (stdout para eventos, stdin para `pausar`, `retomar` e `cancelar`). Se a interface cair, o stdin fecha e o trabalho é cancelado com o projeto salvo.
+* **Etapas ainda não existem.** O registro (`core/etapas.py`) está vazio até as Fases 2 a 5: "Iniciar" verifica o ambiente, cria o projeto, abre a pasta e avisa que não há etapas. Com `SPURGEON_DEMO=1` rodam etapas de demonstração (pausa, cancelamento e revisão funcionam de verdade) para experimentar a tela.
+* **Painéis de revisão ainda não existem.** O aviso de revisão, o botão "Aprovar e continuar" e o ponto de pausa funcionam; o painel de edição de cada etapa chega com ela (transcrição na Fase 3, cortes na Fase 4) e se registra em `ui/revisao.py`.
+* **Estimativa de tempo:** o micro-benchmark do Whisper depende do faster-whisper, então fica para a Fase 3. Na Fase 1 há o **tempo restante** calculado pela velocidade observada (sem contar o tempo em pausa). Os pesos das etapas (`Etapa.peso`) deixam a estimativa realista.
+* **Cuidados:** reprocessar um projeto já concluído pergunta antes (os intermediários foram apagados); fechar uma pergunta no "X" vale "não"; sair com processamento ativo pede confirmação; as preferências ficam salvas ao iniciar.
+* **Testes:** a lógica do formulário e do estimador é pura e testada à parte; `tests/test_janela.py` opera a janela de verdade (escondida) com as etapas de demonstração.
 
 * **Entrada:**
   * Campo para o arquivo de vídeo (.mp4, .mkv, etc.; o seletor abre em `Downloads/`).
@@ -182,7 +191,7 @@ Tema escuro, sem preview de vídeo, um vídeo por vez.
   | **large-v3-turbo** | médio-pesado | **recomendado**; em benchmark de GPU levou cerca de 1/3 do tempo do large-v3 |
   | large-v3 | o mais pesado | precisão máxima; em CPU pode levar horas |
 
-  Na primeira execução, um micro-benchmark (≈30 s de áudio) estima o tempo total, mostrado antes de iniciar.
+  Micro-benchmark do Whisper (≈30 s de áudio, para estimar o tempo total antes de iniciar): **Fase 3**.
 
 ### Fase 2: Pré-processamento e Limpeza de Áudio
 
@@ -240,6 +249,22 @@ O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motiv
   | Personalizado | à escolha | preset, CRF e NVENC (se a GPU suportar) |
 
   Comum a todos: `-pix_fmt yuv420p`, `-movflags +faststart`, áudio AAC 256 kbps a 48 kHz, fps da origem. O preset padrão é muito lento em CPU; a interface mostra o aviso de tempo estimado.
+
+  **Tempos medidos nesta máquina** (20 s do sermão real, 1080p com conversão HDR→SDR, 12 threads), projetados para 65 min:
+
+  | Preset | Velocidade | Para 65 min de vídeo |
+  |---|---|---|
+  | só decodificar + HDR→SDR | 38,7 fps | ~50 min |
+  | Rápido (CRF 23) | 33,9 fps | ~58 min |
+  | Equilibrado (CRF 20) | 26,8 fps | ~1 h 13 min |
+  | Alta (CRF 18) | 20,3 fps | ~1 h 38 min |
+  | **Máxima (CRF 16)** | 7,9 fps | **~4 h 06 min** |
+
+* **Material real de entrada (iPhone, `Miqueias 2. 6-11.MOV`):** MOV de 65 min e 4 GB, **HEVC Main 10 em HDR HLG** (BT.2020, 10 bits, com Dolby Vision perfil 8), 1920×1080 a 29,97 fps, áudio AAC estéreo de 48 kHz, mais 5 trilhas de dados. Consequências para a renderização:
+  * **HDR → SDR:** codificar em H.264 de 8 bits sem converter deixa as cores lavadas. Proposta: `zscale` + `tonemap=hable` para BT.709 (o FFmpeg 9.0.2 tem os dois). ⚠️ A confirmar com o autor (seção 6).
+  * **Mapear só o que interessa:** `-map 0:v:0 -map 0:a:0`, para as trilhas de dados do iPhone não entrarem no MP4.
+  * **Taxa de quadros constante:** a origem oscila de leve (29,97 fps médios, com quadros a 0,035 s). Forçar `fps=30000/1001` antes de cortar, para o áudio não dessincronizar.
+  * **A conversão HDR→SDR é um gargalo:** só decodificar e converter já roda a 38,7 fps, quase a mesma velocidade do preset Rápido (33,9 fps), o que indica que o filtro limita a codificação em vez do x264. A ideia a testar na Fase 5 é renderizar os trechos em **processos paralelos** e juntá-los com `-c copy`; o áudio é codificado à parte, uma vez, e muxado no final.
 * **Vídeo longo:**
   * Aplica os cortes de pausa (filtros `trim/atrim + concat` lidos de um arquivo de script de filtro, para não estourar o limite de linha de comando do Windows) e troca a trilha pelo áudio limpo/normalizado.
   * **Introdução e vinheta final** (de `recursos/`), quando marcadas: são padronizadas (resolução, fps, SAR, taxa de áudio) para o vídeo principal e concatenadas na mesma passagem de encode. Valem só para o vídeo longo, nunca para os Shorts.
@@ -332,7 +357,7 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 * **O PC-alvo da v1 é este PC de desenvolvimento.** Inspecionado em 2026-10-12: i7-6800K (6 núcleos/12 threads físicos), **15,8 GB de RAM**, **GTX 760 de 2 GB** (driver 456.71), **36 GB livres** no C:, placa-mãe Huananzhi X99 e Virtualization-based Security ativo (`HypervisorPresent=True`).
 * **Limite de processadores corrigido em 2026-10-12.** Antes o Windows enxergava só 2 processadores lógicos, embora a BIOS já informasse 6 núcleos e 12 threads. Depois de reiniciar o PC, `NUMBER_OF_PROCESSORS=12`. Não sei qual ajuste resolveu (BIOS, `msconfig` ou `bcdedit`). Se o número voltar a cair, reveja essas três.
 * A GTX 760 provavelmente não roda o faster-whisper atual (CUDA 12 + cuDNN 9; a compatibilidade ainda precisa de teste na Fase 3). O **NVENC está confirmado como indisponível** (teste real com o FFmpeg 9.0.2, no `spurgeon doctor`): o encode é em libx264 na CPU. O **caminho só com CPU é o principal** desta máquina.
-* Mesmo com 12 threads, o caminho só com CPU deixa o Whisper, o encode `veryslow` e o LLM de 8B lentos (ainda não medi). O micro-benchmark da Fase 1 e os avisos de tempo da interface continuam sendo requisitos, não extras.
+* Mesmo com 12 threads, o caminho só com CPU deixa o encode `veryslow` (medido: ~4 vezes a duração do vídeo), o Whisper e o LLM de 8B lentos (estes dois ainda não medi). Os avisos de tempo da interface continuam sendo requisitos, não extras.
 * Recomendação inicial por hardware, para esta e futuras máquinas (a validar com benchmark):
 
   | Hardware | Whisper | LLM |
@@ -363,3 +388,8 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 1. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
 2. **Teste da GTX 760** com o faster-whisper atual (Fase 3; esperado: sem suporte). O NVENC já foi testado: indisponível.
 3. **Baixar e verificar o `deep-filter`** automaticamente (Fase 2): download do GitHub oficial, conferência do SHA-256 e guarda em `modelos/ferramentas/`.
+
+### Decisões que dependem do autor (descobertas com o vídeo real)
+
+4. **HDR do iPhone:** converter para SDR BT.709 em H.264 de 8 bits (proposta: compatível com qualquer tela, YouTube e celular), ou preservar o HDR em HEVC 10 bits (mais lento e menos compatível)?
+5. **Qualidade padrão:** a "Máxima" (CRF 16, `veryslow`) leva ~4 h para 65 min de vídeo; a "Alta" (CRF 18, `slow`) leva ~1 h 38 min e costuma ficar visualmente muito próxima (não comparei as imagens). Manter a Máxima como padrão ou passar para a Alta?
