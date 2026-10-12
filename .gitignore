@@ -1,0 +1,62 @@
+# ── Dados do usuário e saídas pesadas (nunca versionar) ──────────────
+# Pasta onde ficam os projetos gerados (vídeos, .srt, shorts, logs)
+Projetos/
+output/
+
+# Pasta de entrada (vídeos brutos a serem editados)
+downloads/
+Downloads/
+
+# Vídeos fixos do usuário em recursos/ (introdução, vinheta); fontes e vocabulário continuam versionados
+recursos/*.mp4
+recursos/*.mkv
+recursos/*.mov
+recursos/*.avi
+recursos/*.webm
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# ── Ferramentas de desenvolvimento ────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Modelos e caches de IA (grandes) ──────────────────────────────────
+models/
+modelos/
+.cache/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.gguf
+
+# ── Mídia temporária / intermediários de renderização ─────────────────
+*.tmp
+temp/
+tmp/
+*.wav
+TEMP_MPY_*
+
+# ── Editor / sistema operacional ──────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Segredos e configuração local ─────────────────────────────────────
+.env
+*.local.toml
+*.local.json
