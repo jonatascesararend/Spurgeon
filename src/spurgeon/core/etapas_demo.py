@@ -66,6 +66,7 @@ class RenderizarDemo(_EtapaDemo):
     nome = "Renderizando o vídeo (demonstração)"
     depende_de = ("demo_transcrever",)
     peso = 3.0
+    entrega = True
 
 
 def etapas_demo() -> list[Etapa]:

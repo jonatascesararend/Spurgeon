@@ -19,7 +19,9 @@ from fractions import Fraction
 from functools import cache
 from pathlib import Path
 
-from spurgeon.core.erros import Cancelado, ErroConfiguracao, ErroFFmpeg
+from spurgeon.core.erros import ErroConfiguracao, ErroFFmpeg
+from spurgeon.core.processos import vigiar_processo
+from spurgeon.core.sinais import SinalControle
 
 _SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _AJUDA_INSTALAR = "winget install Gyan.FFmpeg"
@@ -58,10 +60,17 @@ def executar_ffmpeg(
     *,
     duracao_s: float | None = None,
     ao_progresso: Callable[[float], None] | None = None,
-    cancelar: threading.Event | None = None,
+    cancelar: SinalControle | None = None,
+    pausar: SinalControle | None = None,
+    ao_pausa: Callable[[bool], None] | None = None,
     cwd: Path | None = None,
-) -> None:
-    """Roda o FFmpeg. `ao_progresso` recebe a fração 0..1 (precisa de `duracao_s`)."""
+    max_linhas_erro: int = 400,
+) -> str:
+    """Roda o FFmpeg e devolve o que ele escreveu no stderr (as medições dos filtros, por ex.).
+
+    `ao_progresso` recebe a fração 0..1 (precisa de `duracao_s`). Cancelar o encerra
+    (`Cancelado`); pausar o suspende de verdade até pedirem para retomar.
+    """
     comando = [
         str(localizar_binario("ffmpeg")),
         "-hide_banner", "-nostdin", "-nostats", "-progress", "pipe:1",
@@ -78,39 +87,41 @@ def executar_ffmpeg(
         errors="replace",
         creationflags=_SEM_JANELA,
     )
-    # stderr é lido em paralelo; senão o FFmpeg trava quando o buffer do pipe enche.
-    erros: deque[str] = deque(maxlen=400)
-    leitor = threading.Thread(
-        target=lambda: [erros.append(linha.rstrip("\n")) for linha in processo.stderr],
-        daemon=True,
-    )
-    leitor.start()
-    try:
+    erros: deque[str] = deque(maxlen=max_linhas_erro)
+    ultima_fracao: list[float] = []  # lista de 0 ou 1 item, atualizada pela thread de leitura
+
+    def ler_progresso() -> None:
         for linha in processo.stdout:
-            if cancelar is not None and cancelar.is_set():
-                _encerrar(processo)
-                raise Cancelado()
             chave, _, valor = linha.strip().partition("=")
             # Nos primeiros instantes o valor vem como "N/A" (ou negativo); só conta número.
-            if chave == "out_time_us" and ao_progresso and duracao_s and valor.isdigit():
-                ao_progresso(min(1.0, int(valor) / 1e6 / duracao_s))
-        codigo = processo.wait()
+            if chave == "out_time_us" and duracao_s and valor.isdigit():
+                ultima_fracao[:] = [min(1.0, int(valor) / 1e6 / duracao_s)]
+
+    def ler_erros() -> None:
+        for linha in processo.stderr:
+            erros.append(linha.rstrip("\n"))
+
+    # stdout e stderr são lidos em paralelo; senão o FFmpeg trava quando o buffer do pipe enche.
+    leitores = [threading.Thread(target=f, daemon=True) for f in (ler_progresso, ler_erros)]
+    for leitor in leitores:
+        leitor.start()
+
+    enviada: list[float] = []
+
+    def avisar_progresso() -> None:
+        if ao_progresso and ultima_fracao and ultima_fracao != enviada:
+            enviada[:] = ultima_fracao
+            ao_progresso(ultima_fracao[0])
+
+    codigo = vigiar_processo(
+        processo, cancelar=cancelar, pausar=pausar, ao_pausa=ao_pausa, ao_tick=avisar_progresso
+    )
+    for leitor in leitores:
         leitor.join(timeout=5)
-    except BaseException:
-        _encerrar(processo)
-        raise
+    avisar_progresso()
     if codigo != 0:
         raise ErroFFmpeg(comando, codigo, "\n".join(erros))
-
-
-def _encerrar(processo: subprocess.Popen) -> None:
-    if processo.poll() is None:
-        processo.terminate()
-        try:
-            processo.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            processo.kill()
-            processo.wait()
+    return "\n".join(erros)
 
 
 @dataclass(frozen=True)

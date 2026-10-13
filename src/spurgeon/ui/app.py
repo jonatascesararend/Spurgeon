@@ -16,6 +16,7 @@ from spurgeon.core.erros import ErroSpurgeon, ProjetoConflito
 from spurgeon.core.estado import StatusEtapa
 from spurgeon.core.executor import ExecutorProjeto
 from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
+from spurgeon.core.formatacao import resumir_linha_log
 from spurgeon.core.hardware import PerfilHardware, Recomendacao, detectar_hardware, recomendar
 from spurgeon.core.preflight import Nivel, Verificacao, executar_preflight, tem_erro
 from spurgeon.core.projeto import (
@@ -408,7 +409,9 @@ class JanelaPrincipal(ctk.CTk):
         if tipo == "etapas":
             self._etapas = ev["etapas"]
         elif tipo == "log":
-            self.execucao.adicionar_log(_formatar_log(ev["texto"]), ev.get("nivel", logging.INFO))
+            self.execucao.adicionar_log(
+                resumir_linha_log(ev["texto"]), ev.get("nivel", logging.INFO)
+            )
         elif tipo == "progresso":
             self._ao_progresso(ev)
         elif tipo == "pausa":
@@ -518,14 +521,6 @@ class JanelaPrincipal(ctk.CTk):
                 return
             self.executor.encerrar()
         self.destroy()
-
-
-def _formatar_log(texto: str) -> str:
-    """`2026-10-12 19:15:03 | INFO | etapa | mensagem` → `19:15:03  mensagem`."""
-    partes = texto.split(" | ", 3)
-    if len(partes) == 4 and len(partes[0]) >= 19:
-        return f"{partes[0][11:19]}  {partes[3]}"
-    return texto
 
 
 def executar() -> int:

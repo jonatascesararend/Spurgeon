@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 
@@ -53,6 +54,61 @@ def test_erro_do_ffmpeg_traz_a_mensagem(tmp_path):
         executar_ffmpeg(["-i", tmp_path / "nao_existe.mp4", "-f", "null", "-"])
     assert erro.value.codigo != 0
     assert "nao_existe" in erro.value.saida_erro
+
+
+def test_pausar_para_o_progresso_e_retomar_continua():
+    pausar, cancelar = threading.Event(), threading.Event()
+    progresso: list[float] = []
+    avisos: list[bool] = []
+    resultado: dict = {}
+
+    def rodar():
+        try:
+            executar_ffmpeg(
+                ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=600",
+                 "-c:v", "libx264", "-preset", "slow", "-f", "null", "-"],
+                duracao_s=600.0,
+                ao_progresso=progresso.append,
+                cancelar=cancelar,
+                pausar=pausar,
+                ao_pausa=avisos.append,
+            )  # fmt: skip
+        except Cancelado:
+            resultado["cancelado"] = True
+
+    fio = threading.Thread(target=rodar)
+    fio.start()
+    try:
+        _esperar(lambda: len(progresso) >= 2)
+        pausar.set()
+        _esperar(lambda: avisos == [True])
+        parado_em = len(progresso)
+        time.sleep(1.5)
+        assert len(progresso) == parado_em  # nada andou durante a pausa
+
+        pausar.clear()
+        _esperar(lambda: avisos == [True, False])
+        _esperar(lambda: len(progresso) > parado_em + 1)
+    finally:
+        cancelar.set()
+        fio.join(timeout=15)
+    assert resultado == {"cancelado": True}
+
+
+def _esperar(condicao, limite_s=30.0):
+    fim = time.monotonic() + limite_s
+    while time.monotonic() < fim:
+        if condicao():
+            return
+        time.sleep(0.05)
+    pytest.fail("Tempo esgotado esperando a condição")
+
+
+def test_devolve_o_stderr_com_as_medicoes_dos_filtros(video_teste):
+    saida = executar_ffmpeg(
+        ["-i", video_teste, "-af", "loudnorm=print_format=json", "-f", "null", "-"]
+    )
+    assert '"input_i"' in saida
 
 
 def test_cancelar_encerra_o_processo(tmp_path):

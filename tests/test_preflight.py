@@ -84,6 +84,22 @@ def test_modelo_do_ollama_ausente_e_avisado(config_tmp, video_teste, monkeypatch
 
 
 @pytest.mark.ffmpeg
+def test_limpar_audio_sem_o_deep_filter_baixado_avisa_que_precisa_de_internet(
+    config_tmp, video_teste
+):
+    opcoes = OpcoesProcessamento(limpar_audio=True)
+    resultados = por_nome(executar_preflight(config_tmp, video=video_teste, opcoes=opcoes))
+    assert resultados["deep-filter"].nivel == Nivel.AVISO
+    assert "internet" in resultados["deep-filter"].detalhe
+
+
+@pytest.mark.ffmpeg
+def test_sem_limpar_audio_o_deep_filter_nao_e_cobrado(config_tmp, video_teste):
+    resultados = por_nome(executar_preflight(config_tmp, video=video_teste))
+    assert "deep-filter" not in resultados
+
+
+@pytest.mark.ffmpeg
 def test_nvenc_pedido_mas_indisponivel_e_erro(config_tmp):
     opcoes = OpcoesProcessamento(usar_nvenc=True)
     resultados = por_nome(executar_preflight(config_tmp, opcoes=opcoes))

@@ -44,6 +44,50 @@ def video_teste(tmp_path_factory) -> Path:
     return destino
 
 
+# Tom de 440 Hz em 0–5 s, 17–25 s, 28–38 s e 53–60 s; pausas de 12 s, 3 s e 15 s no meio.
+PAUSAS_DO_AUDIO = [(5.0, 17.0), (25.0, 28.0), (38.0, 53.0)]
+_FILTRO_PAUSAS = (
+    "volume='between(t,0,5)+between(t,17,25)+between(t,28,38)+between(t,53,60)':eval=frame"
+)
+
+
+@pytest.fixture(scope="session")
+def audio_com_pausas(tmp_path_factory) -> Path:
+    """WAV mono de 60 s: tom em rajadas sobre um ruído de fundo baixo, com pausas conhecidas."""
+    destino = tmp_path_factory.mktemp("audio") / "com_pausas.wav"
+    subprocess.run(
+        [
+            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=60",
+            "-f", "lavfi", "-i",
+            "anoisesrc=color=white:amplitude=0.01:sample_rate=48000:duration=60",
+            "-filter_complex",
+            f"[0:a]volume=0.3,{_FILTRO_PAUSAS}[t];[1:a]volume=0.1[n];"
+            "[t][n]amix=inputs=2:duration=first:normalize=0",
+            "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(destino),
+        ],
+        check=True,
+    )  # fmt: skip
+    return destino
+
+
+@pytest.fixture(scope="session")
+def video_com_pausas(tmp_path_factory, audio_com_pausas) -> Path:
+    """Vídeo de 60 s pequeno, com o áudio de `audio_com_pausas`."""
+    destino = tmp_path_factory.mktemp("video") / "com_pausas.mp4"
+    subprocess.run(
+        [
+            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=60",
+            "-i", str(audio_com_pausas),
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(destino),
+        ],
+        check=True,
+    )  # fmt: skip
+    return destino
+
+
 @pytest.fixture
 def config_tmp(tmp_path) -> ConfigApp:
     return ConfigApp(

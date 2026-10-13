@@ -5,6 +5,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from spurgeon.core.formatacao import formatar_duracao
+
+__all__ = ["EstimadorTempo", "formatar_duracao", "formatar_restante"]
+
 _FRACAO_MINIMA = 0.02  # antes disso a estimativa oscila demais
 _DECORRIDO_MINIMO_S = 5.0
 _ALISAMENTO = 0.3  # peso da medida mais recente na média móvel
@@ -62,18 +66,6 @@ class EstimadorTempo:
         restante_fracao = max(0.0, 1.0 - fracao_total)
         base = 1.0 - self._fracao_inicial
         return self._duracao_estimada * restante_fracao / base if base > 0 else 0.0
-
-
-def formatar_duracao(segundos: float) -> str:
-    """1 h 05 min, 12 min 05 s, 45 s."""
-    total = round(segundos)
-    horas, resto = divmod(total, 3600)
-    minutos, seg = divmod(resto, 60)
-    if horas:
-        return f"{horas} h {minutos:02d} min"
-    if minutos:
-        return f"{minutos} min {seg:02d} s"
-    return f"{seg} s"
 
 
 def formatar_restante(segundos: float | None) -> str:

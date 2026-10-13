@@ -8,10 +8,11 @@ O plano completo, as decisões e o roadmap estão em [Projeto.md](Projeto.md).
 
 ## Estado atual
 
-- Fase 0 (fundação) e Fase 1 (interface) concluídas.
-- A interface já cria o projeto, verifica o ambiente, pausa, cancela, retoma e mostra o
-  progresso. **As etapas de processamento (áudio, transcrição, Shorts, render) ainda não
-  existem**; chegam nas Fases 2 a 5. Para experimentar a tela: `SPURGEON_DEMO=1` antes de abrir.
+- Fases 0 (fundação), 1 (interface) e 2 (áudio) concluídas.
+- Já funcionam: extrair o áudio, limpar o ruído (DeepFilterNet), normalizar o volume e achar as
+  pausas longas, com pausa, cancelamento e retomada. **Ainda faltam** a transcrição, os Shorts e a
+  renderização do vídeo (Fases 3 a 5); por isso os arquivos de áudio ficam em `_work/` do projeto.
+- Para experimentar a tela sem processar de verdade: `SPURGEON_DEMO=1` antes de abrir.
 
 ## Requisitos
 
@@ -36,6 +37,8 @@ iniciar.bat           abre o aplicativo
 Linha de comando (para desenvolvimento):
 
 ```
+uv run spurgeon processar "Downloads\video.MOV" --limpar-audio --normalizar
+                              processa sem a janela (mesmo caminho da interface)
 uv run spurgeon doctor        verifica o ambiente (pré-verificação)
 uv run spurgeon hardware      mostra o hardware detectado e a recomendação
 uv run pytest                 roda os testes

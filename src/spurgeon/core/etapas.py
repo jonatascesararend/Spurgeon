@@ -1,6 +1,6 @@
 """Registro das etapas do pipeline, na ordem em que rodam.
 
-As Fases 2 a 5 acrescentam aqui as etapas reais (áudio, transcrição, Shorts, render).
+As Fases 3 a 5 acrescentam aqui as etapas de transcrição, Shorts e render.
 """
 
 from __future__ import annotations
@@ -17,4 +17,6 @@ def etapas_registradas() -> list[Etapa]:
         from spurgeon.core.etapas_demo import etapas_demo
 
         return etapas_demo()
-    return []
+    from spurgeon.audio.etapas import etapas_audio
+
+    return [*etapas_audio()]

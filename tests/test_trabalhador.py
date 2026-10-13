@@ -142,6 +142,21 @@ def test_sem_etapas_conclui_avisando(projeto):
     assert any("Nenhuma etapa" in t for t in textos)
 
 
+def test_sem_etapa_de_entrega_os_intermediarios_sao_o_resultado_e_ficam(projeto):
+    class Intermediaria(Etapa):
+        id, nome = "intermediaria", "Etapa que só gera intermediário"
+
+        def executar(self, ctx):
+            (ctx.pastas.work / "resultado.txt").write_text("ok")
+
+    pastas = projeto()
+    rodada = Rodada(pastas, etapas=[Intermediaria()])
+    assert rodada.rodar() == ResultadoPipeline.CONCLUIDO
+    assert (pastas.work / "resultado.txt").exists()
+    textos = [e["texto"] for e in rodada.eventos if e["tipo"] == "log"]
+    assert any("nenhuma etapa gera o vídeo final" in t for t in textos)
+
+
 def test_manter_intermediarios_nao_apaga_o_work(projeto):
     pastas = projeto(pausar_revisar_transcricao=False, manter_intermediarios=True)
     Rodada(pastas, etapas=etapas_demo()).rodar()

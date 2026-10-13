@@ -14,24 +14,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import ClassVar
 
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento
 from spurgeon.core.erros import Cancelado
 from spurgeon.core.estado import Estado, EstadoEtapa, StatusEtapa, agora, salvar_estado
+from spurgeon.core.ffmpeg import executar_ffmpeg
 from spurgeon.core.log import contexto_etapa
 from spurgeon.core.projeto import PastasProjeto
+from spurgeon.core.sinais import SinalControle
 
 _INTERVALO_SALVAR_PROGRESSO_S = 1.0
 _INTERVALO_PAUSA_S = 0.2
-
-
-class SinalControle(Protocol):
-    """O que o pipeline usa de um `threading.Event`; a interface manda os sinais por aqui."""
-
-    def is_set(self) -> bool: ...
-    def set(self) -> None: ...
-    def clear(self) -> None: ...
 
 
 class ResultadoEtapa(StrEnum):
@@ -93,6 +87,37 @@ class ContextoProjeto:
         salvar_estado(self.pastas.raiz, self.estado)
         self._ultimo_salvamento = time.monotonic()
 
+    def ffmpeg(
+        self,
+        args: Sequence[str | Path],
+        *,
+        duracao_s: float | None = None,
+        faixa: tuple[float, float] = (0.0, 1.0),
+        cwd: Path | None = None,
+    ) -> str:
+        """Roda o FFmpeg atendendo cancelamento e pausa.
+
+        O progresso do comando (0..1) ocupa `faixa` do progresso da etapa, para etapas que
+        rodam vários comandos em sequência.
+        """
+        inicio, fim = faixa
+        return executar_ffmpeg(
+            args,
+            duracao_s=duracao_s,
+            ao_progresso=(lambda f: self.progresso(inicio + f * (fim - inicio)))
+            if duracao_s
+            else None,
+            cancelar=self.cancelar,
+            pausar=self.pausar,
+            ao_pausa=self.avisar_pausa_de_processo,
+            cwd=cwd,
+        )
+
+    def avisar_pausa_de_processo(self, ativa: bool) -> None:
+        self.log.info("Pausado pelo usuário." if ativa else "Retomado.")
+        if self.ao_pausa is not None:
+            self.ao_pausa(ativa)
+
 
 class Etapa(ABC):
     id: ClassVar[str]
@@ -103,6 +128,9 @@ class Etapa(ABC):
     opcoes_relevantes: ClassVar[tuple[str, ...]] = ()
     #: peso no progresso total e no tempo restante (a transcrição pesa mais que a extração).
     peso: ClassVar[float] = 1.0
+    #: True nas etapas que geram os arquivos finais (vídeo longo, Shorts). Só quando alguma
+    #: delas roda é que os arquivos intermediários são apagados ao concluir.
+    entrega: ClassVar[bool] = False
 
     def ativa(self, opcoes: OpcoesProcessamento) -> bool:
         return True

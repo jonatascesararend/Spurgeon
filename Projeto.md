@@ -193,17 +193,41 @@ Tema escuro, sem preview de vídeo, um vídeo por vez. Abre com `iniciar.bat` ou
 
   Micro-benchmark do Whisper (≈30 s de áudio, para estimar o tempo total antes de iniciar): **Fase 3**.
 
-### Fase 2: Pré-processamento e Limpeza de Áudio
+### Fase 2: Pré-processamento e Limpeza de Áudio — concluída em 2026-10-12
 
-* **Extração:** o FFmpeg extrai o áudio para `_work/audio_original.wav` (48 kHz, PCM, sem perdas).
-* **Limpeza (opcional, DeepFilterNet):** remove ruído de fundo (ventiladores, zumbidos) e melhora a nitidez da voz. Roda o binário oficial `deep-filter -D` sobre o WAV (a opção `-D` compensa o atraso do filtro, para o áudio não ficar defasado do vídeo). Medido nesta máquina: ≈11 min e ≈2 GB de RAM estimados para 1h30. Gera `_work/audio_limpo.wav`.
-* **Normalização de volume (opcional):** `loudnorm` do FFmpeg em duas passagens. Alvo padrão: −16 LUFS no vídeo longo e −14 LUFS nos Shorts.
-* **Remoção de silêncios (pausas longas):**
-  * Pausa = intervalo **sem fala** (VAD + lacunas entre palavras do Whisper), não apenas queda de volume, pois a sala tem ruído ambiente.
-  * Só pausas **iguais ou maiores que o limiar** (padrão 10 s, ajustável de 0,5 a 30 s) são cortadas.
-  * Em cada corte fica uma **pausa residual** (padrão 1,0 s) para o corte não soar seco.
+Etapas em `src/spurgeon/audio/`, registradas em `core/etapas.py`. Para processar sem a janela: `uv run spurgeon processar "Downloads\video.MOV" --limpar-audio --normalizar` (a interface usa o mesmo caminho).
+
+* **Extração (`extrair_audio`):** o FFmpeg extrai o áudio para `_work/audio_original.wav` (48 kHz, PCM de 16 bits, sem perdas), alinhado ao tempo zero do vídeo. Se os dois canais forem idênticos (**dual-mono**, como no iPhone), extrai em mono: metade do tamanho e do tempo de limpeza. O teste compara o canal "lado" (L−R) com o "centro" (L+R); abaixo de −35 dB é mono.
+* **Limpeza (`limpar_audio`, opcional):** roda o binário oficial `deep-filter -D` (baixado na primeira vez para `modelos/ferramentas/`, com SHA-256 conferido; a opção `-D` compensa o atraso do filtro, para o áudio não ficar defasado do vídeo). Não informa progresso, então a barra é estimada pelo tempo. Se o resultado diferir mais de 1 s da duração original, é descartado. Gera `_work/audio_limpo.wav`.
+* **Normalização (`normalizar_audio`, opcional):** `loudnorm` do FFmpeg em duas passagens, ganho linear, alvo de −16 LUFS e pico verdadeiro de −1,5 dB; uma terceira medição confere o resultado. Gera `_work/audio_normalizado.wav`. Os −14 LUFS dos Shorts são aplicados na Fase 5, clipe a clipe. Áudio praticamente mudo é mantido como está, com aviso.
+* **Pausas (`detectar_pausas` e `calcular_cortes`, só com o vídeo longo):**
+  * Pausa = intervalo em que o nível **RMS de janelas de 50 ms** fica abaixo de um limiar adaptado à gravação (ruído de fundo medido no percentil 10, mais 25% do caminho até a fala). Cortar fala é o erro caro, então o critério é conservador.
+  * O `silencedetect` do FFmpeg **não serve** para isso: ele compara amostras instantâneas, cujos picos ficam 10 a 15 dB acima do RMS do ruído, e deixava de achar pausas em áudio com ruído de fundo.
+  * `detectar_pausas` guarda todas as pausas de 0,5 s ou mais em `_work/pausas.json` e registra no log **quanto cada tamanho mínimo cortaria**; `calcular_cortes` aplica o tamanho escolhido (padrão 10 s) e a pausa residual (padrão 1,0 s) e grava `_work/cortes.json` com os trechos mantidos. Mudar só o tamanho mínimo refaz apenas essa segunda etapa.
   * Não remove "é...", "hum" nem outras muletas (deixaria o vídeo picotado).
-  * O resultado é a lista de trechos mantidos e o **mapa de tempo** original → editado, usado no .srt e na renderização.
+  * A Fase 3 refinará as pausas com as lacunas entre as palavras do Whisper.
+* **Cuidados com processos longos:** pausar suspende o processo de verdade (a CPU é liberada na hora) e cancelar o encerra; o Windows é impedido de suspender o PC durante o processamento; e, enquanto nenhuma etapa gera o vídeo final, `_work/` é mantida (senão o app apagaria o único resultado).
+
+**Resultado no sermão real** (`Miqueias 2. 6-11.MOV`, 65 min), em 11 min 6 s no total:
+
+| Etapa | Tempo | Resultado |
+|---|---|---|
+| Extração | 5 s | 374 MB em mono (dual-mono detectado) |
+| Limpeza | 8 min 28 s | 0,13× a duração, como estimado |
+| Normalização | 2 min 9 s | −13,9 → **−16,0 LUFS**, pico verdadeiro −2,0 dB |
+| Pausas | 16 s | ruído de fundo −70,5 dB; 445 pausas de 0,5 s ou mais |
+
+**O que as pausas revelaram:** este pregador fala quase sem parar. A maior pausa do sermão tem **5,3 s**, e o padrão de 10 s não cortaria nada:
+
+| Tamanho mínimo | Pausas cortadas | Tempo removido |
+|---|---|---|
+| 1 s | 123 | 57 s |
+| 2 s | 10 | 17 s |
+| 3 s | 2 | 7 s |
+| 5 s | 1 | 4 s |
+| 10 s (padrão) | 0 | nada |
+
+Mesmo no limite de 1 s o vídeo encurta menos de 1 minuto em 65. A remoção de silêncios agrega pouco para este material; o valor está na limpeza do áudio, na legenda e nos Shorts.
 
 ### Fase 3: Transcrição e Alinhamento Temporal (faster-whisper)
 
@@ -261,7 +285,7 @@ O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motiv
   | **Máxima (CRF 16)** | 7,9 fps | **~4 h 06 min** |
 
 * **Material real de entrada (iPhone, `Miqueias 2. 6-11.MOV`):** MOV de 65 min e 4 GB, **HEVC Main 10 em HDR HLG** (BT.2020, 10 bits, com Dolby Vision perfil 8), 1920×1080 a 29,97 fps, áudio AAC estéreo de 48 kHz, mais 5 trilhas de dados. Consequências para a renderização:
-  * **HDR → SDR:** codificar em H.264 de 8 bits sem converter deixa as cores lavadas. Proposta: `zscale` + `tonemap=hable` para BT.709 (o FFmpeg 9.0.2 tem os dois). ⚠️ A confirmar com o autor (seção 6).
+  * **HDR → SDR (decidido pelo autor em 2026-10-12):** converter para SDR BT.709 em H.264 de 8 bits, compatível com qualquer tela. Sem converter, o H.264 de 8 bits deixa as cores lavadas. Filtros: `zscale` + `tonemap=hable` (o FFmpeg 9.0.2 tem os dois).
   * **Mapear só o que interessa:** `-map 0:v:0 -map 0:a:0`, para as trilhas de dados do iPhone não entrarem no MP4.
   * **Taxa de quadros constante:** a origem oscila de leve (29,97 fps médios, com quadros a 0,035 s). Forçar `fps=30000/1001` antes de cortar, para o áudio não dessincronizar.
   * **A conversão HDR→SDR é um gargalo:** só decodificar e converter já roda a 38,7 fps, quase a mesma velocidade do preset Rápido (33,9 fps), o que indica que o filtro limita a codificação em vez do x264. A ideia a testar na Fase 5 é renderizar os trechos em **processos paralelos** e juntá-los com `-c copy`; o áudio é codificado à parte, uma vez, e muxado no final.
@@ -380,16 +404,17 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 * **Introdução e vinheta final:** só nos vídeos longos.
 * **Shorts:** mínimo de 30 s e máximo de 60 s, limite de segurança de 20 por vídeo, descarte de janelas com pausa interna maior que 3 s.
 * **Loudness:** −16 LUFS (vídeo longo) e −14 LUFS (Shorts).
-* **Qualidade padrão:** máxima (`veryslow`, CRF 16), com aviso de tempo estimado na interface.
+* **Qualidade padrão:** máxima (`veryslow`, CRF 16), com aviso de tempo estimado na interface. Mantida depois de medir (~4 h para 65 min de vídeo): o autor roda o PC de madrugada.
+* **HDR do iPhone:** convertido para SDR BT.709 em H.264 de 8 bits, compatível com qualquer tela.
 * **LLM:** `qwen3:8b` como candidato provisório, com `qwen3:4b` como alternativa leve.
 
 ### Pendências técnicas
 
 1. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
 2. **Teste da GTX 760** com o faster-whisper atual (Fase 3; esperado: sem suporte). O NVENC já foi testado: indisponível.
-3. **Baixar e verificar o `deep-filter`** automaticamente (Fase 2): download do GitHub oficial, conferência do SHA-256 e guarda em `modelos/ferramentas/`.
+3. **Refinar as pausas com as palavras do Whisper** (Fase 3): hoje a detecção é por energia; o plano é usar as lacunas entre palavras e o VAD.
+4. **Comparar visualmente** a qualidade "Alta" (CRF 18) e a "Máxima" (CRF 16) em trechos do sermão, para o autor saber o quanto a diferença de ~2 h 30 min compensa.
 
-### Decisões que dependem do autor (descobertas com o vídeo real)
+### Decisão que depende do autor (descoberta com o sermão real)
 
-4. **HDR do iPhone:** converter para SDR BT.709 em H.264 de 8 bits (proposta: compatível com qualquer tela, YouTube e celular), ou preservar o HDR em HEVC 10 bits (mais lento e menos compatível)?
-5. **Qualidade padrão:** a "Máxima" (CRF 16, `veryslow`) leva ~4 h para 65 min de vídeo; a "Alta" (CRF 18, `slow`) leva ~1 h 38 min e costuma ficar visualmente muito próxima (não comparei as imagens). Manter a Máxima como padrão ou passar para a Alta?
+5. **Tamanho mínimo da pausa a cortar:** no sermão real o padrão de 10 s não corta nada (a maior pausa tem 5,3 s). Manter 10 s como padrão, ou usar um valor menor (por exemplo 2 s, que corta 10 pausas e 17 s)? A remoção de silêncios encurta menos de 1 minuto em 65 mesmo em 1 s, então vale também decidir se ela continua ligada por padrão.

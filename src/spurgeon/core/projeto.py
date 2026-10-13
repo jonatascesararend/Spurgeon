@@ -54,6 +54,34 @@ class PastasProjeto:
     def video_longo(self) -> Path:
         return self.raiz / "video_longo_otimizado.mp4"
 
+    @property
+    def audio_original(self) -> Path:
+        return self.work / "audio_original.wav"
+
+    @property
+    def audio_limpo(self) -> Path:
+        return self.work / "audio_limpo.wav"
+
+    @property
+    def audio_normalizado(self) -> Path:
+        return self.work / "audio_normalizado.wav"
+
+    @property
+    def pausas(self) -> Path:
+        return self.work / "pausas.json"
+
+    @property
+    def cortes(self) -> Path:
+        return self.work / "cortes.json"
+
+    def audio_base(self, opcoes: OpcoesProcessamento) -> Path:
+        """O áudio sem o volume ajustado: o limpo, se a limpeza foi pedida; senão o original."""
+        return self.audio_limpo if opcoes.limpar_audio else self.audio_original
+
+    def audio_final(self, opcoes: OpcoesProcessamento) -> Path:
+        """O áudio que vai para o vídeo longo e para a transcrição."""
+        return self.audio_normalizado if opcoes.normalizar_volume else self.audio_base(opcoes)
+
     def criar(self) -> None:
         self.work.mkdir(parents=True, exist_ok=True)
 

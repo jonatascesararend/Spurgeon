@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import threading
 from collections.abc import Callable, Sequence
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from spurgeon.core.config import ConfigApp
+from spurgeon.core.energia import impedir_suspensao
 from spurgeon.core.erros import ErroConfiguracao
 from spurgeon.core.estado import StatusEtapa, carregar_estado
 from spurgeon.core.etapas import etapas_registradas
@@ -87,12 +89,12 @@ def executar(
         )
         if aprovar:
             pipeline.aprovar_revisao(ctx, aprovar)
-        resultado = pipeline.executar(ctx)
+        with impedir_suspensao():
+            resultado = pipeline.executar(ctx)
         if not ativas:
             log.warning("Nenhuma etapa de processamento está disponível nesta versão.")
-        if resultado == ResultadoPipeline.CONCLUIDO and not estado.opcoes.manter_intermediarios:
-            limpar_intermediarios(pastas)
-            log.info("Arquivos intermediários apagados.")
+        if resultado == ResultadoPipeline.CONCLUIDO:
+            _tratar_intermediarios(pastas, ativas, estado.opcoes.manter_intermediarios, log)
         emitir(_evento_fim(pipeline, ctx, resultado))
         return resultado
     except Exception as erro:
@@ -101,6 +103,23 @@ def executar(
         return ResultadoPipeline.ERRO
     finally:
         encerrar_log(log)
+
+
+def _tratar_intermediarios(
+    pastas: PastasProjeto, ativas: Sequence[Etapa], manter: bool, log: logging.Logger
+) -> None:
+    """Apaga os intermediários só se algum arquivo final foi gerado: senão eles são o resultado."""
+    if manter:
+        log.info("Arquivos intermediários mantidos, como pedido.")
+    elif not any(e.entrega for e in ativas):
+        log.info(
+            "Arquivos intermediários mantidos em %s: nenhuma etapa gera o vídeo final nesta "
+            "versão, então eles são o único resultado.",
+            pastas.work.name,
+        )
+    else:
+        limpar_intermediarios(pastas)
+        log.info("Arquivos intermediários apagados.")
 
 
 def _evento_fim(pipeline: Pipeline, ctx: ContextoProjeto, resultado: ResultadoPipeline) -> dict:

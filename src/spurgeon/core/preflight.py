@@ -55,6 +55,8 @@ def executar_preflight(
     opcoes = opcoes or config.padroes
     especifico = video is not None
     resultados = [_python(), *_ffmpeg(opcoes), *_pastas(config, opcoes, especifico)]
+    if opcoes.limpar_audio or not especifico:
+        resultados.append(_deep_filter(config))
     resultados += _hardware_e_disco(config, video)
     if opcoes.gerar_shorts or not especifico:
         resultados.append(_ollama(opcoes, exigido=opcoes.gerar_shorts and especifico))
@@ -116,6 +118,21 @@ def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) ->
             detalhe = str(caminho) if caminho.exists() else f"ainda não existe: {caminho.name}"
             resultados.append(Verificacao(nome, Nivel.OK, detalhe))
     return resultados
+
+
+def _deep_filter(config: ConfigApp) -> Verificacao:
+    from spurgeon.audio.deep_filter import caminho_deep_filter, deep_filter_instalado
+
+    if deep_filter_instalado(config):
+        return Verificacao(
+            "deep-filter", Nivel.OK, f"instalado e conferido: {caminho_deep_filter(config)}"
+        )
+    return Verificacao(
+        "deep-filter",
+        Nivel.AVISO,
+        "ainda não baixado: será baixado (cerca de 26 MB) na primeira limpeza de áudio; "
+        "precisa de internet nesse momento",
+    )
 
 
 def _hardware_e_disco(config: ConfigApp, video: Path | None) -> list[Verificacao]:
