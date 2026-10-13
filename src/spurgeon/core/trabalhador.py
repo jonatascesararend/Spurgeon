@@ -84,7 +84,9 @@ def executar(
         emitir(
             {
                 "tipo": "etapas",
-                "etapas": [{"id": e.id, "nome": e.nome, "peso": e.peso} for e in ativas],
+                "etapas": [
+                    {"id": e.id, "nome": e.nome, "peso": e.peso_para(estado.opcoes)} for e in ativas
+                ],
             }
         )
         if aprovar:

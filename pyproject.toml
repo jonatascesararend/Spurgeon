@@ -20,9 +20,11 @@ transcricao = [
     "faster-whisper>=1.1",
     "rapidfuzz>=3.9",
 ]
-# Seleção de cortes para os Shorts (Fase 4).
+# Seleção de cortes para os Shorts (Fase 4). O modelo de português do spaCy (40 MB) vem
+# direto da página oficial de modelos, pois não está no PyPI.
 shorts = [
-    "spacy>=3.7",
+    "spacy>=3.8,<3.9",
+    "pt-core-news-md @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl",
     "ollama>=0.4",
     "pandas>=2.2",
     "numpy>=1.26",
@@ -31,11 +33,15 @@ shorts = [
 ai = [
     "faster-whisper>=1.1",
     "rapidfuzz>=3.9",
-    "spacy>=3.7",
+    "spacy>=3.8,<3.9",
+    "pt-core-news-md @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl",
     "ollama>=0.4",
     "pandas>=2.2",
     "numpy>=1.26",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 # Ferramentas de desenvolvimento: o uv instala por padrão; o instalar.bat usa --no-dev.
 [dependency-groups]

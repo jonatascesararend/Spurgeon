@@ -10,5 +10,5 @@ if errorlevel 1 (
     exit /b 1
 )
 
-uv run --no-dev --extra ui --extra transcricao spurgeon gui
+uv run --no-dev --extra ui --extra transcricao --extra shorts spurgeon gui
 if errorlevel 1 pause

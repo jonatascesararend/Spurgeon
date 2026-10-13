@@ -81,6 +81,10 @@ def _processar(args: argparse.Namespace) -> int:
     valores.limpar_audio = args.limpar_audio
     valores.normalizar_volume = args.normalizar
     valores.gerar_video_longo = not args.sem_video_longo
+    valores.gerar_shorts = args.shorts
+    valores.legendas_dinamicas = args.legendas
+    if args.qualidade:
+        valores.qualidade = args.qualidade
     valores.revisar_transcricao = False  # sem janela, ninguém para revisar
     valores.aprovar_cortes = False
     if args.limiar_pausa:
@@ -224,6 +228,15 @@ def main(argv: list[str] | None = None) -> int:
     processar.add_argument("--limpar-audio", action="store_true", help="limpa o ruído do áudio")
     processar.add_argument("--normalizar", action="store_true", help="normaliza o volume")
     processar.add_argument("--sem-video-longo", action="store_true", help="não gera o vídeo longo")
+    processar.add_argument("--shorts", action="store_true", help="gera os Shorts (usa a IA local)")
+    processar.add_argument(
+        "--legendas", action="store_true", help="queima a legenda dinâmica nos Shorts"
+    )
+    processar.add_argument(
+        "--qualidade",
+        choices=("maxima", "alta", "equilibrado", "rapido"),
+        help="qualidade da renderização (padrão: a das configurações)",
+    )
     processar.add_argument("--limiar-pausa", help="tamanho mínimo da pausa a cortar, em s (10,0)")
     processar.add_argument("--pausa-residual", help="pausa mantida em cada corte, em s (1,0)")
     processar.set_defaults(funcao=_processar)

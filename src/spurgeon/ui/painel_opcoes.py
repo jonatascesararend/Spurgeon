@@ -70,6 +70,7 @@ class PainelOpcoes(ctk.CTkFrame):
                 "shorts_min",
                 "shorts_max",
                 "limite_shorts",
+                "nota_minima",
                 "ollama_modelo",
                 "deslocamento_x",
                 "posicao_legenda",
@@ -226,6 +227,13 @@ class PainelOpcoes(ctk.CTkFrame):
         self._campo(a, "Duração mínima do Short (s)", "shorts_min", largura=64)
         self._campo(a, "Duração máxima do Short (s)", "shorts_max", largura=64, dica="até 60")
         self._campo(a, "Limite de segurança de Shorts", "limite_shorts", largura=64)
+        self._campo(
+            a,
+            "Nota mínima para um corte vir marcado",
+            "nota_minima",
+            largura=64,
+            dica="0 a 100",
+        )
         self._campo(a, "Modelo do Ollama", "ollama_modelo", largura=160)
         self._campo(
             a,

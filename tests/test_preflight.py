@@ -75,11 +75,11 @@ def test_ollama_parado_so_e_erro_quando_ha_shorts(config_tmp, video_teste, monke
 
 
 @pytest.mark.ffmpeg
-def test_modelo_do_ollama_ausente_e_avisado(config_tmp, video_teste, monkeypatch):
+def test_modelo_do_ollama_ausente_so_avisa_pois_o_app_baixa(config_tmp, video_teste, monkeypatch):
     monkeypatch.setattr(preflight, "_modelos_ollama", lambda: ["llama3.1:8b"])
     opcoes = OpcoesProcessamento(gerar_shorts=True, ollama_modelo="qwen3:8b")
     resultados = por_nome(executar_preflight(config_tmp, video=video_teste, opcoes=opcoes))
-    assert resultados["Ollama"].nivel == Nivel.ERRO
+    assert resultados["Ollama"].nivel == Nivel.AVISO
     assert "ollama pull qwen3:8b" in resultados["Ollama"].detalhe
 
 

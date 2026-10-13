@@ -138,6 +138,18 @@ class InfoMidia:
     canais_audio: int | None = None
     taxa_audio: int | None = None
     creation_time: str | None = None
+    pix_fmt: str | None = None
+    transferencia: str | None = None  # smpte2084 (HDR10), arib-std-b67 (HLG), bt709…
+    primarias: str | None = None
+    matriz: str | None = None
+
+    @property
+    def hdr(self) -> bool:
+        """Vídeo em HDR (PQ ou HLG): precisa de conversão para aparecer certo em telas SDR."""
+        return self.transferencia in TRANSFERENCIAS_HDR
+
+
+TRANSFERENCIAS_HDR = frozenset({"smpte2084", "arib-std-b67"})
 
 
 def sondar(caminho: Path) -> InfoMidia:
@@ -170,6 +182,10 @@ def sondar(caminho: Path) -> InfoMidia:
         canais_audio=audio.get("channels") if audio else None,
         taxa_audio=int(audio["sample_rate"]) if audio and audio.get("sample_rate") else None,
         creation_time=tags.get("creation_time"),
+        pix_fmt=video.get("pix_fmt") if video else None,
+        transferencia=video.get("color_transfer") if video else None,
+        primarias=video.get("color_primaries") if video else None,
+        matriz=video.get("color_space") if video else None,
     )
 
 

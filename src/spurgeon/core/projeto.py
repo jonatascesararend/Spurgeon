@@ -71,6 +71,22 @@ class PastasProjeto:
         return self.work / "niveis.json"
 
     @property
+    def candidatos(self) -> Path:
+        return self.work / "candidatos.json"
+
+    @property
+    def avaliacoes(self) -> Path:
+        return self.work / "avaliacoes.json"
+
+    @property
+    def cortes_shorts(self) -> Path:
+        return self.work / "cortes_shorts.json"
+
+    @property
+    def metadados(self) -> Path:
+        return self.work / "metadados_shorts.json"
+
+    @property
     def pausas(self) -> Path:
         return self.work / "pausas.json"
 

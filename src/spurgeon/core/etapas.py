@@ -1,6 +1,7 @@
 """Registro das etapas do pipeline, na ordem em que rodam.
 
-As Fases 4 e 5 acrescentam aqui as etapas de Shorts e de render.
+Os vídeos pesados (Shorts e vídeo longo) vêm por último: toda a análise e as revisões humanas
+acontecem antes, e a renderização, que leva horas, roda sem ninguém por perto.
 """
 
 from __future__ import annotations
@@ -19,6 +20,15 @@ def etapas_registradas() -> list[Etapa]:
         return etapas_demo()
     from spurgeon.audio.etapas import etapas_audio_base
     from spurgeon.audio.pausas import CalcularCortes, DetectarPausas
+    from spurgeon.render.finalizar import Finalizar
+    from spurgeon.render.shorts import RenderizarShorts
+    from spurgeon.render.video_longo import RenderizarVideoLongo
+    from spurgeon.shorts.etapas import (
+        AnalisarShorts,
+        AprovarCortes,
+        AvaliarShorts,
+        SelecionarShorts,
+    )
     from spurgeon.transcricao.etapas import (
         GerarSrt,
         RefinarPausas,
@@ -34,4 +44,11 @@ def etapas_registradas() -> list[Etapa]:
         RefinarPausas(),
         CalcularCortes(),
         GerarSrt(),
+        AnalisarShorts(),
+        AvaliarShorts(),
+        SelecionarShorts(),
+        AprovarCortes(),
+        RenderizarShorts(),
+        RenderizarVideoLongo(),
+        Finalizar(),
     ]

@@ -49,6 +49,7 @@ class JanelaPrincipal(ctk.CTk):
         ctk.set_default_color_theme("blue")
         super().__init__()
         self.config_app = config or carregar_config()
+        self.config_app.pastas.garantir()
         self.executor = ExecutorProjeto()
         self.estimador = EstimadorTempo()
         self._fila_ui: queue.Queue[Callable[[], None]] = queue.Queue()

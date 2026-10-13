@@ -135,6 +135,10 @@ class Etapa(ABC):
     def ativa(self, opcoes: OpcoesProcessamento) -> bool:
         return True
 
+    def peso_para(self, opcoes: OpcoesProcessamento) -> float:
+        """O peso com as opções escolhidas (a renderização depende da qualidade, por exemplo)."""
+        return self.peso
+
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         """Arquivos que provam que a etapa terminou; se sumirem, ela é refeita."""
         return []
@@ -272,7 +276,7 @@ class Pipeline:
 
     def progresso_total(self, ctx: ContextoProjeto) -> float:
         """Progresso 0..1 das etapas ativas, ponderado pelo `peso` de cada uma."""
-        pesos = {e.id: e.peso for e in self.etapas}
+        pesos = {e.id: e.peso_para(ctx.opcoes) for e in self.etapas}
         registros = ctx.estado.etapas
         total = sum(pesos[r.id] for r in registros)
         if total <= 0:

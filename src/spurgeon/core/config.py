@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import tomllib
@@ -78,6 +79,15 @@ class Pastas(BaseModel):
     def fontes(self) -> Path:
         return self.recursos / "fontes"
 
+    def garantir(self) -> None:
+        """Cria as pastas do aplicativo que ainda não existem (entrada, projetos, recursos).
+
+        Falhas de permissão ficam para a pré-verificação, que explica o problema.
+        """
+        for pasta in (self.entrada, self.projetos, self.recursos, self.fontes):
+            with contextlib.suppress(OSError):
+                pasta.mkdir(parents=True, exist_ok=True)
+
 
 class OpcoesProcessamento(BaseModel):
     """Tudo o que o usuário escolhe para um processamento. Fica gravado no estado.json."""
@@ -115,6 +125,10 @@ class OpcoesProcessamento(BaseModel):
     shorts_duracao_max_s: float = Field(60.0, ge=10.0, le=60.0)
     shorts_limite_seguranca: int = Field(20, ge=1, le=100)
     shorts_pausa_interna_max_s: float = Field(3.0, ge=0.5, le=30.0)
+    #: abaixo desta nota (0 a 100) um corte vira reserva: aparece na aprovação, mas desmarcado
+    shorts_nota_minima: float = Field(45.0, ge=0.0, le=100.0)
+    #: quantos candidatos a IA avalia (cada um leva cerca de 1 min na CPU)
+    shorts_candidatos_ia: int = Field(40, ge=5, le=200)
     legenda_posicao_vertical: float = Field(0.62, ge=0.3, le=0.9)
     recorte_deslocamento_x_pct: float = Field(0.0, ge=-30.0, le=30.0)
 

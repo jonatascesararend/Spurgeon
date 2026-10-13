@@ -665,6 +665,14 @@ wheels = [
 ]
 
 [[package]]
+name = "pt-core-news-md"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl", hash = "sha256:54382cda034e41f3ec605ceeb924cd6cfdbced00a65f7afa12218520ba7008c5" },
+]
+
+[[package]]
 name = "pydantic"
 version = "2.14.1"
 source = { registry = "https://pypi.org/simple" }
@@ -976,6 +984,7 @@ ai = [
     { name = "numpy" },
     { name = "ollama" },
     { name = "pandas" },
+    { name = "pt-core-news-md" },
     { name = "rapidfuzz" },
     { name = "spacy" },
 ]
@@ -983,6 +992,7 @@ shorts = [
     { name = "numpy" },
     { name = "ollama" },
     { name = "pandas" },
+    { name = "pt-core-news-md" },
     { name = "spacy" },
 ]
 transcricao = [
@@ -1013,11 +1023,13 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'shorts'", specifier = ">=2.2" },
     { name = "platformdirs", specifier = ">=4.2" },
     { name = "psutil", specifier = ">=5.9" },
+    { name = "pt-core-news-md", marker = "extra == 'ai'", url = "https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl" },
+    { name = "pt-core-news-md", marker = "extra == 'shorts'", url = "https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "rapidfuzz", marker = "extra == 'ai'", specifier = ">=3.9" },
     { name = "rapidfuzz", marker = "extra == 'transcricao'", specifier = ">=3.9" },
-    { name = "spacy", marker = "extra == 'ai'", specifier = ">=3.7" },
-    { name = "spacy", marker = "extra == 'shorts'", specifier = ">=3.7" },
+    { name = "spacy", marker = "extra == 'ai'", specifier = ">=3.8,<3.9" },
+    { name = "spacy", marker = "extra == 'shorts'", specifier = ">=3.8,<3.9" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]
 provides-extras = ["ui", "transcricao", "shorts", "ai"]

@@ -93,6 +93,7 @@ def _ffmpeg(opcoes: OpcoesProcessamento) -> list[Verificacao]:
 
 def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) -> list[Verificacao]:
     pastas = config.pastas
+    pastas.garantir()  # o aplicativo cria Downloads/, Projetos/ e recursos/ quando faltam
     resultados = []
     if pastas.entrada.exists():
         resultados.append(Verificacao("Pasta de entrada", Nivel.OK, str(pastas.entrada)))
@@ -213,4 +214,9 @@ def _ollama(opcoes: OpcoesProcessamento, *, exigido: bool) -> Verificacao:
     nome = opcoes.ollama_modelo
     if nome in modelos or f"{nome}:latest" in modelos:
         return Verificacao("Ollama", Nivel.OK, f"ativo, modelo {nome} instalado")
-    return Verificacao("Ollama", falha, f"ativo, mas falta o modelo: ollama pull {nome}")
+    # O aplicativo baixa o modelo sozinho na primeira vez; por isso é só um aviso.
+    return Verificacao(
+        "Ollama",
+        Nivel.AVISO,
+        f"ativo, mas falta o modelo {nome}; será baixado no primeiro uso (ou: ollama pull {nome})",
+    )

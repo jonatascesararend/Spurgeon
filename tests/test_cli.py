@@ -33,10 +33,10 @@ def test_processar_video_inexistente(tmp_path, capsys):
 
 
 @pytest.mark.ffmpeg
-def test_processar_roda_o_audio_pela_linha_de_comando(tmp_path, video_com_pausas, capsys):
+def test_processar_roda_tudo_pela_linha_de_comando(tmp_path, video_com_pausas, capsys):
     codigo = main(
         [
-            "processar", str(video_com_pausas), "--normalizar",
+            "processar", str(video_com_pausas), "--normalizar", "--qualidade", "rapido",
             "--nome", "Teste CLI", "--data", "12/10/2026", "--projetos", str(tmp_path / "P"),
         ]
     )  # fmt: skip
@@ -45,6 +45,9 @@ def test_processar_roda_o_audio_pela_linha_de_comando(tmp_path, video_com_pausas
     pasta = tmp_path / "P" / "2026-10-12_Teste_CLI"
     assert "Projeto criado" in saida
     assert "Resultado: concluido" in saida
-    assert (pasta / "_work" / "audio_normalizado.wav").exists()
-    assert (pasta / "_work" / "cortes.json").exists()
-    assert "Volume final medido" in (pasta / "processamento.log").read_text(encoding="utf-8")
+    assert (pasta / "video_longo_otimizado.mp4").exists()
+    assert (pasta / "legendas_video_longo.srt").exists()
+    assert not (pasta / "_work").exists()  # há arquivo final: os intermediários são apagados
+    log = (pasta / "processamento.log").read_text(encoding="utf-8")
+    assert "Volume final medido" in log and "Vídeo longo pronto" in log
+    assert "Resultado em" in log and "Arquivos intermediários apagados" in log

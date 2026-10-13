@@ -23,6 +23,7 @@ _LIMITE_PAUSA = (0.5, 30.0)
 _LIMITE_RESIDUAL = (0.0, 5.0)
 _LIMITE_SHORT_S = (10.0, 60.0)
 _LIMITE_QUANTIDADE = (1, 100)
+_LIMITE_NOTA = (0.0, 100.0)
 _LIMITE_DESLOCAMENTO = (-30.0, 30.0)
 _LIMITE_POSICAO = (30.0, 90.0)
 
@@ -81,6 +82,7 @@ class ValoresFormulario:
     shorts_min: str = "30"
     shorts_max: str = "60"
     limite_shorts: str = "20"
+    nota_minima: str = "45"
     ollama_modelo: str = "qwen3:8b"
     deslocamento_x: str = "0"
     posicao_legenda: str = "62"
@@ -109,6 +111,7 @@ class ValoresFormulario:
             shorts_min=_texto(o.shorts_duracao_min_s),
             shorts_max=_texto(o.shorts_duracao_max_s),
             limite_shorts=str(o.shorts_limite_seguranca),
+            nota_minima=_texto(o.shorts_nota_minima),
             ollama_modelo=o.ollama_modelo,
             deslocamento_x=_texto(o.recorte_deslocamento_x_pct),
             posicao_legenda=_texto(round(o.legenda_posicao_vertical * 100, 1)),
@@ -195,6 +198,9 @@ def para_opcoes(
             v.limite_shorts, "Limite de Shorts", _LIMITE_QUANTIDADE, erros, inteiro=True
         )
         mudancas["shorts_limite_seguranca"] = limite
+        mudancas["shorts_nota_minima"] = decimal(
+            v.nota_minima, "Nota mínima dos Shorts", _LIMITE_NOTA
+        )
     if v.qualidade == "personalizado":
         mudancas["x264_preset_personalizado"] = v.x264_preset
         mudancas["crf_personalizado"] = _numero(v.crf, "CRF", (0, 51), erros, inteiro=True)

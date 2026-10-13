@@ -13,7 +13,7 @@ from spurgeon.audio.pausas import CalcularCortes, DetectarPausas
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento, raiz_repositorio
 from spurgeon.core.erros import Cancelado, ErroFerramenta
-from spurgeon.core.ffmpeg import localizar_binario
+from spurgeon.core.ffmpeg import localizar_binario, sondar
 from spurgeon.core.pipeline import ResultadoEtapa, ResultadoPipeline
 from spurgeon.core.projeto import criar_ou_retomar_projeto
 from spurgeon.core.trabalhador import executar
@@ -193,6 +193,8 @@ def test_pipeline_completo_da_fala_ate_as_legendas(tmp_path, video_com_fala):
         pausar_revisar_transcricao=False,
         limiar_pausa_s=0.5,
         pausa_residual_s=0.1,
+        qualidade="rapido",
+        manter_intermediarios=True,
     )
     pastas = criar_ou_retomar_projeto(
         tmp_path / "Projetos", video_com_fala, "Fala", date(2026, 10, 12), opcoes
@@ -212,6 +214,7 @@ def test_pipeline_completo_da_fala_ate_as_legendas(tmp_path, video_com_fala):
     cortes = ler_json(pastas.cortes)
     assert cortes["refinadas_pela_transcricao"] is True
     assert pastas.transcricao.exists()
+    assert sondar(pastas.video_longo).tem_audio  # e o vídeo final foi renderizado e conferido
 
 
 # --- etapas montadas à mão (sem modelo) ----------------------------------------------------

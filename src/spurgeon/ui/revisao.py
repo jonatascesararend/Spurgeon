@@ -1,8 +1,7 @@
 """Painéis de revisão humana (transcrição e cortes dos Shorts).
 
-Cada etapa que pausa para revisão registra aqui o seu painel, pelo id da etapa. O da
-transcrição já existe; o dos cortes dos Shorts chega com a Fase 4. Enquanto uma etapa não tem
-painel, a interface avisa e deixa aprovar.
+Cada etapa que pausa para revisão registra aqui o seu painel, pelo id da etapa. Se uma etapa
+não tiver painel, a interface avisa e deixa aprovar.
 """
 
 from __future__ import annotations
@@ -12,12 +11,14 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from spurgeon.core.projeto import PastasProjeto
+from spurgeon.ui.revisao_cortes import abrir_painel_cortes
 from spurgeon.ui.revisao_transcricao import abrir_painel_transcricao
 
 PainelRevisao = Callable[[ctk.CTk, PastasProjeto], None]
 
 PAINEIS: dict[str, PainelRevisao] = {
     "revisar_transcricao": abrir_painel_transcricao,
+    "aprovar_cortes": abrir_painel_cortes,
 }
 
 
