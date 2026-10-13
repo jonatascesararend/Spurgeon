@@ -10,22 +10,25 @@ from enum import StrEnum
 from pathlib import Path
 
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento
-from spurgeon.core.erros import ErroConfiguracao
+from spurgeon.core.erros import ErroConfiguracao, ErroFFmpeg
 from spurgeon.core.ffmpeg import (
     codificadores_disponiveis,
     filtros_disponiveis,
     localizar_binario,
     nvenc_funciona,
+    sondar,
     versao_ffmpeg,
 )
 from spurgeon.core.hardware import detectar_hardware, recomendar
+from spurgeon.core.ollama import URL_OLLAMA, localizar_ollama
 
-URL_OLLAMA = "http://127.0.0.1:11434"
 _FILTROS_NECESSARIOS = ("ass", "loudnorm")
 _CODIFICADORES_NECESSARIOS = ("libx264", "aac")
 _DISCO_MINIMO_GB = 10.0
 _RAM_LIVRE_MINIMA_GB = 3.0
-_FATOR_ESPACO_VIDEO = 3  # o projeto precisa de ~3x o tamanho do vídeo em disco
+_FATOR_ESPACO_VIDEO = 3  # sem conseguir ler a duração: o projeto ocupa ~3x o tamanho do vídeo
+_MARGEM_DISCO_GB = 0.5
+_AUDIOS_INTERMEDIARIOS = 3  # original, limpo e normalizado (WAV mono de 48 kHz, 16 bits)
 
 
 class Nivel(StrEnum):
@@ -58,7 +61,7 @@ def executar_preflight(
     if opcoes.limpar_audio or not especifico:
         resultados.append(_deep_filter(config))
     resultados += _whisper(config, opcoes)
-    resultados += _hardware_e_disco(config, video)
+    resultados += _hardware_e_disco(config, video, opcoes)
     if opcoes.gerar_shorts or not especifico:
         resultados.append(_ollama(opcoes, exigido=opcoes.gerar_shorts and especifico))
     return resultados
@@ -164,7 +167,9 @@ def _deep_filter(config: ConfigApp) -> Verificacao:
     )
 
 
-def _hardware_e_disco(config: ConfigApp, video: Path | None) -> list[Verificacao]:
+def _hardware_e_disco(
+    config: ConfigApp, video: Path | None, opcoes: OpcoesProcessamento
+) -> list[Verificacao]:
     perfil = detectar_hardware(config.pastas.projetos)
     recomendacao = recomendar(perfil)
     gpu = ", ".join(g.nome for g in perfil.gpus) or "nenhuma"
@@ -186,7 +191,7 @@ def _hardware_e_disco(config: ConfigApp, video: Path | None) -> list[Verificacao
     resultados.append(Verificacao("RAM livre", nivel, f"{perfil.ram_livre_gb} GB"))
 
     if video is not None:
-        necessario = _FATOR_ESPACO_VIDEO * Path(video).stat().st_size / 1024**3
+        necessario = _espaco_necessario_gb(Path(video), opcoes)
         nivel = Nivel.OK if perfil.disco_livre_gb >= necessario else Nivel.ERRO
         detalhe = f"{perfil.disco_livre_gb} GB livres; o projeto precisa de ~{necessario:.1f} GB"
     else:
@@ -208,8 +213,14 @@ def _ollama(opcoes: OpcoesProcessamento, *, exigido: bool) -> Verificacao:
     falha = Nivel.ERRO if exigido else Nivel.AVISO
     modelos = _modelos_ollama()
     if modelos is None:
+        if localizar_ollama() is not None:  # instalado, só fechado: o aplicativo o abre sozinho
+            return Verificacao(
+                "Ollama", Nivel.AVISO, "não está aberto; será aberto ao gerar os Shorts"
+            )
         return Verificacao(
-            "Ollama", falha, f"não respondeu em {URL_OLLAMA}; abra o aplicativo Ollama"
+            "Ollama",
+            falha,
+            f"não instalado (nada respondeu em {URL_OLLAMA}): winget install Ollama.Ollama",
         )
     nome = opcoes.ollama_modelo
     if nome in modelos or f"{nome}:latest" in modelos:
@@ -220,3 +231,26 @@ def _ollama(opcoes: OpcoesProcessamento, *, exigido: bool) -> Verificacao:
         Nivel.AVISO,
         f"ativo, mas falta o modelo {nome}; será baixado no primeiro uso (ou: ollama pull {nome})",
     )
+
+
+def _espaco_necessario_gb(video: Path, opcoes: OpcoesProcessamento) -> float:
+    """O que o processamento escreve em disco, sem contar o vídeo original.
+
+    Na renderização do vídeo longo conta-se o modo econômico (as partes são apagadas ao juntar):
+    se há espaço só para ele, o processamento avisa e segue.
+    """
+    from spurgeon.render.filtros import estimar_tamanho_bytes
+
+    try:
+        duracao = sondar(video).duracao_s
+    except (ErroFFmpeg, ErroConfiguracao):
+        duracao = 0.0
+    if duracao <= 0:
+        return _FATOR_ESPACO_VIDEO * video.stat().st_size / 1024**3
+    crf = opcoes.preset_qualidade().crf
+    total = duracao * 48000 * 2 * _AUDIOS_INTERMEDIARIOS
+    if opcoes.gerar_video_longo:
+        total += estimar_tamanho_bytes(duracao, crf) * 1.15
+    if opcoes.gerar_shorts:
+        total += estimar_tamanho_bytes(opcoes.shorts_limite_seguranca * 60.0, crf, vertical=True)
+    return total / 1024**3 + _MARGEM_DISCO_GB

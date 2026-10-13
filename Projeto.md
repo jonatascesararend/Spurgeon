@@ -265,7 +265,7 @@ Etapas em `src/spurgeon/transcricao/`: `transcrever` → `revisar_transcricao` (
 
 **Energia:** `spurgeon acordado --horas 12` (e a opção "Não deixar o PC bloquear nem apagar a tela ao processar", ligada por padrão) pede ao Windows para não suspender, não apagar a tela e não bloquear por inatividade, registrando atividade sem mexer no mouse a cada 45 s. Nada permanente é alterado; tudo volta ao normal quando o programa termina.
 
-### Fase 4: Inteligência de Detecção de Cortes para Shorts (até 60 s)
+### Fase 4: Inteligência de Detecção de Cortes para Shorts (até 60 s) — concluída em 2026-10-13
 
 * **Limite:** Shorts de **no máximo 60 s** (mínimo padrão de 30 s). **Não há número fixo de Shorts**: vale o que passar no critério de qualidade, com um **limite de segurança** (padrão 20) e checagem de espaço em disco antes de cada renderização.
 * **Tabela de palavras (`pandas`):** uma linha por palavra (`palavra`, `início`, `fim`, `frase`, `pausa_após`). Substitui o DuckDB do plano original: a lógica de janelas e pausas é simples em DataFrame, sem uma segunda base de dados.
@@ -282,7 +282,18 @@ Etapas em `src/spurgeon/transcricao/`: `transcrever` → `revisar_transcricao` (
 * **Aprovação dos cortes (🛑 opcional):** lista com, para cada Short, ✔ incluir, categoria, início–fim, duração, texto do trecho, alerta de contexto e título/descrição/hashtags editáveis. Dá para ajustar início e fim (encaixando em limites de palavra e pausa).
 * **Memória:** o Whisper é descarregado antes de carregar o LLM, e o LLM é descarregado ao fim (`keep_alive=0`).
 
-### Fase 5: Renderização e Estilização Visual (FFmpeg + legendas ASS)
+**Implementação (concluída em 2026-10-13).** Etapas em `src/spurgeon/shorts/`: `analisar_shorts` → `avaliar_shorts` → `selecionar_shorts` → `aprovar_cortes` (🛑). Tudo é gravado em `_work/` (`candidatos.json`, `avaliacoes.json`, `metadados_shorts.json`, `cortes_shorts.json`), então uma queda só custa o trecho em curso.
+
+* **Frases e candidatos:** o spaCy (`pt_core_news_md`, sem NER nem lematizador) recebe as palavras já separadas pelo Whisper. Uma frase termina em `. ? ! …` ou numa pausa de 0,35 s onde o spaCy vê início de oração; `abre_dependente` marca frases que começam com conectivo ("mas", "então"), pronome ("isso", "ele") ou conjunção. As janelas são sempre de frases inteiras, de 30 s até 60 s menos 0,55 s de respiro; pausa interna acima de 3 s descarta a janela. Cada janela recebe uma **pré-nota objetiva** (0 a 100: duração 20, bordas em pausas 30, abertura sem dependência 20, gancho 20, ritmo 10) e as 40 melhores (sobreposição ≤ 60%) vão para a IA.
+* **IA (Ollama, `qwen3:8b`):** recebe o trecho com o contexto anterior e o seguinte e devolve **JSON validado** (categoria, nota de 0 a 10, se se sustenta sozinho, alerta de contexto, motivo). `think=False` (o modo de raciocínio gasta minutos sem melhorar a nota), até 3 tentativas com temperatura crescente, e **só CPU** (`num_gpu=0`) quando não há GPU utilizável: o Ollama novo usa Vulkan e a GTX 760 derruba o processo ("device lost"). Se o modelo não estiver instalado, o aplicativo o baixa (o pré-voo só avisa). Ao fim da seleção o modelo sai da memória (~5 GB) para sobrar RAM à renderização.
+* **Nota de qualidade (0 a 100), mostrada na aprovação com o detalhe de cada parte:** retenção segundo a IA × 4 (até 40) + se se sustenta sozinho (12 se a IA diz que sim, mais 8 se a abertura não depende do que veio antes; até 20) + começa e termina em pausas (15) + duração (10) + gancho e fecho (10) + ritmo da fala (5), **menos 10** com alerta de contexto.
+* **Seleção:** por nota, sem sobreposição maior que 20%, até o limite de segurança (20) marcados, mais 8 **reservas** desmarcadas. Abaixo da nota mínima (45, nas opções avançadas) o corte também vira reserva. O respiro nas pontas é de até 0,20 s antes e 0,35 s depois, nunca mais que metade da pausa vizinha.
+* **Metadados por corte:** título, descrição, hashtags e nome de arquivo (`slug`). O pedido lista os **títulos já criados** e, se a IA repetir um, pede outro com mais temperatura. (O primeiro prompt tinha um título de exemplo, e a IA o copiou em 8 dos 9 primeiros cortes: exemplos concretos não vão mais no prompt.) Cada corte pronto é guardado na hora; o que a pessoa editou na aprovação tem prioridade numa nova seleção.
+* **Janela de aprovação (`ui/revisao_cortes.py`):** lista com ✔ incluir, **nota colorida**, categoria, início–fim e duração; ao lado, o detalhe da nota (uma barra por parte), o alerta de contexto, o motivo da IA, **título, descrição e hashtags editáveis**, o texto e os botões ◀/▶ que movem o início e o fim **de palavra em palavra** (sempre com respiro, no máximo 60 s e no mínimo 10 s). Todos os cortes marcados vêm aprovados; reservas vêm desmarcadas. Ordena por nota ou por horário, com atalhos (Alt+↑/↓, Ctrl+Espaço, Ctrl+S). Sem título, ou sem nenhum corte marcado, ela pergunta antes de salvar.
+
+**Resultado no sermão real** (65 min): 180 frases, 249 janelas, 40 trechos avaliados pela IA (~50 s cada, **33 min**), 28 títulos (~55 s cada, 26 min), **20 cortes marcados com notas de 75 a 89** (34 a 60 s; 12 de "pergunta-gancho", 7 de "aplicação prática", 1 de "citação bíblica") e 8 reservas (nota 69 a 75). A IA é generosa (quase tudo de 8 a 9 em 10), por isso a nota final pesa também os sinais objetivos. Um corte tem alerta de contexto entre os marcados.
+
+### Fase 5: Renderização e Estilização Visual (FFmpeg + legendas ASS) — concluída em 2026-10-13
 
 O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motivo: o MoviePy 2.x tem mudanças incompatíveis com a v1 e renderiza frame a frame em Python, o que é lento e pesado com legendas por palavra. O MoviePy fica de fora da v1.
 
@@ -329,7 +340,18 @@ O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motiv
   * Renderiza **um Short por vez** (sem paralelismo) para não estourar a RAM.
 * **Sem logo, marca d'água nem título fixo** na v1.
 
-### Fase 6: Organização e Armazenamento Local
+**Implementação (concluída em 2026-10-13).** Módulos em `src/spurgeon/render/`: `filtros.py` (HDR→SDR, recorte 9:16, codec), `video_longo.py`, `shorts.py`, `legenda.py` (ASS). As etapas `renderizar_shorts` e `renderizar_video_longo` rodam **depois** de toda a análise e das revisões humanas, para a pessoa responder tudo no começo e deixar as horas de renderização rodando sozinha.
+
+* **HDR→SDR:** `zscale` (HLG ou PQ → luz linear → primárias BT.709) + `tonemap=hable:desat=0` + volta à curva BT.709, 8 bits. O `desat` padrão (2,0) apagava a cor da cruz dourada do púlpito; com `desat=0` a cor se mantém, ao custo de uma leve tinta ciano na tela de projeção (muito brilhante). Origem SDR só ganha o formato de pixel e a marcação BT.709.
+* **Vídeo longo em partes retomáveis:** o FFmpeg 9 não aceita mais `-filter_complex_script`; os filtros vão por `-/filter_complex arquivo`. O vídeo sai em **partes de ~10 min** (`_work/render_longo/parte_NNN.mp4`), cada uma com um número exato de quadros; o áudio é montado uma vez (`audio.m4a`) e no fim as partes e o áudio são juntados **sem recodificar**. Cair, cancelar ou faltar luz só custa a parte em curso. Uma assinatura (vídeo, cortes, qualidade, introdução…) recomeça do zero se algo mudar.
+* **Sincronia (controle de qualidade):** o primeiro corte de áudio usava o demuxer `concat` do FFmpeg, que errava ~65 ms por corte (achado no teste com cortes reais). Agora o áudio usa `atrim` (exato até a amostra) e cada pedaço de vídeo recebe quadros por arredondamento do tempo **acumulado**, sem passar de meio quadro de erro. O teste usa um vídeo em que cada quadro traz o próprio número em binário e um áudio de ruído branco, confere a imagem e correlaciona o som: deslocamento ≤ 3 ms depois de 3 cortes e 3 fronteiras de partes.
+* **Introdução e vinheta:** padronizadas (tamanho com barras pretas, taxa de quadros, SAR, SDR, estéreo de 48 kHz; vinheta muda ganha silêncio; com "normalizar volume", passam por `loudnorm` no alvo do vídeo longo) e viram partes próprias. Toda duração é múltiplo exato de um quadro.
+* **Espaço em disco:** o estimador usa o bitrate medido (**5,5 Mb/s** em CRF 16 no vídeo horizontal; ~10 Mb/s no vertical (9,4 medidos); +6 de CRF corta pela metade). Se só couber no **modo econômico**, a junção apaga cada parte assim que a lê. O pré-voo estima o espaço pela duração e pelas opções (antes era "3× o tamanho do arquivo").
+* **Shorts (1080×1920):** um Short por vez, cada um gravado só quando termina (`.parcial` → nome final) e conferido (duração, áudio); os já prontos são reaproveitados por uma assinatura do corte e das opções, e os que saíram da aprovação são removidos. Ordem: `fps` constante → recorte central (+4% para a direita: a câmera fixa deixa o pregador e a cruz a ~54% da largura) → HDR→SDR (só nos 608×1080 recortados) → `lanczos` para 1080×1920 → legenda ASS → `yuv420p`. Áudio: estéreo, **loudnorm de duas passagens a −14 LUFS** (medido −14,0 LUFS no resultado) e fade de 100 ms nas pontas. Arquivos: `short_NN_<slug>.mp4` e `.txt` com título, descrição, hashtags, trecho de origem, nota e alerta.
+* **Legenda dinâmica (`legenda.py`):** a frase fica na tela e **a palavra falada fica amarela**; cada palavra vira um evento ASS com o mesmo texto. Montserrat ExtraBold (OFL, em `recursos/fontes/` com a licença), tamanho 74, contorno de 5 px, espaçamento de 2, posição 62% da altura, até 24 caracteres por linha e 2 linhas, quebra equilibrada. Fica **desligada por padrão** ("Legendas dinâmicas" nas opções); `--legendas` na linha de comando liga.
+* **Medidas nesta máquina** (veryslow, CRF 16, HDR→SDR, 40 s do sermão real): **8,6 quadros/s** (65 min ≈ 3 h 55 min) e 5,5 Mb/s. `veryfast` com HDR: ~34 quadros/s.
+
+### Fase 6: Organização e Armazenamento Local — concluída em 2026-10-13
 
 O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrada, `recursos/` guarda os arquivos fixos e `Projetos/` recebe os resultados.
 
@@ -358,6 +380,14 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 * **Vídeo original:** é **referenciado** (não copiado) pelo caminho.
 * **Intermediários:** `_work/` é apagada **só após o sucesso total**. Se algo falhar ou for cancelado, ela permanece para a retomada (opção "manter intermediários" no Avançado).
 * **Log (`processamento.log`):** texto legível com horário, nível e etapa; erros com traceback e o que o sistema fez em seguida.
+
+**Implementação (concluída em 2026-10-13).**
+
+* **Estrutura:** `Downloads/`, `Projetos/`, `recursos/` e `recursos/fontes/` são criadas na abertura do aplicativo e na pré-verificação.
+* **Conferência final (`finalizar`, `render/finalizar.py`):** depois das renderizações, confere o vídeo longo (imagem e som, duração = cortes + introdução + vinheta, ±1 s), a legenda (a última não passa do fim do vídeo) e cada Short (1080×1920, com áudio, até 60 s, com o `.txt`), e registra no log o **resumo** (arquivos, durações, tamanhos, nota de cada Short e o tempo total sem contar esperas por revisão). Problema grave vira erro e **deixa `_work/` no lugar** para retomar; só um processamento conferido apaga os intermediários (a menos que "manter intermediários" esteja marcado).
+* **Tempo estimado antes de começar:** a janela mostra, ao escolher o vídeo e a cada mudança de opção, o tempo estimado total e o da renderização nesta máquina (HDR ou não, preset, Shorts, modelo do Whisper).
+* **Progresso:** o peso de cada renderização no progresso total e no tempo restante acompanha a qualidade escolhida (`Etapa.peso_para(opcoes)`).
+* **Linha de comando:** `--shorts`, `--legendas` e `--qualidade maxima|alta|equilibrado|rapido`; as revisões ficam desligadas sem janela.
 
 ---
 

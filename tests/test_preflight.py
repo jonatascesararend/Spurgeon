@@ -56,22 +56,39 @@ def test_introducao_marcada_com_o_arquivo_passa(config_tmp, video_teste):
 
 @pytest.mark.ffmpeg
 def test_falta_de_disco_para_o_video_e_erro(config_tmp, video_teste, monkeypatch):
-    monkeypatch.setattr(preflight, "_FATOR_ESPACO_VIDEO", 10**9)
+    monkeypatch.setattr(preflight, "_MARGEM_DISCO_GB", 10**9)
     resultados = por_nome(executar_preflight(config_tmp, video=video_teste))
     assert resultados["Espaço em disco"].nivel == Nivel.ERRO
 
 
 @pytest.mark.ffmpeg
-def test_ollama_parado_so_e_erro_quando_ha_shorts(config_tmp, video_teste, monkeypatch):
+@pytest.mark.ffmpeg
+def test_ollama_parado_so_e_erro_quando_ha_shorts_e_nao_esta_instalado(
+    config_tmp, video_teste, monkeypatch
+):
     monkeypatch.setattr(preflight, "_modelos_ollama", lambda: None)
+    monkeypatch.setattr(preflight, "localizar_ollama", lambda: None)
     sem_shorts = executar_preflight(config_tmp, video=video_teste, opcoes=OpcoesProcessamento())
     assert "Ollama" not in por_nome(sem_shorts)
     com_shorts = executar_preflight(
         config_tmp, video=video_teste, opcoes=OpcoesProcessamento(gerar_shorts=True)
     )
     assert por_nome(com_shorts)["Ollama"].nivel == Nivel.ERRO
+    assert "winget install Ollama.Ollama" in por_nome(com_shorts)["Ollama"].detalhe
     geral = por_nome(executar_preflight(config_tmp))
     assert geral["Ollama"].nivel == Nivel.AVISO
+
+
+@pytest.mark.ffmpeg
+def test_ollama_instalado_mas_fechado_so_avisa_porque_o_app_abre(
+    config_tmp, video_teste, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(preflight, "_modelos_ollama", lambda: None)
+    monkeypatch.setattr(preflight, "localizar_ollama", lambda: tmp_path / "ollama.exe")
+    opcoes = OpcoesProcessamento(gerar_shorts=True)
+    resultados = por_nome(executar_preflight(config_tmp, video=video_teste, opcoes=opcoes))
+    assert resultados["Ollama"].nivel == Nivel.AVISO
+    assert "será aberto" in resultados["Ollama"].detalhe
 
 
 @pytest.mark.ffmpeg
@@ -138,3 +155,20 @@ def test_nvenc_pedido_mas_indisponivel_e_erro(config_tmp):
     opcoes = OpcoesProcessamento(usar_nvenc=True)
     resultados = por_nome(executar_preflight(config_tmp, opcoes=opcoes))
     assert resultados["NVENC"].nivel == Nivel.ERRO
+
+
+@pytest.mark.ffmpeg
+def test_o_espaco_necessario_vem_da_duracao_e_das_opcoes_nao_do_tamanho_do_arquivo(video_teste):
+    so_longo = OpcoesProcessamento(gerar_video_longo=True, qualidade="rapido")
+    com_shorts = OpcoesProcessamento(gerar_shorts=True, qualidade="rapido")
+    pouco = preflight._espaco_necessario_gb(video_teste, so_longo)
+    mais = preflight._espaco_necessario_gb(video_teste, com_shorts)
+    assert pouco < 1.0  # um vídeo de 20 s ocupa quase nada: só a margem fixa pesa
+    assert mais > pouco  # os Shorts acrescentam o que vão gravar
+
+
+def test_sem_conseguir_ler_a_duracao_usa_o_tamanho_do_arquivo(tmp_path):
+    falso = tmp_path / "x.mp4"
+    falso.write_bytes(b"0" * 1000)
+    necessario = preflight._espaco_necessario_gb(falso, OpcoesProcessamento())
+    assert necessario == pytest.approx(3 * 1000 / 1024**3)

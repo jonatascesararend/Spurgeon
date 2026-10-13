@@ -127,3 +127,16 @@ _PESO_POR_PRESET = {
 def peso_de_encode(opcoes: OpcoesProcessamento) -> float:
     """Quanto a renderização pesa no progresso total: depende da qualidade escolhida."""
     return _PESO_POR_PRESET.get(opcoes.preset_qualidade().preset, 36.5)
+
+
+# Bitrate medido nesta máquina com o sermão real (1080p, x264 veryslow, CRF 16): 5,5 Mb/s para
+# o vídeo horizontal; o vertical (recorte ampliado, com legenda) mede 9,4 Mb/s. Cada +6 de
+# CRF corta o bitrate pela metade.
+MBPS_EM_CRF16 = 5.5
+MBPS_EM_CRF16_VERTICAL = 10.0
+
+
+def estimar_tamanho_bytes(duracao_s: float, crf: int, *, vertical: bool = False) -> int:
+    """Quanto um vídeo desta duração ocupa em disco com esse CRF (ordem de grandeza)."""
+    base = MBPS_EM_CRF16_VERTICAL if vertical else MBPS_EM_CRF16
+    return int(duracao_s * base * 2 ** ((16 - crf) / 6) * 1e6 / 8)

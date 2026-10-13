@@ -14,9 +14,9 @@ from typing import Any, Literal, TypeVar
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from spurgeon.core.erros import ErroFerramenta
+from spurgeon.core.ollama import URL_OLLAMA
 from spurgeon.shorts.dados import Avaliacao
 
-URL_OLLAMA = "http://127.0.0.1:11434"
 _TENTATIVAS = 3
 TEMPERATURA_PADRAO = 0.1
 

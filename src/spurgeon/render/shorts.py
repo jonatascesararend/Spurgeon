@@ -32,7 +32,6 @@ VERSAO_DO_RENDER = 1
 DURACAO_MAXIMA_S = 60.5  # 60 s do pedido mais a folga de arredondamento do último quadro
 FADE_S = 0.1
 _PADRAO_DE_ARQUIVO = re.compile(r"^short_\d{2,3}_.+\.(mp4|txt)(\.parcial)?$")
-_MBPS_EM_CRF16_VERTICAL = 14.0
 _TOLERANCIA_DE_DURACAO_S = 0.6
 
 
@@ -108,11 +107,6 @@ def filtro_de_audio(canais: int | None, duracao_s: float, medido: dict[str, floa
         f"afade=t=out:st={f.numero_ffmpeg(fade_fora)}:d={FADE_S:g}",
     ]
     return ",".join(cadeia)
-
-
-def estimar_tamanho_bytes(duracao_s: float, crf: int) -> int:
-    mbps = _MBPS_EM_CRF16_VERTICAL * 2 ** ((16 - crf) / 6)
-    return int(duracao_s * mbps * 1e6 / 8)
 
 
 class RenderizarShorts(Etapa):
@@ -219,7 +213,7 @@ class RenderizarShorts(Etapa):
     def _conferir_disco(self, ctx: ContextoProjeto, planejados, crf: int) -> None:
         livre = shutil.disk_usage(ctx.pastas.raiz).free
         total_s = sum(s.corte.duracao for s in planejados)
-        necessario = estimar_tamanho_bytes(total_s, crf) + 1_000_000_000
+        necessario = f.estimar_tamanho_bytes(total_s, crf, vertical=True) + 1_000_000_000
         if livre < necessario:
             raise ErroFerramenta(
                 f"Falta espaço em disco para os Shorts: são necessários cerca de "

@@ -31,7 +31,6 @@ DURACAO_DA_PARTE_S = 600.0
 VERSAO_DO_RENDER = 1
 _MARGEM_DE_LEITURA_S = 0.5
 _TOLERANCIA_DE_DURACAO_S = 0.5
-_MBPS_EM_CRF16 = 8.0  # bitrate típico de uma pessoa falando, em 1080p, com x264 e CRF 16
 _MARGEM_DE_DISCO = 1_000_000_000
 _SOBRA_NA_JUNCAO_ECONOMICA = 0.15  # fração do arquivo final que ainda ocupa espaço além das partes
 
@@ -229,11 +228,6 @@ class _Clipe:
     arquivo: str
 
 
-def estimar_tamanho_bytes(duracao_s: float, crf: int) -> int:
-    mbps = _MBPS_EM_CRF16 * 2 ** ((16 - crf) / 6)
-    return int(duracao_s * mbps * 1e6 / 8)
-
-
 # --- a etapa ---------------------------------------------------------------------------------
 
 
@@ -351,7 +345,7 @@ class RenderizarVideoLongo(Etapa):
         Normalmente as partes e o arquivo final existem ao mesmo tempo (o dobro do tamanho). Com
         pouco espaço, cada parte é apagada assim que a junção termina de lê-la.
         """
-        estimado = estimar_tamanho_bytes(duracao_s, crf)
+        estimado = f.estimar_tamanho_bytes(duracao_s, crf)
         existente = (
             sum(p.stat().st_size for p in pasta.glob("parte_*.mp4")) if pasta.exists() else 0
         )

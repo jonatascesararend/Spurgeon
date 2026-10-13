@@ -11,6 +11,7 @@ from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, threads_para_uso
+from spurgeon.core.ollama import garantir_servidor
 from spurgeon.core.pipeline import ContextoProjeto, Etapa, ResultadoEtapa
 from spurgeon.shorts.analise import (
     ParametrosJanela,
@@ -45,6 +46,8 @@ def carregar_spacy():
 
 def criar_cliente_llm(ctx: ContextoProjeto) -> ClienteLLM:
     """O cliente do Ollama configurado para esta máquina; baixa o modelo se faltar."""
+    if not garantir_servidor():  # tenta abrir o servidor; se não der, o erro explica o que fazer
+        ctx.log.warning("O Ollama não está respondendo e não foi possível abri-lo sozinho.")
     perfil = detectar_hardware(ctx.config.pastas.projetos)
     cliente = ClienteLLM(
         ctx.opcoes.ollama_modelo,

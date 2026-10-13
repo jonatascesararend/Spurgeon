@@ -259,8 +259,8 @@ def test_roteiro_do_audio_sem_extras_so_tem_o_principal():
 
 
 def test_estimativa_de_tamanho_cresce_com_a_qualidade():
-    assert vl.estimar_tamanho_bytes(3600, 16) > vl.estimar_tamanho_bytes(3600, 22) * 1.9
-    assert 3e9 < vl.estimar_tamanho_bytes(3900, 16) < 5e9
+    assert f.estimar_tamanho_bytes(3600, 16) > f.estimar_tamanho_bytes(3600, 22) * 1.9
+    assert 2e9 < f.estimar_tamanho_bytes(3900, 16) < 3.5e9  # medido: 5,5 Mb/s
 
 
 # --- legendas ASS ---------------------------------------------------------------------------
@@ -567,7 +567,7 @@ def test_pouco_espaco_liga_o_modo_economico_e_muito_espaco_nao(
     contexto, monkeypatch, tmp_path, caplog
 ):
     etapa = vl.RenderizarVideoLongo()
-    estimado = vl.estimar_tamanho_bytes(3900.0, 16)
+    estimado = f.estimar_tamanho_bytes(3900.0, 16)
     com_espaco_livre(monkeypatch, int(estimado * 2.5) + 2 * 10**9)
     assert etapa._conferir_disco(contexto, tmp_path / "x", 3900.0, 16) is False
     com_espaco_livre(monkeypatch, int(estimado * 1.5) + 10**9)
@@ -599,7 +599,7 @@ def test_modo_economico_apaga_as_partes_na_juncao_e_o_video_sai_igual(
         return original(self, ctx, pasta, sequencia, *args, **kwargs)
 
     monkeypatch.setattr(vl.RenderizarVideoLongo, "_unir", espiar)
-    estimado = vl.estimar_tamanho_bytes(esperado, 23)
+    estimado = f.estimar_tamanho_bytes(esperado, 23)
     com_espaco_livre(monkeypatch, int(estimado * 1.5) + 10**9)  # só cabe o econômico
     with caplog.at_level("WARNING"):
         rodar(vl.RenderizarVideoLongo(), contexto)
