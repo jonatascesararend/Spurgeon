@@ -464,9 +464,17 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 
 ### Pendências técnicas
 
-1. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
+1. **Comparar o `qwen3:8b` com outros modelos** (`qwen3:4b`, `llama3.1:8b`) em trechos reais: o `qwen3:8b` funcionou bem (JSON sempre válido, títulos específicos depois de tirar o exemplo do prompt, ~50 s por trecho na CPU), mas ele é generoso nas notas e só foi comparado a si mesmo.
 2. **Comparar visualmente** a qualidade "Alta" (CRF 18) e a "Máxima" (CRF 16) em trechos do sermão, para o autor saber o quanto a diferença de ~2 h 30 min compensa.
 
 ### Decisão que depende do autor (descoberta com o sermão real)
 
 3. **Tamanho mínimo da pausa a cortar:** no sermão real o padrão de 10 s não corta nada (a maior pausa tem 5,3 s). Manter 10 s como padrão, ou usar um valor menor (por exemplo 2 s, que corta 10 pausas e 17 s)? A remoção de silêncios encurta menos de 1 minuto em 65 mesmo em 1 s, então vale também decidir se ela continua ligada por padrão.
+
+### Escolhas que fiz sozinho na Fase 4 a 6 (confirmar ou mudar)
+
+4. **Recorte 9:16 deslocado +4% para a direita (padrão):** a câmera fixa deixa o pregador e a cruz a ~54% da largura; com 0% o ombro esquerdo encosta na borda. Opção avançada "Deslocamento do recorte".
+5. **Legendas dinâmicas desligadas por padrão** (a resposta "Legendas dinâmicas = Não" foi lida como "não vem marcada"): ligue em "O que gerar" ou com `--legendas`. Os Shorts do sermão real foram gerados com elas.
+6. **Shorts numerados pela ordem em que aparecem no sermão** (`short_01_…`), não pela nota.
+7. **Todos os cortes sugeridos vêm marcados** (20) e as reservas desmarcadas (8), como pedido; a nota mínima para vir marcado é 45 (opção avançada).
+8. **Espaço em disco:** este PC tem pouco espaço no C: (7 a 10 GB livres durante o desenvolvimento). O vídeo longo em Máxima ocupa ~2,7 GB e os 20 Shorts ~1,2 GB; a junção tem um modo econômico, mas o modelo do Ollama (5 GB) e o do Whisper (1,5 GB) pesam. Se for processar vários sermões, vale liberar espaço ou mover `Projetos/` para outro disco.

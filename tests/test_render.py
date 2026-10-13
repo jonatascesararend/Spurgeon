@@ -389,7 +389,7 @@ def test_filtro_de_audio_do_short_tem_fade_nas_pontas_e_volume_medido():
               "target_offset": 0.5}  # fmt: skip
     cadeia = filtro_de_audio(1, 40.0, medido, -14.0)
     assert "loudnorm=I=-14.0" in cadeia and "measured_I=-20.0" in cadeia
-    assert "afade=t=in:st=0:d=0.1" in cadeia and "afade=t=out:st=39.9:d=0.1" in cadeia
+    assert "afade=t=in:st=0:d=0.100" in cadeia and "afade=t=out:st=39.9:d=0.100" in cadeia
     assert "loudnorm" not in filtro_de_audio(2, 40.0, None, -14.0)
 
 
@@ -908,3 +908,77 @@ def test_imagem_e_som_continuam_alinhados_depois_de_varios_cortes(
         deslocamento = int(np.argmax(correlacao))
         deslocamento = deslocamento if deslocamento < len(a) else deslocamento - 2 * len(a)
         assert abs(deslocamento) / 16 <= 3, f"em {inicio_s} s: {deslocamento / 16:+.1f} ms"
+
+
+@pytest.mark.ffmpeg
+def test_sem_nenhum_trecho_mantido_o_erro_e_claro(contexto, video_com_pausas, audio_com_pausas):
+    preparar_longo(contexto, video_com_pausas, audio_com_pausas)
+    escrever_json_atomico(contexto.pastas.cortes, {"trechos": []})
+    with pytest.raises(Exception, match="nenhum trecho"):
+        rodar(vl.RenderizarVideoLongo(), contexto)
+
+
+# --- volume: o mono duplicado em estéreo mede 3 dB a mais -------------------------------------
+
+
+def test_mono_para_estereo_pode_compensar_os_3_db():
+    assert "pan=stereo|c0=c0|c1=c0" in f.filtro_audio_estereo(1)
+    compensado = f.filtro_audio_estereo(1, compensar_mono=True)
+    assert "c0=0.7071067811865476*c0|c1=0.7071067811865476*c0" in compensado
+    assert "0.707" not in f.filtro_audio_estereo(2, compensar_mono=True)  # estéreo fica como está
+
+
+def test_fades_encolhem_quando_a_fala_comeca_ou_termina_colada():
+    from spurgeon.render.shorts import fades_do_short
+
+    solta = [PalavraDaLegenda("a", 0.5, 0.9), PalavraDaLegenda("b", 39.0, 39.4)]
+    assert fades_do_short(solta, 40.0) == (0.1, 0.1)
+    colada = [PalavraDaLegenda("a", 0.04, 0.3), PalavraDaLegenda("b", 39.0, 39.99)]
+    entrada, saida = fades_do_short(colada, 40.0)
+    assert entrada == pytest.approx(0.03) and saida == pytest.approx(0.02)  # o piso é 20 ms
+    assert fades_do_short([], 40.0) == (0.1, 0.1)
+
+
+def _lufs(arquivo: Path, entradas: list[str] | None = None) -> float:
+    import re
+
+    resultado = subprocess.run(
+        [str(localizar_binario("ffmpeg")), "-hide_banner", "-nostats", *(entradas or []),
+         "-i", str(arquivo), "-af", "ebur128", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )  # fmt: skip
+    return float(re.findall(r"I:\s+(-?[\d.]+) LUFS", resultado.stderr)[-1])
+
+
+@pytest.mark.ffmpeg
+def test_o_short_sai_no_volume_pedido_mesmo_vindo_de_um_audio_mono(ctx_shorts):
+    ctx_shorts.opcoes.lufs_shorts = -14.0
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5)])
+    rodar(RenderizarShorts(), ctx_shorts)
+    saida = ctx_shorts.pastas.shorts / "short_01_corte_1.mp4"
+    assert _lufs(saida) == pytest.approx(-14.0, abs=0.7)
+
+
+@pytest.mark.ffmpeg
+def test_o_video_longo_estereo_mantem_o_volume_ja_normalizado_do_mono(
+    contexto, video_com_pausas, audio_com_pausas
+):
+    preparar_longo(contexto, video_com_pausas, audio_com_pausas, normalizar_volume=True)
+    escrever_json_atomico(contexto.pastas.cortes, {"trechos": [[0.0, 5.0]]})
+    contexto.pastas.audio_normalizado.write_bytes(audio_com_pausas.read_bytes())
+    rodar(vl.RenderizarVideoLongo(), contexto)
+    mono = _lufs(audio_com_pausas, ["-t", "5"])
+    assert _lufs(contexto.pastas.video_longo) == pytest.approx(mono, abs=0.7)
+
+
+@pytest.mark.ffmpeg
+def test_sem_normalizar_o_estereo_duplicado_preserva_o_nivel_original(
+    contexto, video_com_pausas, audio_com_pausas
+):
+    """Um vídeo dual-mono do celular tem os dois canais iguais; ao extrair em mono e voltar para
+    estéreo sem mudar o ganho, o arquivo soa como o original (3 dB acima da medição do mono)."""
+    preparar_longo(contexto, video_com_pausas, audio_com_pausas, normalizar_volume=False)
+    escrever_json_atomico(contexto.pastas.cortes, {"trechos": [[0.0, 5.0]]})
+    rodar(vl.RenderizarVideoLongo(), contexto)
+    mono = _lufs(audio_com_pausas, ["-t", "5"])
+    assert _lufs(contexto.pastas.video_longo) == pytest.approx(mono + 3.0, abs=0.7)

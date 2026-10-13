@@ -789,3 +789,40 @@ def test_nome_de_arquivo_corta_entre_palavras_e_nao_no_meio_de_uma():
     assert nome_de_arquivo("a" * 60, maximo=40) == "a" * 40
     # corte que cai certinho no fim de uma palavra
     assert nome_de_arquivo("um dois tres", maximo=8) == "um_dois"
+
+
+def test_selecao_com_niveis_do_audio_comeca_e_termina_em_silencio(ctx_shorts, ollama):
+    """Com a medição de nível, início e fim de cada corte caem em janelas silenciosas."""
+    palavras = sermao_falso(frases=150)
+    total = palavras[-1].fim + 2.0
+    n = int(total / 0.05)
+    tempos = [round(i * 0.05, 3) for i in range(n)]
+    niveis = [
+        -20.0 if any(p.inicio - 0.05 <= t < p.fim + 0.05 for p in palavras) else -80.0
+        for t in tempos
+    ]
+    escrever_json_atomico(
+        ctx_shorts.pastas.niveis,
+        {"duracao_s": total, "piso_db": -80.0, "fala_db": -20.0, "limiar_db": -55.0,
+         "tempos": tempos, "niveis": niveis},
+    )  # fmt: skip
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    assert cortes
+
+    def nivel_em(t: float) -> float:
+        return niveis[min(int(t / 0.05), n - 1)]
+
+    for c in cortes:
+        assert nivel_em(c.inicio) < -55.0, f"o corte {c.id} começa dentro da voz"
+        assert nivel_em(c.fim - 0.05) < -55.0, f"o corte {c.id} termina dentro da voz"
+        assert c.duracao <= 60.0
+
+
+def test_sem_a_medicao_de_nivel_a_selecao_avisa_e_usa_o_respiro_fixo(ctx_shorts, ollama, caplog):
+    for etapa in (AnalisarShorts(), AvaliarShorts()):
+        rodar(etapa, ctx_shorts)
+    with caplog.at_level("WARNING"):
+        rodar(SelecionarShorts(), ctx_shorts)
+    assert "respiro fixo" in caplog.text

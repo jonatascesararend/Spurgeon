@@ -102,11 +102,20 @@ def argumentos_audio() -> list[str]:
     return ["-c:a", "aac", "-b:a", BITRATE_AUDIO, "-ar", str(TAXA_AUDIO), "-ac", "2"]
 
 
-def filtro_audio_estereo(canais: int | None) -> str:
-    """Leva qualquer áudio a estéreo de 48 kHz; mono vira dois canais iguais, sem perder volume."""
+_GANHO_DUAL_MONO = "0.7071067811865476"  # −3,01 dB: metade da potência em cada canal
+
+
+def filtro_audio_estereo(canais: int | None, *, compensar_mono: bool = False) -> str:
+    """Leva qualquer áudio a estéreo de 48 kHz; mono vira dois canais iguais.
+
+    Dois canais iguais soam 3 dB mais altos na medição de loudness (BS.1770) do que o mono de
+    onde saíram. Se o volume do mono JÁ foi ajustado para um alvo (normalizar volume), use
+    `compensar_mono=True`: cada canal recebe −3 dB e o estéreo entregue fica no alvo.
+    """
     base = f"aresample={TAXA_AUDIO}"
     if canais == 1:
-        return f"{base},pan=stereo|c0=c0|c1=c0"
+        ganho = f"{_GANHO_DUAL_MONO}*" if compensar_mono else ""
+        return f"{base},pan=stereo|c0={ganho}c0|c1={ganho}c0"
     return f"{base},aformat=channel_layouts=stereo"
 
 

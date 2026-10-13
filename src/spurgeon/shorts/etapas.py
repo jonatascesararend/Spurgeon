@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from spurgeon.audio.nivel import carregar_niveis
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.formatacao import formatar_duracao
@@ -207,7 +208,7 @@ def gravar_cortes(caminho: Path, cortes: list[Corte]) -> None:
 class SelecionarShorts(Etapa):
     id = "selecionar_shorts"
     nome = "Escolhendo os cortes e criando títulos"
-    depende_de = ("avaliar_shorts",)
+    depende_de = ("avaliar_shorts", "medir_nivel")
     opcoes_relevantes = ("shorts_limite_seguranca", "shorts_nota_minima", "ollama_modelo")
     peso = 8.0  # título, descrição e hashtags de cada corte (~15 min)
 
@@ -226,6 +227,7 @@ class SelecionarShorts(Etapa):
             limite=ctx.opcoes.shorts_limite_seguranca,
             nota_minima=ctx.opcoes.shorts_nota_minima,
             reservas=RESERVAS_PADRAO,
+            niveis=self._niveis(ctx),
         )
         principais = [c for c in cortes if not c.reserva]
         ctx.log.info(
@@ -246,6 +248,14 @@ class SelecionarShorts(Etapa):
         finally:
             cliente.descarregar()  # a renderização que vem a seguir precisa da memória
         gravar_cortes(ctx.pastas.cortes_shorts, cortes)
+
+    def _niveis(self, ctx: ContextoProjeto):
+        """As medidas de 50 ms do áudio e o limiar de silêncio, para ajustar início e fim."""
+        if not ctx.pastas.niveis.exists():
+            ctx.log.warning("Sem a medição de nível do áudio: os cortes usam um respiro fixo.")
+            return None
+        medido = carregar_niveis(ctx.pastas.niveis)
+        return medido.medidas, medido.limiar_db
 
     def _criar_metadados(
         self, ctx: ContextoProjeto, cortes: list[Corte], cliente: ClienteLLM

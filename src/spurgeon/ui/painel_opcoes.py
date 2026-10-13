@@ -197,7 +197,9 @@ class PainelOpcoes(ctk.CTkFrame):
         self._w_vinheta = self._check(c, "Vinheta final", "vinheta_final", recuo=28)
         self._dica_recursos = self._dica(c, empacotar=False)
         self._check(c, "Gerar Shorts automáticos (vertical 9:16)", "gerar_shorts")
-        self._check(c, "Legendas dinâmicas", "legendas_dinamicas", recuo=28)
+        self._check(
+            c, "Legendas dinâmicas (palavra falada em amarelo)", "legendas_dinamicas", recuo=28
+        )
 
     def _montar_revisao(self) -> None:
         c = self._cartao("4. Pontos de revisão")

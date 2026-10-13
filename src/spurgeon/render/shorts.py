@@ -31,6 +31,7 @@ from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rot
 VERSAO_DO_RENDER = 1
 DURACAO_MAXIMA_S = 60.5  # 60 s do pedido mais a folga de arredondamento do último quadro
 FADE_S = 0.1
+FADE_MINIMO_S = 0.02
 _PADRAO_DE_ARQUIVO = re.compile(r"^short_\d{2,3}_.+\.(mp4|txt)(\.parcial)?$")
 _TOLERANCIA_DE_DURACAO_S = 0.6
 
@@ -95,18 +96,40 @@ def filtro_de_video(
     return ",".join(partes)
 
 
-def filtro_de_audio(canais: int | None, duracao_s: float, medido: dict[str, float] | None,
-                    alvo_lufs: float) -> str:  # fmt: skip
-    """Estéreo, volume do Short (se medido) e fade de 100 ms nas pontas contra estalos."""
+def filtro_de_audio(
+    canais: int | None, duracao_s: float, medido: dict[str, float] | None, alvo_lufs: float,
+    *, fade_entrada_s: float = FADE_S, fade_saida_s: float = FADE_S,
+) -> str:  # fmt: skip
+    """Estéreo, volume do Short (se medido) e fade curto nas pontas contra estalos.
+
+    A medição do volume precisa ter passado pelo MESMO estéreo (`_medir_volume`): dois canais
+    iguais medem 3 dB acima do mono.
+    """
     cadeia = [f.filtro_audio_estereo(canais)]
     if medido is not None:
         cadeia += [filtro_aplicar(alvo_lufs, medido), f"aresample={f.TAXA_AUDIO}"]
-    fade_fora = max(0.0, duracao_s - FADE_S)
+    fade_fora = max(0.0, duracao_s - fade_saida_s)
     cadeia += [
-        f"afade=t=in:st=0:d={FADE_S:g}",
-        f"afade=t=out:st={f.numero_ffmpeg(fade_fora)}:d={FADE_S:g}",
+        f"afade=t=in:st=0:d={fade_entrada_s:.3f}",
+        f"afade=t=out:st={f.numero_ffmpeg(fade_fora)}:d={fade_saida_s:.3f}",
     ]
     return ",".join(cadeia)
+
+
+def fades_do_short(faladas, duracao_s: float) -> tuple[float, float]:
+    """Duração do fade de entrada e de saída: 100 ms, menos se a fala começa ou termina colada.
+
+    O fade protege contra estalos, mas não pode apagar o começo da primeira palavra nem o fim da
+    última quando o corte caiu bem perto delas.
+    """
+    if not faladas:
+        return FADE_S, FADE_S
+    folga_inicio = faladas[0].inicio - 0.01
+    folga_fim = duracao_s - faladas[-1].fim - 0.01
+    return (
+        min(FADE_S, max(FADE_MINIMO_S, folga_inicio)),
+        min(FADE_S, max(FADE_MINIMO_S, folga_fim)),
+    )
 
 
 class RenderizarShorts(Etapa):
@@ -267,16 +290,18 @@ class RenderizarShorts(Etapa):
     ) -> None:  # fmt: skip
         corte = curto.corte
         trabalho = ctx.pastas.work
+        faladas = palavras_do_short(palavras, corte.inicio, corte.fim)
+        fade_entrada, fade_saida = fades_do_short(faladas, corte.duracao)
         legenda = None
         if fontes is not None:
             legenda = f"legendas/{curto.nome}.ass"
             estilo = EstiloLegenda(posicao_vertical=ctx.opcoes.legenda_posicao_vertical)
-            ass = montar_ass(palavras_do_short(palavras, corte.inicio, corte.fim), estilo)
+            ass = montar_ass(faladas, estilo)
             escrever_texto_atomico(trabalho / legenda, ass)
 
         medido = None
         if ctx.opcoes.normalizar_volume:
-            medido = self._medir_volume(ctx, audio, corte, ctx.opcoes.lufs_shorts)
+            medido = self._medir_volume(ctx, audio, canais, corte, ctx.opcoes.lufs_shorts)
 
         duracao = corte.duracao
         script = trabalho / "legendas" / f"{curto.nome}.filter"
@@ -287,7 +312,14 @@ class RenderizarShorts(Etapa):
                 info, fps, deslocamento_pct=ctx.opcoes.recorte_deslocamento_x_pct, legenda=legenda
             )
             + "[v];\n[1:a]"
-            + filtro_de_audio(canais, duracao, medido, ctx.opcoes.lufs_shorts)
+            + filtro_de_audio(
+                canais,
+                duracao,
+                medido,
+                ctx.opcoes.lufs_shorts,
+                fade_entrada_s=fade_entrada,
+                fade_saida_s=fade_saida,
+            )
             + "[a]",
             encoding="utf-8",
         )
@@ -321,12 +353,13 @@ class RenderizarShorts(Etapa):
         )
 
     def _medir_volume(
-        self, ctx, audio: Path, corte: Corte, alvo_lufs: float
+        self, ctx, audio: Path, canais: int | None, corte: Corte, alvo_lufs: float
     ) -> dict[str, float] | None:
-        """Primeira passagem do loudnorm, só no trecho do Short."""
+        """Primeira passagem do loudnorm, só no trecho do Short e já em estéreo."""
         saida = ctx.ffmpeg(
             ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.duracao),
-             "-i", audio, "-af", filtro_medir(alvo_lufs), "-f", "null", "-"],
+             "-i", audio, "-af", f"{f.filtro_audio_estereo(canais)},{filtro_medir(alvo_lufs)}",
+             "-f", "null", "-"],
         )  # fmt: skip
         medido = ler_medicao(saida)
         if medido.get("input_i", -120.0) <= -70.0:  # trecho mudo: não há o que normalizar

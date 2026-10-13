@@ -7,6 +7,7 @@ import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 
 from spurgeon.shorts.analise import FOLGA_FIM_S, FOLGA_INICIO_S, sobreposicao
+from spurgeon.shorts.bordas import Medida, refinar_bordas
 from spurgeon.shorts.dados import Avaliacao, Candidato, Corte
 from spurgeon.shorts.pontuacao import calcular_nota
 
@@ -44,11 +45,15 @@ def montar_cortes(
     limite: int,
     nota_minima: float,
     reservas: int = RESERVAS_PADRAO,
+    niveis: tuple[Sequence[Medida], float] | None = None,
 ) -> list[Corte]:
     """Os melhores `limite` cortes (e algumas reservas), em ordem de nota.
 
     Só entram candidatos avaliados pela IA. Um corte que se sobrepõe a outro já escolhido em
     mais de 20% é descartado. Reservas ficam desmarcadas na tela de aprovação.
+
+    Com `niveis` (as medidas de 50 ms e o limiar de silêncio), o início e o fim de cada corte
+    são ajustados ao silêncio mais perto da fala; sem eles, vale um respiro fixo.
     """
     pontuados = []
     for c in candidatos:
@@ -70,7 +75,10 @@ def montar_cortes(
     cortes = []
     for posicao, (c, av, nota, detalhe) in enumerate(escolhidos):
         reserva = posicao >= limite or nota < nota_minima
-        inicio, fim = com_respiro(c)
+        if niveis is None:
+            inicio, fim = com_respiro(c)
+        else:
+            inicio, fim = refinar_bordas(c, *niveis)
         cortes.append(
             Corte(
                 id=c.id,

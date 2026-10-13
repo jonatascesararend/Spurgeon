@@ -165,6 +165,7 @@ def script_de_clipe(info: InfoMidia, largura: int, altura: int, fps: Fraction) -
 def script_do_audio(
     trechos: list[Trecho], *, intro: _Clipe | None, vinheta: _Clipe | None,
     quadros_principais: int, fps: Fraction, canais: int | None, normalizar: bool, lufs: float,
+    compensar_mono: bool = False,
 ) -> str:  # fmt: skip
     """Junta, em estéreo de 48 kHz, o áudio da introdução, do vídeo (só nos trechos mantidos) e
     da vinheta.
@@ -190,8 +191,9 @@ def script_do_audio(
         principal = "".join(f"[t{i}]" for i in range(len(trechos))) + (
             f"concat=n={len(trechos)}:v=0:a=1"
         )
+    estereo = f.filtro_audio_estereo(canais, compensar_mono=compensar_mono)
     linhas.append(
-        f"{principal},{f.filtro_audio_estereo(canais)},apad=pad_dur=2,"
+        f"{principal},{estereo},apad=pad_dur=2,"
         f"atrim=duration={exato(quadros_principais)},asetpts=PTS-STARTPTS[am]"
     )
     ordem = []
@@ -272,6 +274,8 @@ class RenderizarVideoLongo(Etapa):
         largura, altura = (info.largura or 1920) // 2 * 2, (info.altura or 1080) // 2 * 2
         cortes = ler_json(ctx.pastas.cortes)
         trechos = [Trecho(a, b) for a, b in cortes["trechos"]]
+        if not trechos:
+            raise ErroFerramenta("Não sobrou nenhum trecho de vídeo para renderizar.")
         audio = ctx.pastas.audio_final(ctx.opcoes)
         intro = self._clipe(ctx, ctx.config.pastas.introducao, "intro", fps, ctx.opcoes.introducao)
         vinheta = self._clipe(
@@ -449,6 +453,7 @@ class RenderizarVideoLongo(Etapa):
                 canais=canais,
                 normalizar=ctx.opcoes.normalizar_volume,
                 lufs=ctx.opcoes.lufs_video_longo,
+                compensar_mono=ctx.opcoes.normalizar_volume,
             ),
             encoding="utf-8",
         )
