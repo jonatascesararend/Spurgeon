@@ -22,7 +22,7 @@ from spurgeon.core.ffmpeg import (
 from spurgeon.core.hardware import detectar_hardware, recomendar
 from spurgeon.core.ollama import URL_OLLAMA, localizar_ollama
 
-_FILTROS_NECESSARIOS = ("ass", "loudnorm")
+_FILTROS_NECESSARIOS = ("ass", "loudnorm", "zscale", "tonemap")  # zscale/tonemap: HDR→SDR
 _CODIFICADORES_NECESSARIOS = ("libx264", "aac")
 _DISCO_MINIMO_GB = 10.0
 _RAM_LIVRE_MINIMA_GB = 3.0
@@ -85,7 +85,11 @@ def _ffmpeg(opcoes: OpcoesProcessamento) -> list[Verificacao]:
             Verificacao("FFmpeg: recursos", Nivel.ERRO, "faltam: " + ", ".join(faltam))
         )
     else:
-        resultados.append(Verificacao("FFmpeg: recursos", Nivel.OK, "ass, loudnorm, libx264, aac"))
+        resultados.append(
+            Verificacao(
+                "FFmpeg: recursos", Nivel.OK, "ass, loudnorm, zscale, tonemap, libx264, aac"
+            )
+        )
     if opcoes.usar_nvenc and not nvenc_funciona():
         resultados.append(Verificacao("NVENC", Nivel.ERRO, "pedido nas opções, mas não funciona"))
     else:

@@ -172,3 +172,16 @@ def test_sem_conseguir_ler_a_duracao_usa_o_tamanho_do_arquivo(tmp_path):
     falso.write_bytes(b"0" * 1000)
     necessario = preflight._espaco_necessario_gb(falso, OpcoesProcessamento())
     assert necessario == pytest.approx(3 * 1000 / 1024**3)
+
+
+@pytest.mark.ffmpeg
+def test_ffmpeg_sem_zscale_ou_tonemap_e_erro_porque_o_hdr_do_celular_nao_converte(
+    config_tmp, video_teste, monkeypatch
+):
+    from spurgeon.core import ffmpeg as ffmpeg_mod
+
+    filtros = frozenset(ffmpeg_mod.filtros_disponiveis() - {"zscale"})
+    monkeypatch.setattr(preflight, "filtros_disponiveis", lambda: filtros)
+    resultados = por_nome(executar_preflight(config_tmp, video=video_teste))
+    assert resultados["FFmpeg: recursos"].nivel == Nivel.ERRO
+    assert "zscale" in resultados["FFmpeg: recursos"].detalhe

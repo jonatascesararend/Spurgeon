@@ -44,7 +44,7 @@ iniciar.bat           abre o aplicativo
 
 Coloque o vídeo em `Downloads/` (ou escolha outro arquivo), marque o que quer gerar e clique em
 **Iniciar**. A janela mostra o tempo estimado antes de começar. Na qualidade padrão (Máxima),
-um sermão de 65 min leva cerca de 6 h no PC de desenvolvimento (veja o Projeto.md): deixe rodando
+um sermão de 65 min leva cerca de 8 h neste PC (transcrição, IA, 20 Shorts e vídeo longo; veja o Projeto.md): deixe rodando
 de madrugada; o PC não bloqueia sozinho enquanto processa.
 
 Linha de comando (para desenvolvimento):
