@@ -130,7 +130,9 @@ class OpcoesProcessamento(BaseModel):
     #: quantos candidatos a IA avalia (cada um leva cerca de 1 min na CPU)
     shorts_candidatos_ia: int = Field(40, ge=5, le=200)
     legenda_posicao_vertical: float = Field(0.62, ge=0.3, le=0.9)
-    recorte_deslocamento_x_pct: float = Field(0.0, ge=-30.0, le=30.0)
+    #: deslocamento do recorte 9:16 (% da largura; + para a direita). A câmera fixa do púlpito deixa
+    #: o pregador e a cruz a ~54% da largura, então +4% os põe no centro do Short.
+    recorte_deslocamento_x_pct: float = Field(4.0, ge=-30.0, le=30.0)
 
     # Áudio
     lufs_video_longo: float = Field(-16.0, ge=-30.0, le=-5.0)

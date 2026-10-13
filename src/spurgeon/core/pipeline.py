@@ -94,19 +94,24 @@ class ContextoProjeto:
         duracao_s: float | None = None,
         faixa: tuple[float, float] = (0.0, 1.0),
         cwd: Path | None = None,
+        ao_fracao: Callable[[float], None] | None = None,
     ) -> str:
         """Roda o FFmpeg atendendo cancelamento e pausa.
 
         O progresso do comando (0..1) ocupa `faixa` do progresso da etapa, para etapas que
-        rodam vários comandos em sequência.
+        rodam vários comandos em sequência. `ao_fracao` recebe o progresso próprio do comando.
         """
         inicio, fim = faixa
+
+        def ao_progresso(fracao: float) -> None:
+            self.progresso(inicio + fracao * (fim - inicio))
+            if ao_fracao is not None:
+                ao_fracao(fracao)
+
         return executar_ffmpeg(
             args,
             duracao_s=duracao_s,
-            ao_progresso=(lambda f: self.progresso(inicio + f * (fim - inicio)))
-            if duracao_s
-            else None,
+            ao_progresso=ao_progresso if duracao_s else None,
             cancelar=self.cancelar,
             pausar=self.pausar,
             ao_pausa=self.avisar_pausa_de_processo,

@@ -26,7 +26,13 @@ from spurgeon.core.projeto import (
     data_gravacao,
 )
 from spurgeon.ui import dialogos
-from spurgeon.ui.estimativa import EstimadorTempo, formatar_duracao, formatar_restante
+from spurgeon.ui.estimativa import (
+    EstimadorTempo,
+    estimar_tempo_total,
+    formatar_duracao,
+    formatar_estimativa,
+    formatar_restante,
+)
 from spurgeon.ui.formulario import (
     ErroFormulario,
     ValoresFormulario,
@@ -102,7 +108,7 @@ class JanelaPrincipal(ctk.CTk):
             lateral,
             valores=ValoresFormulario.de_opcoes(self.config_app.padroes),
             pastas=pastas,
-            ao_mudar=lambda: None,
+            ao_mudar=self._atualizar_estimativa,
         )
         self.opcoes.pack(fill="x")
 
@@ -183,6 +189,7 @@ class JanelaPrincipal(ctk.CTk):
 
     def _ao_escolher_video(self, caminho: Path) -> None:
         self._info_video = None
+        self.entrada.mostrar_estimativa("")
 
         def trabalho() -> None:
             try:
@@ -213,6 +220,21 @@ class JanelaPrincipal(ctk.CTk):
         )
         if dia is not None:
             self.entrada.var_data.set(formatar_data(dia))
+        self._atualizar_estimativa()
+
+    def _atualizar_estimativa(self) -> None:
+        """Mostra quanto tempo o processamento deve levar com o que está marcado na tela."""
+        if self._info_video is None:
+            self.entrada.mostrar_estimativa("")
+            return
+        try:
+            opcoes = para_opcoes(self.opcoes.valores(), self.config_app.padroes)
+        except ErroFormulario:
+            return  # há um campo ainda incompleto; a estimativa anterior continua
+        total, render = estimar_tempo_total(
+            self._info_video.duracao_s, opcoes, hdr=self._info_video.hdr
+        )
+        self.entrada.mostrar_estimativa(formatar_estimativa(total, render))
 
     # --- iniciar ------------------------------------------------------------------------------
     def _coletar(self) -> tuple[OpcoesProcessamento, Path, str, date] | None:

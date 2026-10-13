@@ -1,5 +1,6 @@
 """Janela de aprovação dos cortes dos Shorts (janela escondida)."""
 
+import contextlib
 import tkinter
 
 import pytest
@@ -212,3 +213,33 @@ def test_abrir_a_revisao_pelo_id_da_etapa_sem_cortes_avisa(raiz, tmp_path, caixa
     pastas.criar()
     assert abrir_revisao(raiz, "aprovar_cortes", pastas) is True
     assert any("ainda não foram escolhidos" in m for _, m in caixas)
+
+
+@pytest.mark.gui
+def test_atalhos_andam_pela_lista_e_marcam_o_corte_aberto(aberto):
+    primeiro = aberto._ordem[0]
+    aberto.selecionar(primeiro)
+    aberto._andar(1)
+    assert aberto._atual == aberto._ordem[1]
+    aberto._andar(-1)
+    aberto._andar(-1)  # já é o primeiro: não sai da lista
+    assert aberto._atual == primeiro
+    antes = aberto._marcas[primeiro].get()
+    aberto.alternar_atual()
+    assert aberto._marcas[primeiro].get() is (not antes)
+    assert aberto._cortes[primeiro].incluir is (not antes)
+
+
+@pytest.mark.gui
+def test_a_lista_mostra_inicio_e_fim_de_cada_corte(aberto):
+    textos = []
+
+    def coletar(widget):
+        for filho in widget.winfo_children():
+            if hasattr(filho, "cget"):
+                with contextlib.suppress(Exception):  # nem todo widget tem texto
+                    textos.append(filho.cget("text"))
+            coletar(filho)
+
+    coletar(aberto._lista)
+    assert any("–" in t and " s" in t for t in textos if isinstance(t, str))

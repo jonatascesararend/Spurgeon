@@ -32,6 +32,8 @@ VERSAO_DO_RENDER = 1
 _MARGEM_DE_LEITURA_S = 0.5
 _TOLERANCIA_DE_DURACAO_S = 0.5
 _MBPS_EM_CRF16 = 8.0  # bitrate típico de uma pessoa falando, em 1080p, com x264 e CRF 16
+_MARGEM_DE_DISCO = 1_000_000_000
+_SOBRA_NA_JUNCAO_ECONOMICA = 0.15  # fração do arquivo final que ainda ocupa espaço além das partes
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,18 @@ def planejar_partes(
     return partes
 
 
+def arquivos_ja_lidos(
+    sequencia: list[tuple[str, float]], tempo_s: float, folga_s: float = 1.0
+) -> list[str]:
+    """Os arquivos que a junção já terminou de ler quando está em `tempo_s` do vídeo final."""
+    lidos, acumulado = [], 0.0
+    for nome, duracao in sequencia:
+        acumulado += duracao
+        if acumulado + folga_s <= tempo_s:
+            lidos.append(nome)
+    return lidos
+
+
 def quadros_da_duracao(duracao_s: float, fps: Fraction) -> int:
     return max(1, round(Fraction(duracao_s).limit_denominator(1_000_000) * fps))
 
@@ -90,24 +104,50 @@ def _n(valor: float) -> str:
     return f.numero_ffmpeg(valor)
 
 
+def recortes_de_quadros(pedacos: list[tuple[float, float]], fps: Fraction) -> list[tuple[int, int]]:
+    """(primeiro quadro da grade, quantidade) de cada pedaço, em quadros inteiros.
+
+    A quantidade de cada pedaço sai do arredondamento do tempo ACUMULADO, não do tempo do pedaço:
+    assim o erro nunca passa de meio quadro e a imagem não se afasta do áudio a cada corte.
+    """
+    taxa = float(fps)
+    acumulado = 0.0
+    recortes = []
+    for inicio, fim in pedacos:
+        duracao = fim - inicio
+        quantos = round((acumulado + duracao) * taxa) - round(acumulado * taxa)
+        acumulado += duracao
+        if quantos > 0:
+            recortes.append((round(inicio * taxa), quantos))
+    return recortes
+
+
 def script_da_parte(parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps: Fraction) -> str:
     """O filtro (para `-/filter_complex`) que monta uma parte a partir do vídeo original.
 
-    Os tempos são relativos ao ponto onde a leitura começa (`-ss`).
+    Os tempos são relativos ao ponto onde a leitura começa (`-ss`). Cada pedaço pega um número
+    exato de quadros da grade de `fps`: `trim` escolhe os quadros k com
+    `(k - 0.5)/fps <= tempo < (k + n - 0.5)/fps`.
     """
     taxa = f.texto_fps(fps)
     relativos = [(a - inicio_da_leitura, b - inicio_da_leitura) for a, b in parte.pedacos]
+    recortes = recortes_de_quadros(relativos, fps)
+
+    def tempos(primeiro: int, quantos: int) -> str:
+        inicio = (Fraction(2 * primeiro - 1, 2)) / fps
+        fim = (Fraction(2 * (primeiro + quantos) - 1, 2)) / fps
+        return f"start={_n(float(inicio))}:end={_n(float(fim))}"
+
     linhas = []
-    if len(relativos) == 1:
-        a, b = relativos[0]
-        linhas.append(f"[0:v]fps={taxa},trim=start={_n(a)}:end={_n(b)},setpts=PTS-STARTPTS[bruto]")
+    if len(recortes) == 1:
+        linhas.append(f"[0:v]fps={taxa},trim={tempos(*recortes[0])},setpts=PTS-STARTPTS[bruto]")
     else:
-        saidas = "".join(f"[s{i}]" for i in range(len(relativos)))
-        linhas.append(f"[0:v]fps={taxa},split={len(relativos)}{saidas}")
-        for i, (a, b) in enumerate(relativos):
-            linhas.append(f"[s{i}]trim=start={_n(a)}:end={_n(b)},setpts=PTS-STARTPTS[p{i}]")
-        entradas = "".join(f"[p{i}]" for i in range(len(relativos)))
-        linhas.append(f"{entradas}concat=n={len(relativos)}:v=1:a=0[bruto]")
+        saidas = "".join(f"[s{i}]" for i in range(len(recortes)))
+        linhas.append(f"[0:v]fps={taxa},split={len(recortes)}{saidas}")
+        for i, recorte in enumerate(recortes):
+            linhas.append(f"[s{i}]trim={tempos(*recorte)},setpts=PTS-STARTPTS[p{i}]")
+        entradas = "".join(f"[p{i}]" for i in range(len(recortes)))
+        linhas.append(f"{entradas}concat=n={len(recortes)}:v=1:a=0[bruto]")
     # tpad repete o último quadro se faltar algum por arredondamento; `-frames:v` corta o excesso
     linhas.append(f"[bruto]{f.cadeia_para_sdr(info)},tpad=stop_mode=clone:stop_duration=2[vout]")
     return ";\n".join(linhas)
@@ -123,28 +163,38 @@ def script_de_clipe(info: InfoMidia, largura: int, altura: int, fps: Fraction) -
     )
 
 
-def lista_do_audio(audio: Path, trechos: list[Trecho]) -> str:
-    """Arquivo para o demuxer `concat`: o áudio inteiro, só nos trechos mantidos."""
-    caminho = audio.resolve().as_posix().replace("'", r"'\''")
-    linhas = []
-    for t in trechos:
-        linhas += [f"file '{caminho}'", f"inpoint {t.inicio:.6f}", f"outpoint {t.fim:.6f}"]
-    return "\n".join(linhas) + "\n"
-
-
 def script_do_audio(
-    *, intro: _Clipe | None, vinheta: _Clipe | None, quadros_principais: int, fps: Fraction,
-    canais: int | None, normalizar: bool, lufs: float,
+    trechos: list[Trecho], *, intro: _Clipe | None, vinheta: _Clipe | None,
+    quadros_principais: int, fps: Fraction, canais: int | None, normalizar: bool, lufs: float,
 ) -> str:  # fmt: skip
-    """Junta, em estéreo de 48 kHz, o áudio da introdução, do vídeo e da vinheta."""
+    """Junta, em estéreo de 48 kHz, o áudio da introdução, do vídeo (só nos trechos mantidos) e
+    da vinheta.
+
+    Os cortes usam `atrim`, exato até a amostra (o demuxer `concat` do FFmpeg erra até dezenas
+    de milissegundos por corte, o que desalinharia a imagem).
+    """
 
     def exato(quadros: int) -> str:
         return _n(float(Fraction(quadros) / fps))
 
-    linhas = [
-        f"[0:a]{f.filtro_audio_estereo(canais)},apad=pad_dur=2,"
+    def corte(t: Trecho) -> str:
+        return f"atrim=start={_n(t.inicio)}:end={_n(t.fim)},asetpts=PTS-STARTPTS"
+
+    linhas = []
+    if len(trechos) == 1:
+        principal = f"[0:a]{corte(trechos[0])}"
+    else:
+        saidas = "".join(f"[x{i}]" for i in range(len(trechos)))
+        linhas.append(f"[0:a]asplit={len(trechos)}{saidas}")
+        for i, trecho in enumerate(trechos):
+            linhas.append(f"[x{i}]{corte(trecho)}[t{i}]")
+        principal = "".join(f"[t{i}]" for i in range(len(trechos))) + (
+            f"concat=n={len(trechos)}:v=0:a=1"
+        )
+    linhas.append(
+        f"{principal},{f.filtro_audio_estereo(canais)},apad=pad_dur=2,"
         f"atrim=duration={exato(quadros_principais)},asetpts=PTS-STARTPTS[am]"
-    ]
+    )
     ordem = []
     for nome, clipe, entrada in (("ai", intro, 1), ("av", vinheta, 2 if intro else 1)):
         if clipe is None:
@@ -238,10 +288,10 @@ class RenderizarVideoLongo(Etapa):
         total_quadros = principais + sum(c.quadros for c in (intro, vinheta) if c)
         duracao_total = float(Fraction(total_quadros) / fps)
         preset = ctx.opcoes.preset_qualidade()
-        self._conferir_disco(ctx, duracao_total, preset.crf)
 
         pasta = ctx.pastas.work / "render_longo"
         self._preparar_pasta(ctx, pasta, info, fps, trechos, audio, intro, vinheta)
+        economico = self._conferir_disco(ctx, pasta, duracao_total, preset.crf)
         ctx.log.info(
             "Vídeo de %s em %d partes (%s, preset %s, CRF %d)%s.",
             formatar_duracao(duracao_total),
@@ -259,22 +309,22 @@ class RenderizarVideoLongo(Etapa):
         feito = self._audio(
             ctx, pasta, audio, trechos, intro, vinheta, principais, fps, pesos, feito
         )
-        sequencia: list[str] = []
+        sequencia: list[tuple[str, float]] = []  # (arquivo, duração em segundos)
         if intro:
             feito = self._clipe_pronto(
                 ctx, pasta, intro, largura, altura, fps, argumentos_codec, pesos, feito
             )
-            sequencia.append(intro.arquivo)
+            sequencia.append((intro.arquivo, float(Fraction(intro.quadros) / fps)))
         for parte in partes:
             ctx.ponto_seguro()
             feito = self._parte(ctx, pasta, parte, video, info, fps, argumentos_codec, pesos, feito)
-            sequencia.append(parte.arquivo)
+            sequencia.append((parte.arquivo, float(Fraction(parte.quadros) / fps)))
         if vinheta:
             feito = self._clipe_pronto(
                 ctx, pasta, vinheta, largura, altura, fps, argumentos_codec, pesos, feito
             )
-            sequencia.append(vinheta.arquivo)
-        self._unir(ctx, pasta, sequencia, fps, duracao_total, feito)
+            sequencia.append((vinheta.arquivo, float(Fraction(vinheta.quadros) / fps)))
+        self._unir(ctx, pasta, sequencia, duracao_total, feito, economico=economico)
         shutil.rmtree(pasta, ignore_errors=True)
 
     # --- preparo ----------------------------------------------------------------------------
@@ -293,15 +343,36 @@ class RenderizarVideoLongo(Etapa):
             raise ErroFerramenta(f"O arquivo {caminho.name} não tem vídeo.")
         return _Clipe(caminho, info, quadros_da_duracao(info.duracao_s, fps), f"parte_{nome}.mp4")
 
-    def _conferir_disco(self, ctx: ContextoProjeto, duracao_s: float, crf: int) -> None:
+    def _conferir_disco(
+        self, ctx: ContextoProjeto, pasta: Path, duracao_s: float, crf: int
+    ) -> bool:
+        """Confere o espaço livre; True = só dá no modo econômico (apaga as partes ao juntar).
+
+        Normalmente as partes e o arquivo final existem ao mesmo tempo (o dobro do tamanho). Com
+        pouco espaço, cada parte é apagada assim que a junção termina de lê-la.
+        """
+        estimado = estimar_tamanho_bytes(duracao_s, crf)
+        existente = (
+            sum(p.stat().st_size for p in pasta.glob("parte_*.mp4")) if pasta.exists() else 0
+        )
+        faltam = max(0, estimado - existente)
+        normal = faltam + estimado + _MARGEM_DE_DISCO
+        economico = faltam + int(estimado * _SOBRA_NA_JUNCAO_ECONOMICA) + _MARGEM_DE_DISCO
         livre = shutil.disk_usage(ctx.pastas.raiz).free
-        # as partes e o arquivo final existem ao mesmo tempo antes de as partes serem apagadas
-        necessario = int(estimar_tamanho_bytes(duracao_s, crf) * 2.2) + 1_000_000_000
-        if livre < necessario:
+        if livre < economico:
             raise ErroFerramenta(
                 f"Falta espaço em disco para renderizar: são necessários cerca de "
-                f"{necessario / 1e9:.1f} GB livres e há {livre / 1e9:.1f} GB."
+                f"{economico / 1e9:.1f} GB livres e há {livre / 1e9:.1f} GB."
             )
+        if livre < normal:
+            ctx.log.warning(
+                "Pouco espaço em disco (%.1f GB livres; o ideal seriam %.1f GB): as partes serão "
+                "apagadas conforme a junção as lê. Se a junção falhar, essas partes são refeitas.",
+                livre / 1e9,
+                normal / 1e9,
+            )
+            return True
+        return False
 
     def _argumentos_codec(self, ctx: ContextoProjeto) -> list[str]:
         perfil = detectar_hardware(ctx.config.pastas.projetos)
@@ -372,12 +443,11 @@ class RenderizarVideoLongo(Etapa):
         if destino.exists():
             ctx.progresso(depois)
             return depois
-        lista = pasta / "lista_audio.txt"
-        lista.write_text(lista_do_audio(audio, trechos), encoding="utf-8")
         script = pasta / "audio.filter"
         canais = sondar(audio).canais_audio
         script.write_text(
             script_do_audio(
+                trechos,
                 intro=intro,
                 vinheta=vinheta,
                 quadros_principais=principais,
@@ -388,7 +458,7 @@ class RenderizarVideoLongo(Etapa):
             ),
             encoding="utf-8",
         )
-        entradas = ["-f", "concat", "-safe", "0", "-i", lista]
+        entradas = ["-i", audio]
         for clipe in (intro, vinheta):
             if clipe:
                 entradas += ["-i", clipe.caminho]
@@ -442,17 +512,33 @@ class RenderizarVideoLongo(Etapa):
         parcial.replace(destino)
         return depois
 
-    def _unir(self, ctx, pasta: Path, sequencia: list[str], fps, duracao_total, feito) -> None:
+    def _unir(
+        self, ctx, pasta: Path, sequencia: list[tuple[str, float]], duracao_total, feito, *,
+        economico: bool = False,
+    ) -> None:  # fmt: skip
         """Junta as partes e o áudio, sem recodificar nada."""
         parcial = ctx.pastas.video_longo.with_name(ctx.pastas.video_longo.name + ".parcial")
         parcial.unlink(missing_ok=True)
         lista = pasta / "lista_video.txt"
-        lista.write_text("".join(f"file '{nome}'\n" for nome in sequencia), encoding="utf-8")
+        lista.write_text("".join(f"file '{n}'\n" for n, _ in sequencia), encoding="utf-8")
+        apagados: set[str] = set()
+
+        def apagar_as_ja_lidas(fracao: float) -> None:
+            if not economico:
+                return
+            for nome in arquivos_ja_lidos(sequencia, fracao * duracao_total):
+                if nome not in apagados:
+                    try:
+                        (pasta / nome).unlink()
+                        apagados.add(nome)
+                    except OSError:  # ainda aberta: tenta de novo no próximo aviso
+                        pass
+
         ctx.ffmpeg(
             ["-y", "-f", "concat", "-safe", "0", "-i", "lista_video.txt",
              "-i", "audio.m4a", "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
              "-movflags", "+faststart", "-f", "mp4", parcial],
-            duracao_s=duracao_total, faixa=(feito, 1.0), cwd=pasta,
+            duracao_s=duracao_total, faixa=(feito, 1.0), cwd=pasta, ao_fracao=apagar_as_ja_lidas,
         )  # fmt: skip
         resultado = sondar(parcial)
         diferenca = abs(resultado.duracao_s - duracao_total)

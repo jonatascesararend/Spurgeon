@@ -237,17 +237,22 @@ class SelecionarShorts(Etapa):
                 "Nenhum corte passou da nota mínima (%g). Veja as reservas na aprovação.",
                 ctx.opcoes.shorts_nota_minima,
             )
-        self._criar_metadados(ctx, cortes)
+        cliente = criar_cliente_llm(ctx)
+        try:
+            self._criar_metadados(ctx, cortes, cliente)
+        finally:
+            cliente.descarregar()  # a renderização que vem a seguir precisa da memória
         gravar_cortes(ctx.pastas.cortes_shorts, cortes)
 
-    def _criar_metadados(self, ctx: ContextoProjeto, cortes: list[Corte]) -> None:
+    def _criar_metadados(
+        self, ctx: ContextoProjeto, cortes: list[Corte], cliente: ClienteLLM
+    ) -> None:
         # Cada título leva cerca de 1 min na CPU: o que já foi feito não se perde numa queda.
         # Prioridade: o que a pessoa editou na aprovação, depois o que a IA já tinha criado.
         anteriores: dict[int, Corte] = {}
         if ctx.pastas.cortes_shorts.exists():
             anteriores = {c.id: c for c in carregar_cortes(ctx.pastas.cortes_shorts) if c.titulo}
         cache = _ler_cache_de_metadados(ctx.pastas.metadados)
-        cliente = criar_cliente_llm(ctx)
         sermao = _nome_do_sermao(ctx)
         usados: set[str] = set()
         titulos: list[str] = []

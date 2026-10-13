@@ -80,6 +80,9 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
             self.selecionar(self._ordem[0])
         self.protocol("WM_DELETE_WINDOW", self._cancelar)
         self.bind("<Control-s>", lambda _e: self.salvar_e_fechar())
+        self.bind("<Alt-Down>", lambda _e: self._andar(1))
+        self.bind("<Alt-Up>", lambda _e: self._andar(-1))
+        self.bind("<Control-space>", lambda _e: self.alternar_atual())
         if modal:
             self.after(150, self.focus)
             self.grab_set()
@@ -153,7 +156,8 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
         ).pack(side="right", padx=8)
         ctk.CTkLabel(
             rodape,
-            text="Depois de salvar, clique em “Aprovar e continuar” na janela principal.",
+            text="Alt+↑/↓ muda de corte · Ctrl+Espaço marca ou desmarca · Ctrl+S salva. "
+            "Depois de salvar, clique em “Aprovar e continuar” na janela principal.",
             text_color=_COR_SUAVE,
         ).pack(side="left")
 
@@ -253,6 +257,7 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
         self._atualizar_resumo()
         if self._atual is not None:
             self._pintar_atual()
+            self.after_idle(self._rolar_ate_o_atual, self._ordem.index(self._atual))
 
     def _criar_linha(self, posicao: int, i: int) -> ctk.CTkFrame:
         corte = self._cortes[i]
@@ -282,7 +287,8 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
             anchor="w",
             text_color=_COR_SUAVE,
             text=(
-                f"{etiqueta} · {formatar_tempo(corte.inicio)} · {descrever_duracao(corte.duracao)}"
+                f"{etiqueta} · {formatar_tempo(corte.inicio)}–{formatar_tempo(corte.fim)}"
+                f" · {descrever_duracao(corte.duracao)}"
                 f"{sufixo}"
             ),
         )
@@ -299,6 +305,26 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
         self._cortes[i].incluir = self._marcas[i].get()
         self._mudou = True
         self._atualizar_resumo()
+
+    def _andar(self, passo: int) -> None:
+        """Seleciona o corte seguinte (ou anterior) da lista, na ordem em que ela aparece."""
+        if self._atual is None or not self._ordem:
+            return
+        posicao = self._ordem.index(self._atual) + passo
+        if 0 <= posicao < len(self._ordem):
+            self.selecionar(self._ordem[posicao])
+            self._rolar_ate_o_atual(posicao)
+
+    def _rolar_ate_o_atual(self, posicao: int) -> None:
+        with contextlib.suppress(TclError, AttributeError):
+            canvas = self._lista._parent_canvas
+            canvas.yview_moveto(max(0.0, (posicao - 2) / max(1, len(self._ordem))))
+
+    def alternar_atual(self) -> None:
+        """Marca ou desmarca o corte que está aberto."""
+        if self._atual is not None:
+            self._marcas[self._atual].set(not self._marcas[self._atual].get())
+            self._ao_marcar(self._atual)
 
     def marcar_todos(self, valor: bool) -> None:
         for i, corte in enumerate(self._cortes):

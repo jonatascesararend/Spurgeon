@@ -10,7 +10,7 @@ from spurgeon.core.arquivos import escrever_json_atomico
 from spurgeon.core.config import OpcoesProcessamento, raiz_repositorio
 from spurgeon.core.estado import EntradaVideo
 from spurgeon.core.ffmpeg import InfoMidia, localizar_binario, sondar
-from spurgeon.core.tempo import Trecho, calcular_trechos_mantidos
+from spurgeon.core.tempo import MapaTempo, Trecho, calcular_trechos_mantidos
 from spurgeon.render import filtros as f
 from spurgeon.render import video_longo as vl
 from spurgeon.render.finalizar import Finalizar, fim_da_ultima_legenda
@@ -174,22 +174,46 @@ def test_video_curto_vira_uma_parte_so():
     assert len(vl.planejar_partes(trechos_de((0, 100)), FPS, 600.0)) == 1
 
 
+def numeros_do_trim(roteiro: str) -> list[tuple[float, float]]:
+    import re
+
+    achados = re.findall(r"trim=start=(-?[\d.]+):end=(-?[\d.]+)", roteiro)
+    return [(float(a), float(b)) for a, b in achados]
+
+
 def test_roteiro_de_uma_parte_com_um_trecho_so():
     parte = vl.planejar_partes(trechos_de((10, 20)), FPS, 600.0)[0]
     roteiro = vl.script_da_parte(parte, 9.5, info(), FPS)
     assert "split" not in roteiro and "concat" not in roteiro
-    assert "[0:v]fps=30000/1001,trim=start=0.5:end=10.5,setpts=PTS-STARTPTS[bruto]" in roteiro
+    assert "[0:v]fps=30000/1001," in roteiro and ",setpts=PTS-STARTPTS[bruto]" in roteiro
     assert roteiro.rstrip().endswith("tpad=stop_mode=clone:stop_duration=2[vout]")
     assert "tonemap" in roteiro
+    # 10 s a partir de 0,5 s: os quadros 15 a 314 da grade (meio quadro de folga em cada ponta)
+    ((inicio, fim),) = numeros_do_trim(roteiro)
+    assert inicio * float(FPS) == pytest.approx(14.5, abs=0.01)
+    assert fim * float(FPS) == pytest.approx(314.5, abs=0.01)
 
 
 def test_roteiro_de_varios_trechos_divide_corta_e_junta():
     parte = vl.planejar_partes(trechos_de((0, 10), (20, 30), (40, 50)), FPS, 600.0)[0]
     roteiro = vl.script_da_parte(parte, 0.0, info(transferencia="bt709"), FPS)
     assert "split=3[s0][s1][s2]" in roteiro
-    assert roteiro.count("trim=start=") == 3
+    assert len(numeros_do_trim(roteiro)) == 3
     assert "[p0][p1][p2]concat=n=3:v=1:a=0[bruto]" in roteiro
     assert "tonemap" not in roteiro
+
+
+def test_quadros_dos_pedacos_nao_acumulam_erro_de_arredondamento():
+    # 200 pedaços de 0,1 s: cada um sozinho daria 3 quadros (2,997), somando 600 quadros contra
+    # os 599,4 certos. Com o tempo acumulado, o total fica exato.
+    pedacos = [(i * 1.0, i * 1.0 + 0.1) for i in range(200)]
+    recortes = vl.recortes_de_quadros(pedacos, FPS)
+    assert sum(n for _, n in recortes) == round(200 * 0.1 * float(FPS))
+    assert all(n in (2, 3) for _, n in recortes)
+
+
+def test_pedaco_menor_que_meio_quadro_some():
+    assert vl.recortes_de_quadros([(0.0, 0.01), (1.0, 2.0)], FPS) == [(30, 30)]
 
 
 def test_roteiro_da_introducao_padroniza_o_clipe():
@@ -198,12 +222,17 @@ def test_roteiro_da_introducao_padroniza_o_clipe():
     assert "pad=1920:1080" in roteiro and "setsar=1" in roteiro and "fps=30000/1001" in roteiro
 
 
-def test_lista_do_audio_tem_um_trecho_por_corte_e_escapa_aspas(tmp_path):
-    lista = vl.lista_do_audio(tmp_path / "o'audio.wav", trechos_de((1, 2.5), (4, 5)))
-    linhas = lista.splitlines()
-    assert len(linhas) == 6
-    assert linhas[1] == "inpoint 1.000000" and linhas[2] == "outpoint 2.500000"
-    assert r"o'\''audio.wav" in linhas[0]
+def test_roteiro_do_audio_corta_cada_trecho_com_atrim_exato():
+    roteiro = vl.script_do_audio(
+        trechos_de((1, 2.5), (4, 5), (7.25, 9)),
+        intro=None, vinheta=None, quadros_principais=300, fps=FPS, canais=2,
+        normalizar=False, lufs=-16.0,
+    )  # fmt: skip
+    assert "[0:a]asplit=3[x0][x1][x2]" in roteiro
+    assert "[x0]atrim=start=1:end=2.5,asetpts=PTS-STARTPTS[t0]" in roteiro
+    assert "[x2]atrim=start=7.25:end=9,asetpts=PTS-STARTPTS[t2]" in roteiro
+    assert "[t0][t1][t2]concat=n=3:v=0:a=1,aresample=48000" in roteiro
+    assert "concat demuxer" not in roteiro
 
 
 def test_roteiro_do_audio_com_introducao_e_vinheta_sem_som():
@@ -211,10 +240,10 @@ def test_roteiro_do_audio_com_introducao_e_vinheta_sem_som():
         return vl._Clipe(Path("c.mp4"), info(tem_audio=tem_audio, canais_audio=2), 60, "c.mp4")
 
     roteiro = vl.script_do_audio(
-        intro=clipe(True), vinheta=clipe(False), quadros_principais=300, fps=FPS,
-        canais=1, normalizar=True, lufs=-16.0,
+        trechos_de((0, 10)), intro=clipe(True), vinheta=clipe(False), quadros_principais=300,
+        fps=FPS, canais=1, normalizar=True, lufs=-16.0,
     )  # fmt: skip
-    assert "[0:a]aresample=48000,pan=stereo|c0=c0|c1=c0" in roteiro
+    assert "[0:a]atrim=start=0:end=10,asetpts=PTS-STARTPTS,aresample=48000,pan=stereo" in roteiro
     assert "[1:a]" in roteiro and "loudnorm=I=-16" in roteiro
     assert "anullsrc=r=48000:cl=stereo" in roteiro  # vinheta muda ganha silêncio
     assert "[ai][am][av]concat=n=3:v=0:a=1[aout]" in roteiro
@@ -223,10 +252,10 @@ def test_roteiro_do_audio_com_introducao_e_vinheta_sem_som():
 
 def test_roteiro_do_audio_sem_extras_so_tem_o_principal():
     roteiro = vl.script_do_audio(
-        intro=None, vinheta=None, quadros_principais=30, fps=Fraction(30), canais=2,
-        normalizar=False, lufs=-16.0,
+        trechos_de((0, 1)), intro=None, vinheta=None, quadros_principais=30, fps=Fraction(30),
+        canais=2, normalizar=False, lufs=-16.0,
     )  # fmt: skip
-    assert roteiro.count("atrim") == 1 and "concat=n=1:v=0:a=1[aout]" in roteiro
+    assert "asplit" not in roteiro and "concat=n=1:v=0:a=1[aout]" in roteiro
 
 
 def test_estimativa_de_tamanho_cresce_com_a_qualidade():
@@ -518,14 +547,66 @@ def test_mudar_a_qualidade_recomeca_o_render(
     assert (pasta / "assinatura.txt").read_text() != antes
 
 
-def test_falta_de_espaco_em_disco_avisa_antes_de_renderizar(contexto, monkeypatch):
+def com_espaco_livre(monkeypatch, livre_bytes: int) -> None:
     import shutil
     from collections import namedtuple
 
     Uso = namedtuple("Uso", "total used free")
-    monkeypatch.setattr(shutil, "disk_usage", lambda _p: Uso(10**12, 10**12 - 10**9, 10**9))
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda _p: Uso(10**12, 10**12 - livre_bytes, livre_bytes)
+    )
+
+
+def test_falta_de_espaco_em_disco_avisa_antes_de_renderizar(contexto, monkeypatch, tmp_path):
+    com_espaco_livre(monkeypatch, 10**9)
     with pytest.raises(Exception, match="Falta espaço em disco"):
-        vl.RenderizarVideoLongo()._conferir_disco(contexto, 3900.0, 16)
+        vl.RenderizarVideoLongo()._conferir_disco(contexto, tmp_path / "x", 3900.0, 16)
+
+
+def test_pouco_espaco_liga_o_modo_economico_e_muito_espaco_nao(
+    contexto, monkeypatch, tmp_path, caplog
+):
+    etapa = vl.RenderizarVideoLongo()
+    estimado = vl.estimar_tamanho_bytes(3900.0, 16)
+    com_espaco_livre(monkeypatch, int(estimado * 2.5) + 2 * 10**9)
+    assert etapa._conferir_disco(contexto, tmp_path / "x", 3900.0, 16) is False
+    com_espaco_livre(monkeypatch, int(estimado * 1.5) + 10**9)
+    with caplog.at_level("WARNING"):
+        assert etapa._conferir_disco(contexto, tmp_path / "x", 3900.0, 16) is True
+    assert "Pouco espaço em disco" in caplog.text
+
+
+def test_arquivos_ja_lidos_pela_juncao():
+    sequencia = [("intro.mp4", 3.0), ("parte_000.mp4", 10.0), ("parte_001.mp4", 10.0)]
+    assert vl.arquivos_ja_lidos(sequencia, 0.0) == []
+    assert vl.arquivos_ja_lidos(sequencia, 3.5) == []  # falta a folga de 1 s
+    assert vl.arquivos_ja_lidos(sequencia, 4.0) == ["intro.mp4"]
+    assert vl.arquivos_ja_lidos(sequencia, 14.5) == ["intro.mp4", "parte_000.mp4"]
+    assert len(vl.arquivos_ja_lidos(sequencia, 24.0)) == 3
+
+
+@pytest.mark.ffmpeg
+def test_modo_economico_apaga_as_partes_na_juncao_e_o_video_sai_igual(
+    contexto, video_com_pausas, audio_com_pausas, monkeypatch, caplog
+):
+    esperado = preparar_longo(contexto, video_com_pausas, audio_com_pausas)
+    monkeypatch.setattr(vl, "DURACAO_DA_PARTE_S", 12.0)
+    antes_de_unir = []
+    original = vl.RenderizarVideoLongo._unir
+
+    def espiar(self, ctx, pasta, sequencia, *args, **kwargs):
+        antes_de_unir.append(sorted(p.name for p in pasta.glob("parte_*.mp4")))
+        return original(self, ctx, pasta, sequencia, *args, **kwargs)
+
+    monkeypatch.setattr(vl.RenderizarVideoLongo, "_unir", espiar)
+    estimado = vl.estimar_tamanho_bytes(esperado, 23)
+    com_espaco_livre(monkeypatch, int(estimado * 1.5) + 10**9)  # só cabe o econômico
+    with caplog.at_level("WARNING"):
+        rodar(vl.RenderizarVideoLongo(), contexto)
+    assert "Pouco espaço em disco" in caplog.text
+    assert len(antes_de_unir[0]) == 3
+    final = sondar(contexto.pastas.video_longo)
+    assert final.duracao_s == pytest.approx(esperado, abs=0.15)
 
 
 # --- Shorts ---------------------------------------------------------------------------------
@@ -717,3 +798,113 @@ def test_as_etapas_de_render_vem_depois_de_toda_a_analise_e_revisao():
         assert ids.index(anterior) < ids.index("renderizar_shorts")
         assert ids.index(anterior) < ids.index("renderizar_video_longo")
     assert ids[-1] == "finalizar"
+
+
+@pytest.mark.ffmpeg
+def test_o_pipeline_para_na_aprovacao_dos_cortes_e_renderiza_so_o_que_ficou_marcado(ctx_shorts):
+    from spurgeon.core.estado import StatusEtapa
+    from spurgeon.core.pipeline import Pipeline, ResultadoPipeline
+    from spurgeon.shorts.etapas import AprovarCortes
+
+    ctx_shorts.opcoes.gerar_video_longo = False
+    ctx_shorts.opcoes.pausar_aprovar_cortes = True
+    gravar_cortes(
+        ctx_shorts.pastas.cortes_shorts,
+        [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro", incluir=False)],
+    )
+    pipeline = Pipeline([AprovarCortes(), RenderizarShorts()])
+    assert pipeline.executar(ctx_shorts) == ResultadoPipeline.AGUARDANDO_REVISAO
+    assert not ctx_shorts.pastas.shorts.exists()
+
+    # a pessoa marca o segundo corte na janela de aprovação e salva
+    cortes = [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro", incluir=True)]
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, cortes)
+    pipeline.aprovar_revisao(ctx_shorts, "aprovar_cortes")
+    assert pipeline.executar(ctx_shorts) == ResultadoPipeline.CONCLUIDO
+    assert sorted(p.name for p in ctx_shorts.pastas.shorts.glob("*.mp4")) == [
+        "short_01_corte_1.mp4",
+        "short_02_outro.mp4",
+    ]
+    status = {e.id: e.status for e in ctx_shorts.estado.etapas}
+    assert status["aprovar_cortes"] == StatusEtapa.CONCLUIDA
+
+
+# --- sincronia da imagem e do som depois dos cortes -------------------------------------------
+
+
+def _decodificar(ffmpeg_args: list[str]) -> bytes:
+    resultado = subprocess.run(
+        [str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", *ffmpeg_args],
+        capture_output=True,
+        check=True,
+    )
+    return resultado.stdout
+
+
+@pytest.fixture(scope="session")
+def material_de_sincronia(tmp_path_factory) -> tuple[Path, Path]:
+    """Vídeo de 30 s em que cada quadro traz o próprio número em binário (nove blocos claros ou
+    escuros) e um áudio de ruído branco (tem um só pico de correlação, ao contrário de um tom)."""
+    pasta = tmp_path_factory.mktemp("sincronia")
+    video, audio = pasta / "numerado.mp4", pasta / "ruido.wav"
+    ffmpeg = str(localizar_binario("ffmpeg"))
+    base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    subprocess.run(
+        [*base, "-f", "lavfi", "-i", "color=c=black:s=72x16:r=10:d=30",
+         "-vf", "geq=lum='40+160*mod(floor(floor(T*10+0.5)/pow(2,floor(X/8))),2)':cb=128:cr=128",
+         "-c:v", "libx264", "-qp", "8", "-pix_fmt", "yuv420p", str(video)],
+        check=True,
+    )  # fmt: skip
+    subprocess.run(
+        [*base, "-f", "lavfi", "-i", "anoisesrc=color=white:amplitude=0.3:sample_rate=48000:d=30",
+         "-ac", "1", "-c:a", "pcm_s16le", str(audio)],
+        check=True,
+    )  # fmt: skip
+    return video, audio
+
+
+@pytest.mark.ffmpeg
+def test_imagem_e_som_continuam_alinhados_depois_de_varios_cortes(
+    contexto, material_de_sincronia, monkeypatch
+):
+    np = pytest.importorskip("numpy")
+    video, audio = material_de_sincronia
+    contexto.opcoes.qualidade = "rapido"
+    contexto.estado.entrada = EntradaVideo.de_arquivo(video)
+    contexto.pastas.work.mkdir(parents=True, exist_ok=True)
+    contexto.pastas.audio_original.write_bytes(audio.read_bytes())
+    trechos = [[0.37, 6.21], [7.0, 13.77], [15.11, 22.5], [24.0, 29.3]]
+    escrever_json_atomico(contexto.pastas.cortes, {"trechos": trechos})
+    monkeypatch.setattr(vl, "DURACAO_DA_PARTE_S", 9.0)  # as fronteiras das partes caem nos pedaços
+    rodar(vl.RenderizarVideoLongo(), contexto)
+
+    mapa = MapaTempo([Trecho(a, b) for a, b in trechos])
+    saida = contexto.pastas.video_longo
+
+    # imagem: cada quadro traz o próprio número em binário; lê-se de que quadro do original veio
+    bruto = _decodificar(["-i", str(saida), "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+    quadros = np.frombuffer(bruto, dtype=np.uint8).reshape(-1, 16, 72)
+    blocos = quadros.reshape(-1, 16, 9, 8).mean(axis=(1, 3))  # (quadros, 9 bits)
+    numeros = ((blocos > 120) * (2 ** np.arange(9))).sum(axis=1)
+    esperado_s = sum(b - a for a, b in trechos)
+    assert len(numeros) == pytest.approx(esperado_s * 10, abs=1)
+    for j in (3, 40, 61, 62, 63, 100, 130, 131, 200, 240):
+        esperado = round(mapa.editado_para_original(j / 10) * 10)
+        lido = int(numeros[j])
+        assert abs(lido - esperado) <= 1, f"quadro {j}: {lido} em vez de {esperado}"
+
+    # som: correlação do áudio gerado com o esperado, ao longo do vídeo todo
+    def pcm(args):
+        bruto = _decodificar([*args, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+        return np.frombuffer(bruto, dtype=np.int16).astype(np.float32)
+
+    gerado, original = pcm(["-i", str(saida)]), pcm(["-i", str(audio)])
+    esperado = np.concatenate([original[int(a * 16000) : int(b * 16000)] for a, b in trechos])
+    assert abs(len(gerado) - len(esperado)) <= 16000 * 0.05
+    for inicio_s in (1, 6, 12, 17, 22):  # antes e depois de cada corte
+        i, j = inicio_s * 16000, inicio_s * 16000 + 3 * 16000
+        a, b = gerado[i:j], esperado[i:j]
+        correlacao = np.fft.irfft(np.fft.rfft(a, 2 * len(a)) * np.conj(np.fft.rfft(b, 2 * len(a))))
+        deslocamento = int(np.argmax(correlacao))
+        deslocamento = deslocamento if deslocamento < len(a) else deslocamento - 2 * len(a)
+        assert abs(deslocamento) / 16 <= 3, f"em {inicio_s} s: {deslocamento / 16:+.1f} ms"

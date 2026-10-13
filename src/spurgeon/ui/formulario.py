@@ -84,7 +84,7 @@ class ValoresFormulario:
     limite_shorts: str = "20"
     nota_minima: str = "45"
     ollama_modelo: str = "qwen3:8b"
-    deslocamento_x: str = "0"
+    deslocamento_x: str = "4"
     posicao_legenda: str = "62"
     x264_preset: str = "medium"
     crf: str = "20"

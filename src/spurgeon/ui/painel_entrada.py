@@ -45,7 +45,12 @@ class PainelEntrada(ctk.CTkFrame):
         self._linha(4, "Data da gravação", self.var_data, "dd/mm/aaaa", largura=130)
         self._linha(5, "Pasta de projetos", self.var_projetos, "")
         self._botao(5, "Alterar…", self._escolher_pasta_projetos)
-        ctk.CTkLabel(self, text="").grid(row=6, pady=2)
+        self.rotulo_estimativa = ctk.CTkLabel(
+            self, text="", text_color="gray60", anchor="w", justify="left", wraplength=360
+        )
+        self.rotulo_estimativa.grid(
+            row=6, column=1, columnspan=2, sticky="w", padx=(0, 12), pady=(2, 8)
+        )
 
         entrada = self._controles[0]
         entrada.bind("<Return>", lambda _e: self._confirmar_caminho())
@@ -105,6 +110,9 @@ class PainelEntrada(ctk.CTkFrame):
 
     def mostrar_info(self, texto: str, *, erro: bool = False) -> None:
         self.rotulo_info.configure(text=texto, text_color="#e05555" if erro else "gray60")
+
+    def mostrar_estimativa(self, texto: str) -> None:
+        self.rotulo_estimativa.configure(text=texto)
 
     def caminho_video(self) -> Path | None:
         texto = self.var_video.get().strip().strip('"')

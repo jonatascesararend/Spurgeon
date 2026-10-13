@@ -763,3 +763,29 @@ def test_titulo_guardado_nao_vale_se_o_texto_do_corte_mudou(ctx_shorts, ollama):
     ollama.chamadas.clear()
     rodar(SelecionarShorts(), ctx_shorts)
     assert any("slug" in json.dumps(c["format"]) for c in ollama.chamadas)
+
+
+def test_ao_terminar_a_selecao_o_modelo_sai_da_memoria(ctx_shorts, ollama):
+    descarregados = []
+    ollama.generate = lambda **kwargs: descarregados.append(kwargs)
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    assert descarregados == [{"model": "qwen3:8b", "keep_alive": 0}]
+
+
+def test_falha_ao_descarregar_o_modelo_nao_derruba_nada():
+    class SemGenerate:
+        def generate(self, **_kwargs):
+            raise ConnectionError("fora do ar")
+
+    cliente(SemGenerate()).descarregar()  # não levanta
+
+
+def test_nome_de_arquivo_corta_entre_palavras_e_nao_no_meio_de_uma():
+    nome = nome_de_arquivo("Será que o que você quer ouvir é o que precisa ouvir?")
+    assert nome == "sera_que_o_que_voce_quer_ouvir_e_o_que"
+    assert not nome.endswith("_p") and len(nome) <= 40
+    # palavra única e comprida: não há onde cortar, então corta no limite
+    assert nome_de_arquivo("a" * 60, maximo=40) == "a" * 40
+    # corte que cai certinho no fim de uma palavra
+    assert nome_de_arquivo("um dois tres", maximo=8) == "um_dois"

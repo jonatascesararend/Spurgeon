@@ -58,6 +58,8 @@ def tela(janela, monkeypatch):
     janela.executor.encerrar(espera_s=5)
     janela.execucao.definir_estado(EstadoUI.OCIOSO, tem_projeto=False)
     janela._bloquear(False)
+    janela._info_video = None  # a janela é compartilhada entre os testes
+    janela.entrada.mostrar_estimativa("")
     padroes = ValoresFormulario()
     for nome, var in janela.opcoes.bools.items():
         var.set(getattr(padroes, nome))
@@ -125,6 +127,17 @@ def test_escolher_video_preenche_nome_data_e_informacoes(tela, video_teste):
     assert tela.entrada.var_nome.get() == "teste"
     assert tela.entrada.var_data.get()
     assert "640×360" in tela.entrada.rotulo_info.cget("text")
+
+
+def test_estimativa_de_tempo_aparece_e_acompanha_as_opcoes(tela, video_teste):
+    assert tela.entrada.rotulo_estimativa.cget("text") == ""
+    escolher_video(tela, video_teste)
+    # o vídeo de teste dura 20 s: a estimativa é de poucos minutos
+    assert "Tempo estimado nesta máquina" in tela.entrada.rotulo_estimativa.cget("text")
+    antes = tela.entrada.rotulo_estimativa.cget("text")
+    tela.opcoes.bools["gerar_shorts"].set(True)
+    tela.opcoes._mudou()
+    assert tela.entrada.rotulo_estimativa.cget("text") != antes
 
 
 def test_campo_invalido_mostra_o_problema_e_nao_inicia(tela, video_falso):

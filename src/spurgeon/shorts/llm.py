@@ -7,6 +7,7 @@ do Qwen3 fica desligado (`think=False`), pois gasta minutos sem melhorar a nota.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, TypeVar
 
@@ -173,6 +174,14 @@ class ClienteLLM:
                 f"Não foi possível baixar o modelo {self.modelo} ({erro}). "
                 f"Confira a internet ou rode: ollama pull {self.modelo}"
             ) from erro
+
+    def descarregar(self) -> None:
+        """Tira o modelo da memória (~5 GB), para sobrar RAM para a renderização.
+
+        Falhas são ignoradas: o Ollama também o descarrega sozinho depois de um tempo.
+        """
+        with contextlib.suppress(Exception):
+            self._cliente.generate(model=self.modelo, keep_alive=0)
 
     # --- perguntas ----------------------------------------------------------------------------
     def avaliar(self, antes: str, trecho: str, depois: str, duracao_s: float) -> Avaliacao:

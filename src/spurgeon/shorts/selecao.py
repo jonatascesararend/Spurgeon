@@ -89,13 +89,24 @@ def montar_cortes(
     return cortes
 
 
+def _cortar_em_palavra(nome: str, maximo: int) -> str:
+    """Corta em `maximo` caracteres, de preferência entre palavras (nunca no meio de uma)."""
+    if len(nome) <= maximo:
+        return nome
+    cortado = nome[:maximo]
+    antes_da_ultima = cortado.rpartition("_")[0]
+    if nome[maximo] == "_":  # o corte caiu exatamente no fim de uma palavra
+        return cortado.strip("_")
+    return (antes_da_ultima if len(antes_da_ultima) >= maximo // 2 else cortado).strip("_")
+
+
 def nome_de_arquivo(
     texto: str, usados: Iterable[str] = (), maximo: int = TAMANHO_MAXIMO_DO_NOME
 ) -> str:
     """Texto livre → nome seguro (`o_povo_nao_quer_ouvir`), sem repetir os já `usados`."""
     decomposto = unicodedata.normalize("NFD", texto.casefold())
     ascii_ = "".join(c for c in decomposto if unicodedata.category(c) != "Mn")
-    base = re.sub(r"[^a-z0-9]+", "_", ascii_).strip("_")[:maximo].strip("_") or "trecho"
+    base = _cortar_em_palavra(re.sub(r"[^a-z0-9]+", "_", ascii_).strip("_"), maximo) or "trecho"
     usados = set(usados)
     nome, n = base, 2
     while nome in usados:

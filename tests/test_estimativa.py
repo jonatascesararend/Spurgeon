@@ -109,3 +109,43 @@ def test_formatar_duracao(segundos, esperado):
 )
 def test_formatar_restante(segundos, esperado):
     assert formatar_restante(segundos) == esperado
+
+
+# --- estimativa antes de começar -------------------------------------------------------------
+
+
+def test_estimativa_do_sermao_real_com_maxima_qualidade_fica_na_casa_das_horas():
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.ui.estimativa import estimar_tempo_total
+
+    opcoes = OpcoesProcessamento(gerar_shorts=True, limpar_audio=True, normalizar_volume=True)
+    total, render = estimar_tempo_total(3900.0, opcoes, hdr=True)
+    assert 4 * 3600 < render < 5.5 * 3600  # ~4 h 06 do vídeo longo + os Shorts
+    assert render < total < 9 * 3600
+
+
+def test_qualidade_menor_e_video_sdr_diminuem_a_estimativa():
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.ui.estimativa import estimar_tempo_total
+
+    maxima = estimar_tempo_total(3900.0, OpcoesProcessamento(), hdr=True)[1]
+    rapido = estimar_tempo_total(3900.0, OpcoesProcessamento(qualidade="rapido"), hdr=True)[1]
+    sdr = estimar_tempo_total(3900.0, OpcoesProcessamento(), hdr=False)[1]
+    assert rapido < maxima / 3 and sdr < maxima
+
+
+def test_so_o_video_longo_nao_conta_a_ia_nem_os_shorts():
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.ui.estimativa import estimar_tempo_total
+
+    sem = estimar_tempo_total(3900.0, OpcoesProcessamento(), hdr=True)[0]
+    com = estimar_tempo_total(3900.0, OpcoesProcessamento(gerar_shorts=True), hdr=True)[0]
+    assert com - sem > 3900 * 0.9  # a IA e a renderização dos Shorts somam mais de uma hora
+
+
+def test_texto_da_estimativa():
+    from spurgeon.ui.estimativa import formatar_estimativa
+
+    assert formatar_estimativa(300, 0) == "Tempo estimado nesta máquina: cerca de 5 min."
+    texto = formatar_estimativa(7 * 3600 + 1800, 4 * 3600 + 360)
+    assert "cerca de 7 h 30 min" in texto and "só a renderização: 4 h 06 min" in texto
