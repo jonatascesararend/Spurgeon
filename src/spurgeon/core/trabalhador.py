@@ -89,7 +89,7 @@ def executar(
         )
         if aprovar:
             pipeline.aprovar_revisao(ctx, aprovar)
-        with impedir_suspensao():
+        with impedir_suspensao(sem_bloqueio=estado.opcoes.impedir_bloqueio):
             resultado = pipeline.executar(ctx)
         if not ativas:
             log.warning("Nenhuma etapa de processamento está disponível nesta versão.")

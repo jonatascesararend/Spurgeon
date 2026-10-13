@@ -1,0 +1,223 @@
+# Vocabulário teológico (teologia reformada calvinista), um termo por linha.
+#
+# Para que serve:
+#   1. As primeiras linhas viram "dicas" que o Whisper recebe a cada trecho de 30 s. Como o
+#      espaço é pequeno (~300 caracteres), COLOQUE NO TOPO os termos que ele mais erra
+#      (nomes de pessoas, jargões); o restante da lista só entra no passo 2.
+#   2. Depois da transcrição, palavras de baixa confiança parecidas com um termo desta lista
+#      são trocadas por ele (a troca fica registrada na revisão).
+#
+# Escreva cada termo do jeito que quer ver no texto (maiúsculas, acentos e a grafia que prefere).
+# Termos com mais de uma palavra são aceitos. Linhas começadas por # são comentários.
+
+# --- Nomes e jargões mais difíceis (prioridade para o Whisper) ---
+Spurgeon
+Calvino
+Lutero
+Agostinho
+Zuínglio
+Jonathan Edwards
+John Owen
+Lloyd-Jones
+Whitefield
+Bunyan
+Berkhof
+Bavinck
+Warfield
+Sproul
+Packer
+Piper
+Miqueias
+predestinação
+soberania
+eleição incondicional
+expiação limitada
+graça irresistível
+perseverança dos santos
+depravação total
+justificação
+santificação
+glorificação
+regeneração
+propiciação
+imputação
+reconciliação
+redenção
+pacto das obras
+pacto da graça
+pacto da redenção
+supralapsarianismo
+infralapsarianismo
+Confissão de Fé de Westminster
+Catecismo de Heidelberg
+Cânones de Dort
+Confissão Belga
+Institutas
+Reforma Protestante
+sola scriptura
+sola fide
+sola gratia
+solus Christus
+soli Deo gloria
+ordo salutis
+
+# --- Teologia ---
+soteriologia
+cristologia
+pneumatologia
+eclesiologia
+escatologia
+hamartiologia
+bibliologia
+união hipostática
+encarnação
+ressurreição
+ascensão
+parousia
+trindade
+onipotência
+onisciência
+onipresença
+imutabilidade
+aseidade
+santidade
+justiça
+misericórdia
+longanimidade
+arrependimento
+conversão
+adoção
+fé salvadora
+graça comum
+graça especial
+revelação geral
+revelação especial
+inerrância
+infalibilidade
+canon
+exegese
+hermenêutica
+homilética
+apologética
+pressuposicional
+amilenismo
+pós-milenismo
+pré-milenismo
+cessacionismo
+pecado original
+concupiscência
+perseverança
+apostasia
+presciência
+reprovação
+intercessão
+mediador
+sacerdócio
+tabernáculo
+holocausto
+expiação
+remissão
+absolvição
+condenação
+juízo final
+Reino de Deus
+Corpo de Cristo
+Ceia do Senhor
+batismo
+presbiteriano
+reformado
+puritano
+confessional
+ortodoxia
+
+# --- Pessoas e lugares da Bíblia ---
+Abraão
+Isaque
+Jacó
+José
+Moisés
+Arão
+Josué
+Davi
+Salomão
+Elias
+Eliseu
+Samuel
+Saul
+Roboão
+Jeroboão
+Ezequias
+Josias
+Nabucodonosor
+Ciro
+Jerusalém
+Samaria
+Sião
+Judá
+Israel
+Belém
+Nazaré
+Cafarnaum
+Getsêmani
+Gólgota
+Betel
+Egito
+Babilônia
+Assíria
+Canaã
+fariseus
+saduceus
+escribas
+Pentecostes
+Páscoa
+
+# --- Livros da Bíblia ---
+Gênesis
+Êxodo
+Levítico
+Números
+Deuteronômio
+Rute
+Neemias
+Ester
+Jó
+Salmos
+Provérbios
+Eclesiastes
+Cantares
+Isaías
+Jeremias
+Lamentações
+Ezequiel
+Daniel
+Oseias
+Joel
+Amós
+Obadias
+Jonas
+Naum
+Habacuque
+Sofonias
+Ageu
+Zacarias
+Malaquias
+Mateus
+Marcos
+Lucas
+João
+Atos
+Romanos
+Coríntios
+Gálatas
+Efésios
+Filipenses
+Colossenses
+Tessalonicenses
+Timóteo
+Tito
+Filemom
+Hebreus
+Tiago
+Pedro
+Judas
+Apocalipse

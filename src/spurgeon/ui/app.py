@@ -391,7 +391,7 @@ class JanelaPrincipal(ctk.CTk):
                 self,
                 "Painel de revisão",
                 "O painel de revisão desta etapa ainda não existe: ele chega junto com a etapa "
-                "(a transcrição na Fase 3 e os cortes dos Shorts na Fase 4).\n\n"
+                "(os cortes dos Shorts, na Fase 4).\n\n"
                 "Por enquanto você pode aprovar para o processamento seguir.",
             )
 

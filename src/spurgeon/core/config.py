@@ -129,6 +129,9 @@ class OpcoesProcessamento(BaseModel):
     usar_nvenc: bool = False
 
     manter_intermediarios: bool = False
+    #: Durante o processamento, o PC não suspende, não apaga a tela nem bloqueia por inatividade
+    #: (as renderizações levam horas e muita gente deixa o processamento rodando de madrugada).
+    impedir_bloqueio: bool = True
 
     @model_validator(mode="after")
     def _duracao_coerente(self) -> OpcoesProcessamento:

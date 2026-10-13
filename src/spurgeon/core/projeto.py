@@ -67,6 +67,10 @@ class PastasProjeto:
         return self.work / "audio_normalizado.wav"
 
     @property
+    def niveis(self) -> Path:
+        return self.work / "niveis.json"
+
+    @property
     def pausas(self) -> Path:
         return self.work / "pausas.json"
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from spurgeon import __version__
 from spurgeon.core.config import caminho_config, carregar_config
 from spurgeon.core.erros import ErroSpurgeon
-from spurgeon.core.formatacao import resumir_linha_log
+from spurgeon.core.formatacao import formatar_duracao, resumir_linha_log
 from spurgeon.core.hardware import detectar_hardware, recomendar, threads_para_uso
 from spurgeon.core.pipeline import ResultadoPipeline
 from spurgeon.core.preflight import Nivel, executar_preflight, tem_erro
@@ -135,6 +135,48 @@ def _processar(args: argparse.Namespace) -> int:
     return 0 if resultado == ResultadoPipeline.CONCLUIDO else 1
 
 
+def _benchmark(args: argparse.Namespace) -> int:
+    """Mede a velocidade do Whisper com um trecho do vídeo e estima o tempo de um sermão."""
+    from spurgeon.transcricao.benchmark import medir_velocidade
+
+    config = carregar_config()
+    if not args.midia.is_file():
+        print(f"O arquivo não existe: {args.midia}", file=sys.stderr)
+        return 2
+    print(f"Medindo o modelo {args.modelo} com {args.segundos:g} s de {args.midia.name}…")
+    r = medir_velocidade(config, args.modelo, args.midia, trecho_s=args.segundos)
+    print(f"  carga do modelo: {r.carga_s:.1f} s ({r.dispositivo}, {r.threads} threads)")
+    print(f"  transcrição:     {r.transcricao_s:.1f} s para {r.trecho_s:.0f} s de áudio")
+    print(f"  velocidade:      {r.fator:.2f}x o tempo real ({r.palavras} palavras)")
+    print("  estimativa para sermões inteiros:")
+    for minutos in (45, 60, 90):
+        estimativa = formatar_duracao(r.segundos_para(minutos * 60))
+        print(f"    {minutos} min de áudio  ->  cerca de {estimativa}")
+    return 0
+
+
+def _acordado(args: argparse.Namespace) -> int:
+    """Mantém o PC acordado e sem bloquear por um tempo (útil para deixar algo rodando)."""
+    import time
+
+    from spurgeon.core.energia import impedir_suspensao
+
+    limite = time.monotonic() + args.horas * 3600
+    print(
+        f"O PC não vai suspender, apagar a tela nem bloquear por até {args.horas:g} h. "
+        "Ctrl+C encerra e devolve tudo ao normal.",
+        flush=True,
+    )
+    try:
+        with impedir_suspensao(sem_bloqueio=True):
+            while time.monotonic() < limite:
+                time.sleep(5)
+    except KeyboardInterrupt:
+        pass
+    print("Encerrado: o PC voltou a seguir as configurações normais de energia.")
+    return 0
+
+
 def _gui(_: argparse.Namespace) -> int:
     try:
         from spurgeon.ui.app import executar
@@ -163,6 +205,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("config", help="mostra a configuração atual").set_defaults(funcao=_config)
     sub.add_parser("gui", help="abre a interface gráfica").set_defaults(funcao=_gui)
+
+    acordado = sub.add_parser("acordado", help="impede o PC de suspender, apagar a tela e bloquear")
+    acordado.add_argument("--horas", type=float, default=12.0, help="por quanto tempo (padrão: 12)")
+    acordado.set_defaults(funcao=_acordado)
+
+    benchmark = sub.add_parser("benchmark", help="mede a velocidade do Whisper nesta máquina")
+    benchmark.add_argument("midia", type=Path, help="vídeo ou áudio de onde tirar o trecho")
+    benchmark.add_argument("--modelo", default="large-v3-turbo", help="tamanho do modelo Whisper")
+    benchmark.add_argument("--segundos", type=float, default=60.0, help="duração do trecho medido")
+    benchmark.set_defaults(funcao=_benchmark)
 
     processar = sub.add_parser("processar", help="processa um vídeo sem a interface")
     processar.add_argument("video", type=Path)

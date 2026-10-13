@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -80,6 +81,55 @@ def video_com_pausas(tmp_path_factory, audio_com_pausas) -> Path:
             str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=60",
             "-i", str(audio_com_pausas),
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(destino),
+        ],
+        check=True,
+    )  # fmt: skip
+    return destino
+
+
+TEXTO_DA_FALA = (
+    "A graça de Deus não depende do mérito do homem. "
+    "Quando o Senhor nos chama, ele mesmo nos capacita a responder. "
+    "Por isso Paulo escreve aos Efésios que fomos salvos pela graça, mediante a fé. "
+    "Pergunto a vocês: quem sustenta a nossa perseverança até o fim? "
+    "Não é a nossa força, mas a fidelidade de Cristo."
+)
+
+
+@pytest.fixture(scope="session")
+def fala_pt(tmp_path_factory) -> Path:
+    """WAV de 48 kHz com fala em português, gerada pela voz do Windows (só roda no Windows)."""
+    if sys.platform != "win32":
+        pytest.skip("a voz sintética usa o Windows")
+    pasta = tmp_path_factory.mktemp("fala")
+    bruto, destino = pasta / "bruto.wav", pasta / "fala.wav"
+    script = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        "$s.SelectVoice('Microsoft Maria Desktop'); "
+        f"$s.SetOutputToWaveFile('{bruto}'); $s.Speak('{TEXTO_DA_FALA}'); $s.Dispose()"
+    )
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True)
+    if r.returncode != 0 or not bruto.exists():
+        pytest.skip("a voz pt-BR do Windows não está disponível")
+    subprocess.run(
+        [str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+         "-i", str(bruto), "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(destino)],
+        check=True,
+    )  # fmt: skip
+    return destino
+
+
+@pytest.fixture(scope="session")
+def video_com_fala(tmp_path_factory, fala_pt) -> Path:
+    destino = tmp_path_factory.mktemp("videofala") / "com_fala.mp4"
+    subprocess.run(
+        [
+            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=40",
+            "-i", str(fala_pt), "-map", "0:v", "-map", "1:a",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-shortest", str(destino),
         ],

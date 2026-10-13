@@ -15,6 +15,10 @@ class ErroConfiguracao(ErroSpurgeon):
     """Configuração ou opções inválidas."""
 
 
+class ErroFerramenta(ErroSpurgeon):
+    """Não foi possível obter ou executar uma ferramenta externa ou um modelo."""
+
+
 class ProjetoConflito(ErroSpurgeon):
     """Já existe uma pasta de projeto com esse nome, mas para outro vídeo."""
 

@@ -150,8 +150,11 @@ class Pipeline:
         if len(set(ids)) != len(ids):
             raise ValueError("Ids de etapa repetidos.")
         vistos: set[str] = set()
+        todos = set(ids)
         for e in etapas:
-            if not set(e.depende_de) <= vistos:
+            # Dependência de etapa que não está na lista é aceita (etapa opcional que o
+            # pipeline em uso não inclui); só é erro apontar para uma que vem depois.
+            if (set(e.depende_de) & todos) - vistos:
                 raise ValueError(f"A etapa {e.id} depende de etapa que vem depois dela.")
             vistos.add(e.id)
         self.etapas = list(etapas)

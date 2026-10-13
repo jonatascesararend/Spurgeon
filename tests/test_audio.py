@@ -6,6 +6,13 @@ import subprocess
 import pytest
 
 from spurgeon.audio.extrair import ExtrairAudio
+from spurgeon.audio.nivel import (
+    MedirNivel,
+    NivelAudio,
+    calcular_nivel,
+    ler_niveis,
+    limiar_silencio_db,
+)
 from spurgeon.audio.normalizar import (
     NormalizarAudio,
     filtro_aplicar,
@@ -15,11 +22,7 @@ from spurgeon.audio.normalizar import (
 from spurgeon.audio.pausas import (
     CalcularCortes,
     DetectarPausas,
-    NivelAudio,
-    calcular_nivel,
     encontrar_pausas,
-    ler_niveis,
-    limiar_silencio_db,
     resumo_por_limiar,
 )
 from spurgeon.core.arquivos import ler_json
@@ -39,6 +42,13 @@ def usar_video(contexto, video):
 def loudness_integrado(wav) -> float:
     saida = executar_ffmpeg(["-i", wav, "-af", filtro_medir(-16), "-f", "null", "-"])
     return ler_medicao(saida)["input_i"]
+
+
+def detectar(contexto):
+    """Mede o nível e procura as pausas, como o pipeline faz."""
+    contexto.etapa_id = "medir_nivel"
+    MedirNivel().executar(contexto)
+    DetectarPausas().executar(contexto)
 
 
 # --- partes puras --------------------------------------------------------------------------
@@ -279,7 +289,7 @@ def test_normalizar_so_roda_se_pedido(contexto):
 def test_detecta_as_pausas_conhecidas(contexto, audio_com_pausas):
     usar_audio(contexto, audio_com_pausas)
     contexto.etapa_id = "detectar_pausas"
-    DetectarPausas().executar(contexto)
+    detectar(contexto)
 
     dados = ler_json(contexto.pastas.pausas)
     assert dados["duracao_s"] == pytest.approx(60.0, abs=0.1)
@@ -298,7 +308,7 @@ def test_cortes_removem_so_as_pausas_acima_do_limiar_deixando_o_residual(
     contexto, audio_com_pausas
 ):
     usar_audio(contexto, audio_com_pausas)
-    DetectarPausas().executar(contexto)
+    detectar(contexto)
     contexto.opcoes.limiar_pausa_s = 10.0
     contexto.opcoes.pausa_residual_s = 1.0
     CalcularCortes().executar(contexto)
@@ -314,7 +324,7 @@ def test_cortes_removem_so_as_pausas_acima_do_limiar_deixando_o_residual(
 @pytest.mark.ffmpeg
 def test_limiar_menor_corta_tambem_a_pausa_curta(contexto, audio_com_pausas):
     usar_audio(contexto, audio_com_pausas)
-    DetectarPausas().executar(contexto)
+    detectar(contexto)
     contexto.opcoes.limiar_pausa_s = 2.5
     contexto.opcoes.pausa_residual_s = 0.5
     CalcularCortes().executar(contexto)
@@ -324,7 +334,7 @@ def test_limiar_menor_corta_tambem_a_pausa_curta(contexto, audio_com_pausas):
 @pytest.mark.ffmpeg
 def test_sem_pausas_longas_nao_ha_cortes(contexto, audio_com_pausas):
     usar_audio(contexto, audio_com_pausas)
-    DetectarPausas().executar(contexto)
+    detectar(contexto)
     contexto.opcoes.limiar_pausa_s = 30.0
     CalcularCortes().executar(contexto)
     cortes = ler_json(contexto.pastas.cortes)

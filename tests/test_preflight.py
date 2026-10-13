@@ -94,6 +94,40 @@ def test_limpar_audio_sem_o_deep_filter_baixado_avisa_que_precisa_de_internet(
 
 
 @pytest.mark.ffmpeg
+def test_modelo_whisper_nao_baixado_avisa_o_tamanho_e_a_internet(config_tmp, video_teste):
+    opcoes = OpcoesProcessamento(whisper_modelo="large-v3-turbo")
+    r = por_nome(executar_preflight(config_tmp, video=video_teste, opcoes=opcoes))["Modelo Whisper"]
+    assert r.nivel == Nivel.AVISO
+    assert "1622 MB" in r.detalhe and "internet" in r.detalhe
+
+
+@pytest.mark.ffmpeg
+def test_modelo_whisper_baixado_fica_ok(config_tmp, video_teste):
+    pasta = config_tmp.pastas.modelos / "whisper" / "tiny"
+    pasta.mkdir(parents=True)
+    for arquivo in ("model.bin", "config.json", "tokenizer.json"):
+        (pasta / arquivo).write_bytes(b"x")
+    opcoes = OpcoesProcessamento(whisper_modelo="tiny")
+    r = por_nome(executar_preflight(config_tmp, video=video_teste, opcoes=opcoes))["Modelo Whisper"]
+    assert r.nivel == Nivel.OK
+
+
+@pytest.mark.ffmpeg
+def test_sem_o_pacote_faster_whisper_e_erro_com_a_instrucao(config_tmp, video_teste, monkeypatch):
+    import importlib.util
+
+    original = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda nome, *a: None if nome == "faster_whisper" else original(nome, *a),
+    )
+    r = por_nome(executar_preflight(config_tmp, video=video_teste))["faster-whisper"]
+    assert r.nivel == Nivel.ERRO
+    assert "uv sync --extra transcricao" in r.detalhe
+
+
+@pytest.mark.ffmpeg
 def test_sem_limpar_audio_o_deep_filter_nao_e_cobrado(config_tmp, video_teste):
     resultados = por_nome(executar_preflight(config_tmp, video=video_teste))
     assert "deep-filter" not in resultados

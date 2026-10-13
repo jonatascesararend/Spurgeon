@@ -19,7 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from spurgeon.core.config import ConfigApp
-from spurgeon.core.erros import Cancelado, ErroSpurgeon
+from spurgeon.core.erros import Cancelado, ErroFerramenta
 from spurgeon.core.ffmpeg import sondar
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
@@ -37,10 +37,6 @@ SHA256 = "75e11fa16445f560cb6b021521ddb89e89270d13b83089705d98776f58fd7915"
 FATOR_TEMPO_ESTIMADO = 0.2
 _PROGRESSO_MAXIMO_ESTIMADO = 0.97
 _BLOCO = 256 * 1024
-
-
-class ErroFerramenta(ErroSpurgeon):
-    """Não foi possível obter ou executar uma ferramenta externa."""
 
 
 def caminho_deep_filter(config: ConfigApp) -> Path:

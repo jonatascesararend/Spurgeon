@@ -59,6 +59,7 @@ class PainelOpcoes(ctk.CTkFrame):
                 "revisar_transcricao",
                 "aprovar_cortes",
                 "manter_intermediarios",
+                "impedir_bloqueio",
             )
         }
         self.textos = {
@@ -257,6 +258,11 @@ class PainelOpcoes(ctk.CTkFrame):
         crf.pack(side="left", padx=8)
         self._registrar(crf, "crf")
         self._check(a, "Manter arquivos intermediários ao terminar", "manter_intermediarios")
+        self._check(
+            a,
+            "Impedir que o PC bloqueie ou apague a tela durante o processamento",
+            "impedir_bloqueio",
+        )
         ctk.CTkLabel(a, text="").pack(pady=1)
 
     def _alternar_avancado(self) -> None:

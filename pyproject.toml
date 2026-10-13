@@ -14,15 +14,27 @@ dependencies = [
 [project.optional-dependencies]
 # Interface gráfica (Fase 1)
 ui = ["customtkinter>=5.2"]
-# Transcrição, NLP e seleção de cortes (Fases 3 e 4). A limpeza de áudio usa o
-# binário oficial `deep-filter` (não é pacote Python; ver Projeto.md).
-ai = [
+# Transcrição (Fase 3). A limpeza de áudio usa o binário oficial `deep-filter`, que não é
+# pacote Python (ver Projeto.md).
+transcricao = [
     "faster-whisper>=1.1",
+    "rapidfuzz>=3.9",
+]
+# Seleção de cortes para os Shorts (Fase 4).
+shorts = [
     "spacy>=3.7",
     "ollama>=0.4",
     "pandas>=2.2",
     "numpy>=1.26",
+]
+# Tudo de IA junto (repete as listas acima, pois um extra não pode citar outro).
+ai = [
+    "faster-whisper>=1.1",
     "rapidfuzz>=3.9",
+    "spacy>=3.7",
+    "ollama>=0.4",
+    "pandas>=2.2",
+    "numpy>=1.26",
 ]
 
 # Ferramentas de desenvolvimento: o uv instala por padrão; o instalar.bat usa --no-dev.
@@ -49,6 +61,7 @@ addopts = "-ra"
 markers = [
     "ffmpeg: testes que precisam do FFmpeg instalado",
     "gui: testes que abrem a janela (pulados sem ambiente gráfico)",
+    "modelo: testes que usam o modelo Whisper tiny (pulados se não estiver baixado)",
 ]
 
 [tool.ruff]

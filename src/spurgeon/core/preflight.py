@@ -57,6 +57,7 @@ def executar_preflight(
     resultados = [_python(), *_ffmpeg(opcoes), *_pastas(config, opcoes, especifico)]
     if opcoes.limpar_audio or not especifico:
         resultados.append(_deep_filter(config))
+    resultados += _whisper(config, opcoes)
     resultados += _hardware_e_disco(config, video)
     if opcoes.gerar_shorts or not especifico:
         resultados.append(_ollama(opcoes, exigido=opcoes.gerar_shorts and especifico))
@@ -118,6 +119,33 @@ def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) ->
             detalhe = str(caminho) if caminho.exists() else f"ainda não existe: {caminho.name}"
             resultados.append(Verificacao(nome, Nivel.OK, detalhe))
     return resultados
+
+
+def _whisper(config: ConfigApp, opcoes: OpcoesProcessamento) -> list[Verificacao]:
+    """O pacote faster-whisper (erro se faltar) e o modelo escolhido (aviso se faltar baixar)."""
+    from importlib.util import find_spec
+
+    from spurgeon.transcricao.modelo import TAMANHO_MB, modelo_baixado
+
+    if find_spec("faster_whisper") is None:
+        return [
+            Verificacao(
+                "faster-whisper",
+                Nivel.ERRO,
+                "não instalado; rode o instalar.bat (ou: uv sync --extra transcricao)",
+            )
+        ]
+    nome = opcoes.whisper_modelo
+    if modelo_baixado(config, nome):
+        return [Verificacao("Modelo Whisper", Nivel.OK, f"{nome} instalado")]
+    return [
+        Verificacao(
+            "Modelo Whisper",
+            Nivel.AVISO,
+            f"{nome} ainda não foi baixado: serão cerca de {TAMANHO_MB.get(nome, 0)} MB na "
+            "primeira transcrição, e é preciso ter internet nesse momento",
+        )
+    ]
 
 
 def _deep_filter(config: ConfigApp) -> Verificacao:

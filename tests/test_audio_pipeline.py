@@ -52,6 +52,7 @@ def test_roda_as_etapas_de_audio_e_deixa_os_resultados(tmp_path, video_com_pausa
     assert rodada.etapas_que_rodaram() == [
         "extrair_audio",
         "normalizar_audio",
+        "medir_nivel",
         "detectar_pausas",
         "calcular_cortes",
     ]
@@ -104,5 +105,5 @@ def test_sem_video_longo_nao_procura_pausas(tmp_path, video_com_pausas):
     pastas = criar(tmp_path, video_com_pausas, gerar_video_longo=False, gerar_shorts=True)
     rodada = Rodada()
     assert rodada.rodar(pastas.raiz) == ResultadoPipeline.CONCLUIDO
-    assert rodada.etapas_que_rodaram() == ["extrair_audio"]
+    assert rodada.etapas_que_rodaram() == ["extrair_audio", "medir_nivel"]
     assert not pastas.pausas.exists()

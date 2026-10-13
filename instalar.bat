@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 echo Criando o ambiente Python 3.11 e instalando as dependencias...
-uv sync --no-dev --extra ui
+uv sync --no-dev --extra ui --extra transcricao
 if errorlevel 1 (
     echo [ERRO] Falha ao instalar as dependencias.
     pause

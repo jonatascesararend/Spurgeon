@@ -87,6 +87,7 @@ class ValoresFormulario:
     x264_preset: str = "medium"
     crf: str = "20"
     manter_intermediarios: bool = False
+    impedir_bloqueio: bool = True
 
     @classmethod
     def de_opcoes(cls, o: OpcoesProcessamento) -> ValoresFormulario:
@@ -114,6 +115,7 @@ class ValoresFormulario:
             x264_preset=o.x264_preset_personalizado,
             crf=str(o.crf_personalizado),
             manter_intermediarios=o.manter_intermediarios,
+            impedir_bloqueio=o.impedir_bloqueio,
         )
 
 
@@ -166,6 +168,7 @@ def para_opcoes(
         "pausar_aprovar_cortes": v.aprovar_cortes,
         "ollama_modelo": v.ollama_modelo.strip() or "qwen3:8b",
         "manter_intermediarios": v.manter_intermediarios,
+        "impedir_bloqueio": v.impedir_bloqueio,
     }
 
     def decimal(texto, rotulo, faixa):

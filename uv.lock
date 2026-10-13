@@ -979,6 +979,16 @@ ai = [
     { name = "rapidfuzz" },
     { name = "spacy" },
 ]
+shorts = [
+    { name = "numpy" },
+    { name = "ollama" },
+    { name = "pandas" },
+    { name = "spacy" },
+]
+transcricao = [
+    { name = "faster-whisper" },
+    { name = "rapidfuzz" },
+]
 ui = [
     { name = "customtkinter" },
 ]
@@ -994,17 +1004,23 @@ dev = [
 requires-dist = [
     { name = "customtkinter", marker = "extra == 'ui'", specifier = ">=5.2" },
     { name = "faster-whisper", marker = "extra == 'ai'", specifier = ">=1.1" },
+    { name = "faster-whisper", marker = "extra == 'transcricao'", specifier = ">=1.1" },
     { name = "numpy", marker = "extra == 'ai'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'shorts'", specifier = ">=1.26" },
     { name = "ollama", marker = "extra == 'ai'", specifier = ">=0.4" },
+    { name = "ollama", marker = "extra == 'shorts'", specifier = ">=0.4" },
     { name = "pandas", marker = "extra == 'ai'", specifier = ">=2.2" },
+    { name = "pandas", marker = "extra == 'shorts'", specifier = ">=2.2" },
     { name = "platformdirs", specifier = ">=4.2" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "rapidfuzz", marker = "extra == 'ai'", specifier = ">=3.9" },
+    { name = "rapidfuzz", marker = "extra == 'transcricao'", specifier = ">=3.9" },
     { name = "spacy", marker = "extra == 'ai'", specifier = ">=3.7" },
+    { name = "spacy", marker = "extra == 'shorts'", specifier = ">=3.7" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]
-provides-extras = ["ui", "ai"]
+provides-extras = ["ui", "transcricao", "shorts", "ai"]
 
 [package.metadata.requires-dev]
 dev = [

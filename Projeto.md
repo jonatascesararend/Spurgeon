@@ -229,17 +229,41 @@ Etapas em `src/spurgeon/audio/`, registradas em `core/etapas.py`. Para processar
 
 Mesmo no limite de 1 s o vídeo encurta menos de 1 minuto em 65. A remoção de silêncios agrega pouco para este material; o valor está na limpeza do áudio, na legenda e nos Shorts.
 
-### Fase 3: Transcrição e Alinhamento Temporal (faster-whisper)
+### Fase 3: Transcrição e Alinhamento Temporal (faster-whisper) — concluída em 2026-10-12
 
-* **Modelo:** escolhido pelo usuário (padrão recomendado pelo hardware). Em CPU: `int8`. Em GPU NVIDIA com CUDA 12: `float16` ou `int8_float16`.
-* **Parâmetros:** `language="pt"`, `word_timestamps=True`, `vad_filter=True` (os parâmetros finais são ajustados em testes: `beam_size`, `condition_on_previous_text`).
-* **Transcrição única e por blocos** (~10 min, cortados em pausas). Cada bloco concluído é salvo em `transcricao.json`; se o processo cair, retoma do último bloco.
-* **Vocabulário teológico** (`recursos/vocabulario_teologico.txt`, editável): livros da Bíblia, jargões e termos da teologia reformada calvinista (soberania de Deus, eleição, expiação, justificação, santificação, Confissão de Westminster, Catecismo de Heidelberg, Cânones de Dort, nomes como Calvino e Spurgeon etc.).
-  * Como o prompt do Whisper tem limite (~224 tokens), vai para o `initial_prompt`/`hotwords` só uma seleção dos termos.
-  * A lista completa é usada numa **pós-correção por similaridade** (`rapidfuzz`) sobre a transcrição.
-* **Revisão da transcrição (🛑 opcional):** painel com os blocos de legenda em texto editável. Correções palavra por palavra mantêm os tempos; inserir ou remover palavras redistribui os tempos proporcionalmente dentro do bloco. As correções alimentam o .srt, o LLM e as legendas dos Shorts.
-* **Exportação:** `legendas_video_longo.srt` com **no máximo 2 linhas por legenda** (≈42 caracteres por linha), tempos remapeados pelo mapa de tempo. Se a introdução estiver marcada, todos os tempos somam a duração dela.
-* **Checkpoint:** `transcricao.json` (palavra a palavra) fica na pasta do projeto.
+Etapas em `src/spurgeon/transcricao/`: `transcrever` → `revisar_transcricao` (opcional) → `detectar_pausas` → `refinar_pausas` → `calcular_cortes` → `gerar_srt`. A medição de nível virou a etapa `medir_nivel`, que serve tanto aos blocos da transcrição quanto às pausas. Modelos ficam em `modelos/whisper/<nome>/`; `spurgeon benchmark "Downloads\video.MOV" --modelo large-v3-turbo` mede a velocidade nesta máquina e projeta o tempo de um sermão.
+
+* **Hardware (a pendência da GTX 760 está resolvida):** o CTranslate2 informa *"driver CUDA insuficiente para o runtime"*. Atualizar o driver não resolve: a série R470 é a última que a NVIDIA mantém para a Kepler, e o CTranslate2 4.5+ exige CUDA 12.3+ e cuDNN 9. Tudo roda na **CPU, em `int8`, com 9 threads** (75%); 12 threads não ganham velocidade.
+* **Velocidade medida** (3 min do sermão real, CPU):
+
+  | Configuração | Tempo | Para 65 min |
+  |---|---|---|
+  | large-v3-turbo, beam 5 (padrão) | 0,71× o tempo real | ~46 min |
+  | large-v3-turbo, beam 1 | 0,62× | ~41 min |
+  | large-v3-turbo, 12 threads | 0,72× | ~47 min |
+  | tiny | 0,07× | ~5 min (qualidade bem pior) |
+
+* **Parâmetros do Whisper** (`transcricao/motor.py`; mudar qualquer um invalida os blocos gravados):
+  * `language="pt"`, `beam_size=5`, `word_timestamps=True`, `vad_filter=True`, `hallucination_silence_threshold=2.0`.
+  * `condition_on_previous_text=False`: evita repetições em laço em gravações longas.
+  * O vocabulário vai em **`hotwords`**, que entra no prompt de **toda** janela de 30 s. O `initial_prompt` não serve: com `condition_on_previous_text=False` ele só vale para a primeira janela.
+  * O filtro de voz é **ignorado** quando se passa `clip_timestamps`; por isso o áudio é fatiado em blocos pelo próprio código e os tempos recebem o deslocamento do bloco.
+* **Blocos de ~10 min cortados em pausas:** cada fronteira fica no meio da maior pausa dentro de 90 s do ponto ideal (sem pausa por perto, no ponto ideal). Cada bloco concluído é gravado em `transcricao.json`; se o processo cair, retoma do bloco seguinte. A transcrição gravada só é reaproveitada se as opções que a afetam, o vocabulário e os parâmetros forem os mesmos.
+* **Vocabulário teológico** (`recursos/vocabulario_teologico.txt`, editável, ~270 termos de teologia reformada, nomes, lugares e livros da Bíblia):
+  * As **primeiras linhas** (até ~300 caracteres) viram as dicas do Whisper, que tem espaço para só ~224 tokens: o topo da lista deve ter o que ele mais erra.
+  * A lista inteira alimenta a **pós-correção** (`rapidfuzz`, sem diferenciar maiúsculas): só troca trechos de até 4 palavras com **confiança baixa** (média < 0,75), com 5+ letras, 85% ou mais parecidos com um termo e com a mesma quantidade de palavras. Cada troca fica registrada no log e em `Palavra.original`.
+* **Revisão (🛑 opcional, `ui/revisao_transcricao.py`):** uma linha por trecho (`[2:05] texto`), com as palavras de baixa confiança em **laranja**, busca (Ctrl+F, F3), **"trocar em tudo"** para nomes recorrentes, desfazer (Ctrl+Z) e aviso antes de descartar. Corrigir uma palavra mantém o tempo dela; trocar por mais ou menos palavras divide o intervalo em proporção ao tamanho. Salvar sem mudar nada não reescreve o arquivo.
+* **Pausas conferidas pela fala (`refinar_pausas`):** tira das pausas por energia qualquer trecho (com folga de 0,15 s) em que o Whisper ouviu uma palavra; assim nunca se corta fala baixinha. A detecção original fica em `pausas`, e a refinada em `pausas_refinadas`.
+* **Legendas (`gerar_srt` → `legendas_video_longo.srt`):** até 2 linhas de ~42 caracteres, equilibradas e de preferência quebradas depois de vírgula ou ponto; no máximo 7 s e no mínimo 1 s por legenda; nova legenda após uma pausa de 1 s; uma frase só fecha a legenda depois de 1,5 s (para "Sim." não ficar sozinha). Os tempos passam pelo mapa de tempo dos cortes e somam a duração da introdução, se marcada.
+* **Verificação inicial:** avisa quando o modelo ainda não foi baixado (tamanho e necessidade de internet) e dá erro, com a instrução, se o pacote `faster-whisper` não estiver instalado.
+* **Alucinações do Whisper (`transcricao/alucinacao.py`):** no fim de um bloco o áudio acaba em silêncio e o Whisper "completa" com despedidas de vídeo. Um segmento só é removido se tiver uma frase típica ("Obrigado por assistir", "Inscreva-se no canal"...) **e** um sinal físico de erro (mais de 8 palavras por segundo, ou confiança média abaixo de 0,6), ou se tiver palavras demais para o tempo (acima de 15 por segundo). O que sai fica registrado em `removidos` no `transcricao.json` e no log.
+* **Destaque da revisão:** só palavras de 4+ letras com confiança abaixo de 0,5. Palavrinhas ("e", "o", "se") têm confiança baixa o tempo todo sem estarem erradas e poluíam a tela (3,5% das palavras, contra 1,0% agora).
+
+**Resultado no sermão real** (65 min, `large-v3-turbo`, CPU, 9 threads): transcrição de **48 min** (0,74× a duração; 6 blocos cortados em pausas), **303 segmentos, 9.009 palavras (139 por minuto)**, **706 legendas** (632 de 2 linhas e 74 de 1; maior linha de 42 caracteres; nenhuma sobreposta nem abaixo de 0,9 s; leitura média de 13 caracteres por segundo).
+
+**Controle de qualidade feito na transcrição real:** nenhuma repetição em laço, nenhum tempo fora de ordem e ritmo estável (133 a 146 palavras por minuto em todos os blocos). Achados: (1) uma alucinação ("Obrigado por assistir", 3 palavras em 0,14 s, aos 39:03), agora removida automaticamente; (2) "senhor" em minúscula com baixa confiança três vezes onde se quer "Senhor" (Deus), erro real que a revisão destaca; (3) o "Miqueias" saiu certo graças às dicas, mesmo com confiança baixa por ser nome raro. A conferência das pausas com a fala tirou 5 min 09 s do que a energia chamava de pausa (445 → 93 pausas), sem efeito prático aqui porque nenhuma passa de 5,3 s.
+
+**Energia:** `spurgeon acordado --horas 12` (e a opção "Não deixar o PC bloquear nem apagar a tela ao processar", ligada por padrão) pede ao Windows para não suspender, não apagar a tela e não bloquear por inatividade, registrando atividade sem mexer no mouse a cada 45 s. Nada permanente é alterado; tudo volta ao normal quando o programa termina.
 
 ### Fase 4: Inteligência de Detecção de Cortes para Shorts (até 60 s)
 
@@ -411,10 +435,8 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 ### Pendências técnicas
 
 1. **Mini-benchmark do LLM** em pt-BR, com trechos reais de sermão (`qwen3:4b`, `qwen3:8b`, `llama3.1:8b`).
-2. **Teste da GTX 760** com o faster-whisper atual (Fase 3; esperado: sem suporte). O NVENC já foi testado: indisponível.
-3. **Refinar as pausas com as palavras do Whisper** (Fase 3): hoje a detecção é por energia; o plano é usar as lacunas entre palavras e o VAD.
-4. **Comparar visualmente** a qualidade "Alta" (CRF 18) e a "Máxima" (CRF 16) em trechos do sermão, para o autor saber o quanto a diferença de ~2 h 30 min compensa.
+2. **Comparar visualmente** a qualidade "Alta" (CRF 18) e a "Máxima" (CRF 16) em trechos do sermão, para o autor saber o quanto a diferença de ~2 h 30 min compensa.
 
 ### Decisão que depende do autor (descoberta com o sermão real)
 
-5. **Tamanho mínimo da pausa a cortar:** no sermão real o padrão de 10 s não corta nada (a maior pausa tem 5,3 s). Manter 10 s como padrão, ou usar um valor menor (por exemplo 2 s, que corta 10 pausas e 17 s)? A remoção de silêncios encurta menos de 1 minuto em 65 mesmo em 1 s, então vale também decidir se ela continua ligada por padrão.
+3. **Tamanho mínimo da pausa a cortar:** no sermão real o padrão de 10 s não corta nada (a maior pausa tem 5,3 s). Manter 10 s como padrão, ou usar um valor menor (por exemplo 2 s, que corta 10 pausas e 17 s)? A remoção de silêncios encurta menos de 1 minuto em 65 mesmo em 1 s, então vale também decidir se ela continua ligada por padrão.
