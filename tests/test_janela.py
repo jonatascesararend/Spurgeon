@@ -448,3 +448,25 @@ def test_renderizar_sem_nada_pendente_so_avisa(tela, projeto_pronto, monkeypatch
     tela._renderizar_do_studio()
     assert chamadas == []
     assert any(t == "Nada para renderizar" for t, _ in tela.caixas.mostradas)
+
+
+def test_renderizar_do_studio_recusa_corte_marcado_com_mais_de_60_segundos(
+    tela, projeto_pronto, monkeypatch
+):
+    tela._abrir_projeto(projeto_pronto.pastas.raiz)
+    tela._info_video = type("Info", (), {"duracao_s": 3900.0, "hdr": True})()
+    chamadas = []
+    monkeypatch.setattr(tela, "_iniciar", lambda ajustes=None: chamadas.append(ajustes))
+    editor = tela.studio.editor
+    editor.selecionar(editor._ordem[0])
+    for _ in range(80):
+        editor.mover("fim", 1)
+    # o botão da aba guarda o trabalho em andamento, mesmo com o corte ainda longo demais
+    assert tela.studio.salvar(exigir_ate_60s=False) is True
+    tela._renderizar_do_studio()
+    assert chamadas == []
+    assert any(t == "Corte com mais de 60 segundos" for t, _ in tela.caixas.mostradas)
+    editor.alternar_atual()  # desmarca o corte longo: o resto pode ser renderizado
+    tela.caixas.mostradas.clear()
+    tela._renderizar_do_studio()
+    assert len(chamadas) == 1

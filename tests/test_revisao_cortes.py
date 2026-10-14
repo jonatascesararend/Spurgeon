@@ -111,7 +111,10 @@ def test_o_detalhe_mostra_a_nota_o_alerta_e_o_texto(aberto):
     assert f"Nota {corte.nota:.0f} de 100" in aberto.editor._rotulo_nota.cget("text")
     assert "pode soar legalista" in aberto.editor._rotulo_alerta.cget("text")
     assert aberto.editor._var_titulo.get() == corte.titulo
-    assert aberto.editor._texto.get("1.0", "end-1c") == corte.texto
+    # a legenda aparece dividida em blocos de até 2 linhas, como no vídeo
+    legenda = aberto.editor._texto.get("1.0", "end-1c")
+    assert " ".join(legenda.split()) == " ".join(corte.texto.split())
+    assert "\n" in legenda
     barra, valor = aberto.editor._partes["retencao"]
     assert valor.cget("text") == f"{corte.detalhe['retencao']:g} de 40"
     assert barra.get() == pytest.approx(corte.detalhe["retencao"] / 40)
@@ -149,20 +152,33 @@ def test_mover_o_inicio_muda_o_corte_e_marca_como_editado(aberto):
     assert aberto.editor.mover("inicio", -1)
     depois = aberto.editor._cortes[i]
     assert depois.inicio < antes.inicio and depois.editado and depois.nota == antes.nota
-    assert aberto.editor._texto.get("1.0", "end-1c") == depois.texto
+    legenda = aberto.editor._texto.get("1.0", "end-1c")
+    assert " ".join(legenda.split()) == " ".join(depois.texto.split())
     assert aberto.editor.mover("inicio", 1)
     assert aberto.editor._cortes[i].inicio == pytest.approx(antes.inicio)
 
 
 @pytest.mark.gui
-def test_nao_deixa_passar_de_60_segundos_e_avisa_na_tela(aberto):
+def test_passar_de_60_segundos_e_permitido_mas_avisa_na_tela(aberto):
     aberto.editor.selecionar(aberto.editor._ordem[0])
-    movimentos = 0
-    while aberto.editor.mover("fim", 1):
-        movimentos += 1
-        assert movimentos < 300
-    assert aberto.editor._cortes[aberto.editor._atual].duracao <= 60.0 + 1e-6
-    assert "passaria de 60" in aberto.editor._rotulo_ajuste.cget("text")
+    assert aberto.editor._rotulo_limite.cget("text") == ""
+    for _ in range(80):
+        assert aberto.editor.mover("fim", 1)
+    assert aberto.editor._cortes[aberto.editor._atual].duracao > 60.0
+    assert "não pode ser um Short" in aberto.editor._rotulo_limite.cget("text")
+    assert "mais de 60 s" in aberto.editor._resumo.cget("text")
+
+
+@pytest.mark.gui
+def test_salvar_recusa_corte_marcado_com_mais_de_60_segundos(aberto, pastas):
+    aberto.editor.selecionar(aberto.editor._ordem[0])
+    for _ in range(80):
+        aberto.editor.mover("fim", 1)
+    assert aberto.salvar_e_fechar() is False
+    assert any("Corte com mais de 60 segundos" in t for t, _ in aberto.caixas)
+    assert aberto.winfo_exists() and not aberto.salvo
+    aberto.editor.alternar_atual()  # desmarcado, o corte longo não impede mais
+    assert aberto.salvar_e_fechar() is True
 
 
 @pytest.mark.gui

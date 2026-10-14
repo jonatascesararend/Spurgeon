@@ -32,7 +32,7 @@ from spurgeon.render.marca import (
     trecho_do_filtro,
 )
 from spurgeon.shorts.dados import Corte
-from spurgeon.shorts.edicao import palavras_com_a_legenda
+from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 
@@ -347,6 +347,13 @@ class RenderizarShorts(Etapa):
         if not planejados:
             ctx.log.warning("Nenhum corte foi aprovado: nenhum Short será gerado.")
             return
+        longos = [s for s in planejados if passa_do_limite(s.corte)]
+        if longos:
+            lista = "; ".join(f"“{s.corte.titulo}” ({s.corte.duracao:.0f} s)" for s in longos)
+            raise ErroFerramenta(
+                f"Com mais de 60 segundos o vídeo não pode ser um Short: {lista}. Encurte o corte "
+                "no Studio Shorts ou desmarque-o."
+            )
         video = Path(ctx.estado.entrada.caminho)
         if not video.exists():
             raise ErroFerramenta(f"O vídeo original não foi encontrado: {video}")

@@ -1,6 +1,6 @@
 [project]
 name = "spurgeon"
-version = "1.1.0"
+version = "1.1.1"
 description = "Studio Spurgeon: cortes e otimização de vídeos de sermões, aulas e Shorts"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"

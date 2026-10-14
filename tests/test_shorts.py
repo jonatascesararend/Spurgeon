@@ -28,6 +28,7 @@ from spurgeon.shorts.analise import (
 )
 from spurgeon.shorts.dados import Avaliacao, Candidato, Corte
 from spurgeon.shorts.edicao import (
+    AVISO_ACIMA_DO_LIMITE,
     LimiteInvalido,
     contexto_das_pontas,
     faixa_da_nota,
@@ -36,6 +37,7 @@ from spurgeon.shorts.edicao import (
     mover_limite,
     mover_por_frase,
     palavras_das_pontas,
+    passa_do_limite,
     resumir,
 )
 from spurgeon.shorts.etapas import (
@@ -640,14 +642,16 @@ def test_mover_o_fim_para_dentro_encurta_o_corte_numa_palavra_inteira():
     assert novo.texto.endswith(palavras[ultima - 3].texto)
 
 
-def test_nao_deixa_passar_de_60_segundos():
+def test_deixa_passar_de_60_segundos_mas_o_corte_deixa_de_poder_ser_short():
     palavras = sermao_falso()
     corte = cortes_do_sermao(palavras)[0]
+    assert not passa_do_limite(corte)
     atual = corte
-    with pytest.raises(LimiteInvalido, match="passaria de 60"):
-        for _ in range(200):
-            atual = mover_limite(palavras, atual, "fim", 1)
-    assert atual.duracao <= 60.0 + 1e-6
+    for _ in range(80):  # o corte cresce palavra a palavra, sem erro, e passa dos 60 s
+        atual = mover_limite(palavras, atual, "fim", 1)
+    assert atual.duracao > 60.0
+    assert passa_do_limite(atual)
+    assert "60" in AVISO_ACIMA_DO_LIMITE
 
 
 def test_nao_deixa_ficar_curto_demais_nem_sair_da_transcricao():
@@ -871,14 +875,12 @@ def test_no_meio_da_frase_o_ajuste_vai_ao_comeco_ou_ao_fim_dela():
 def test_ajuste_por_frase_respeita_os_limites_do_corte_e_da_transcricao():
     palavras = sermao_falso()
     corte = cortes_do_sermao(palavras)[0]
-    for _ in range(100):  # empurra o fim até passar dos 60 s
-        try:
+    for _ in range(8):  # empurra o fim: passa dos 60 s sem erro
+        corte = mover_por_frase(palavras, corte, "fim", +1)
+    assert passa_do_limite(corte)
+    with pytest.raises(LimiteInvalido, match="Não há mais fala"):
+        for _ in range(100):  # até o fim da transcrição
             corte = mover_por_frase(palavras, corte, "fim", +1)
-        except LimiteInvalido as erro:
-            assert "passaria de 60" in str(erro)
-            break
-    else:
-        pytest.fail("devia passar dos 60 s")
     inicial = corte_entre(palavras, 0, 40)
     with pytest.raises(LimiteInvalido, match="Não há mais fala"):
         mover_por_frase(palavras, inicial, "inicio", -1)

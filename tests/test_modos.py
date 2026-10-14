@@ -288,3 +288,17 @@ def test_deslocar_srt_so_mexe_nos_tempos():
     assert "01:00:03,500 --> 01:00:05,000" in novo
     assert "Um texto 00:00:05,000" in novo  # o texto não é tocado
     assert deslocar_srt(original, 0.0) == original
+
+
+def test_renderizar_recusa_short_com_mais_de_60_segundos_antes_de_comecar(ctx_shorts, video_hdr):
+    from spurgeon.core.estado import EntradaVideo
+    from spurgeon.render.shorts import RenderizarShorts
+    from spurgeon.shorts.etapas import gravar_cortes
+    from tests.test_render import corte
+
+    ctx_shorts.estado.entrada = EntradaVideo.de_arquivo(video_hdr)
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5), corte(2, 10.0, 80.0)])
+    with pytest.raises(ErroFerramenta, match="Com mais de 60 segundos") as erro:
+        RenderizarShorts().executar(ctx_shorts)
+    assert "Título 2" in str(erro.value) and "Título 1" not in str(erro.value)
+    assert not list(ctx_shorts.pastas.shorts.glob("*.mp4"))  # nenhum Short foi renderizado

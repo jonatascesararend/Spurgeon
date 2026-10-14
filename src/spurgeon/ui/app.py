@@ -542,7 +542,7 @@ class JanelaPrincipal(ctk.CTk):
         if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
             dialogos.aviso(self, "Abrir projeto", "Espere o processamento terminar para abrir.")
             return
-        if self.studio.mudou and not self.studio.salvar():
+        if self.studio.mudou and not self.studio.salvar(exigir_ate_60s=False):
             return
         try:
             estado = carregar_estado(pasta)

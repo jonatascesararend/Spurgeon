@@ -68,7 +68,7 @@ class AbaStudioShorts(ctk.CTkFrame):
             text="Salvar alterações",
             width=140,
             fg_color=("gray70", "gray30"),
-            command=self.salvar,
+            command=lambda: self.salvar(exigir_ate_60s=False),
         )
         self._botao_salvar.grid(row=0, column=1, padx=(8, 0))
         self._botao_renderizar = ctk.CTkButton(
@@ -133,11 +133,15 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._atualizar_botoes()
 
     # --- ações --------------------------------------------------------------------------------
-    def salvar(self) -> bool:
-        """Grava as alterações em `cortes_shorts.json`. False se algo impede (veja o aviso)."""
+    def salvar(self, *, exigir_ate_60s: bool = True) -> bool:
+        """Grava as alterações em `cortes_shorts.json`. False se algo impede (veja o aviso).
+
+        O botão da aba salva sem exigir os 60 s (é trabalho em andamento); quem vai renderizar ou
+        processar exige.
+        """
         if self._editor is None:
             return True
-        ok = self._editor.salvar()
+        ok = self._editor.salvar(exigir_ate_60s=exigir_ate_60s)
         self._atualizar_botoes()
         return ok
 

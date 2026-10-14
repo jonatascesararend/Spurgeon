@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import tkinter
 
 import pytest
@@ -178,17 +179,6 @@ def test_tempo_digitado_invalido_avisa_e_restaura_o_campo(editor):
 
 
 @pytest.mark.gui
-def test_tempo_que_estoura_os_60_segundos_e_recusado(editor):
-    editor.selecionar(editor._ordem[0])
-    i = editor._atual
-    corte = editor._cortes[i]
-    editor._var_fim.set(f"{int((corte.fim + 30) // 60)}:{(corte.fim + 30) % 60:04.1f}")
-    assert editor.aplicar_tempo("fim") is False
-    assert "passaria de 60" in editor._rotulo_ajuste.cget("text")
-    assert editor._cortes[i].fim == corte.fim
-
-
-@pytest.mark.gui
 def test_acrescentar_uma_frase_pelo_inicio_inclui_a_frase_anterior(editor):
     editor.selecionar(editor._ordem[0])
     i = editor._atual
@@ -198,18 +188,6 @@ def test_acrescentar_uma_frase_pelo_inicio_inclui_a_frase_anterior(editor):
     assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira - 12, ultima)
     assert editor.mover_frase("inicio", 1)
     assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira, ultima)
-
-
-@pytest.mark.gui
-def test_o_contexto_mostra_as_palavras_que_ficam_de_fora(editor):
-    editor.selecionar(editor._ordem[0])
-    corte = editor._cortes[editor._atual]
-    primeira, ultima = indices_das_palavras(editor._palavras, corte)
-    texto = editor._contexto.get("1.0", "end-1c")
-    assert editor._palavras[primeira - 1].texto in texto
-    assert editor._palavras[ultima + 1].texto in texto
-    fora = editor._contexto._textbox.tag_ranges("fora")
-    assert fora  # as vizinhas aparecem em cinza
 
 
 @pytest.mark.gui
@@ -324,3 +302,178 @@ def test_sem_cortes_o_editor_abre_vazio_sem_erro(raiz, tmp_path):
         assert ed.pendentes() == []
     finally:
         janela.destroy()
+
+
+@pytest.mark.gui
+def test_tempo_que_passa_dos_60_segundos_e_aceito_com_aviso(editor):
+    editor.selecionar(editor._ordem[0])
+    i = editor._atual
+    corte = editor._cortes[i]
+    editor._var_fim.set(f"{int((corte.fim + 30) // 60)}:{(corte.fim + 30) % 60:04.1f}")
+    assert editor.aplicar_tempo("fim") is True
+    assert editor._cortes[i].fim > corte.fim and editor._cortes[i].duracao > 60.0
+    assert "não pode ser um Short" in editor._rotulo_limite.cget("text")
+    assert str(editor._rotulo_tempo.cget("text_color")) == "#e05555"
+
+
+@pytest.mark.gui
+def test_o_aviso_dos_60_segundos_some_ao_voltar_para_o_limite(editor):
+    editor.selecionar(editor._ordem[0])
+    for _ in range(80):
+        editor.mover("fim", 1)
+    assert editor._rotulo_limite.cget("text")
+    while editor._cortes[editor._atual].duracao > 60.0:
+        assert editor.mover("fim", -1)
+    assert editor._rotulo_limite.cget("text") == ""
+
+
+@pytest.mark.gui
+def test_salvar_exige_ate_60s_mas_o_trabalho_em_andamento_pode_ser_salvo(editor, pastas):
+    editor.selecionar(editor._ordem[0])
+    for _ in range(80):
+        editor.mover("fim", 1)
+    assert len(editor.cortes_acima_do_limite()) == 1
+    assert editor.salvar() is False
+    assert editor.salvar(exigir_ate_60s=False) is True
+    gravado = {c.id: c for c in carregar_cortes(pastas.cortes_shorts)}[editor._cortes[0].id]
+    assert gravado.duracao > 60.0
+
+
+@pytest.mark.gui
+def test_a_janela_do_inicio_deixa_rolar_muito_texto_antes_e_depois_da_marca(editor):
+    editor.selecionar(editor._ordem[0])
+    corte = editor._cortes[editor._atual]
+    primeira, _ultima = indices_das_palavras(editor._palavras, corte)
+    texto = editor._janelas["inicio"].get("1.0", "end-1c")
+    assert "▶ COMEÇA AQUI ▶" in texto
+    antes, depois = texto.split("▶ COMEÇA AQUI ▶")
+    assert editor._palavras[primeira - 1].texto in antes
+    assert editor._palavras[primeira].texto in depois
+    assert len(antes.split()) > 100  # bastante contexto para rolar, além do que cabe na tela
+    caixa = editor._janelas["inicio"]._textbox
+    fora = caixa.tag_ranges("fora")
+    assert fora and caixa.tag_ranges("dentro")
+
+
+@pytest.mark.gui
+def test_a_janela_do_fim_mostra_o_que_vem_depois(editor):
+    editor.selecionar(editor._ordem[0])
+    corte = editor._cortes[editor._atual]
+    _primeira, ultima = indices_das_palavras(editor._palavras, corte)
+    texto = editor._janelas["fim"].get("1.0", "end-1c")
+    assert "◀ TERMINA AQUI ◀" in texto
+    antes, depois = texto.split("◀ TERMINA AQUI ◀")
+    assert editor._palavras[ultima].texto in antes
+    assert editor._palavras[ultima + 1].texto in depois
+    assert len(depois.split()) > 100
+
+
+@pytest.mark.gui
+def test_as_frases_ficam_uma_por_linha_na_janela(editor):
+    editor.selecionar(editor._ordem[0])
+    texto = editor._janelas["fim"].get("1.0", "end-1c")
+    linhas = [linha for linha in texto.split("\n") if linha.strip()]
+    assert len(linhas) > 10
+    assert all(linha.rstrip().endswith((".", "?", "!")) or "AQUI" in linha for linha in linhas[:-1])
+
+
+def clique_na_palavra(editor, ponta, indice):
+    """Simula o duplo clique sobre a palavra `indice` da janela da ponta."""
+    caixa = editor._janelas[ponta]._textbox
+    inicio = str(caixa.tag_ranges(f"pal_{indice}")[0])
+    # a janela de teste está escondida (sem medidas de tela): o índice sob o clique é dado direto
+    original = caixa.index
+    caixa.index = lambda ref: inicio if str(ref).startswith("@") else original(ref)
+    try:
+        return editor._duplo_clique(ponta, type("Evento", (), {"x": 1, "y": 1})())
+    finally:
+        del caixa.index
+
+
+@pytest.mark.gui
+def test_duplo_clique_numa_palavra_da_janela_move_o_inicio_para_ela(editor):
+    editor.selecionar(editor._ordem[0])
+    i = editor._atual
+    palavras = editor._palavras
+    primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
+    assert clique_na_palavra(editor, "inicio", primeira - 12) == "break"
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira - 12, ultima)
+
+
+@pytest.mark.gui
+def test_duplo_clique_numa_palavra_da_janela_do_fim_termina_o_corte_nela(editor):
+    editor.selecionar(editor._ordem[0])
+    i = editor._atual
+    palavras = editor._palavras
+    primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
+    clique_na_palavra(editor, "fim", ultima - 12)
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira, ultima - 12)
+
+
+@pytest.mark.gui
+def test_a_legenda_aparece_dividida_em_blocos_de_ate_duas_linhas(editor):
+    editor.selecionar(editor._ordem[0])
+    texto = editor._texto.get("1.0", "end-1c")
+    blocos = texto.split("\n\n")
+    assert len(blocos) > 3
+    for bloco in blocos:
+        linhas = bloco.split("\n")
+        assert 1 <= len(linhas) <= 2
+        assert all(len(linha) <= 24 + 12 for linha in linhas)  # a linha da legenda é curta
+
+
+@pytest.mark.gui
+def test_a_legenda_do_editor_e_a_que_o_video_vai_mostrar(editor):
+    from spurgeon.render.legenda import montar_eventos, palavras_do_short
+    from spurgeon.shorts.edicao import palavras_com_a_legenda
+
+    editor.selecionar(editor._ordem[0])
+    corte = editor._cortes[editor._atual]
+    faladas = palavras_do_short(
+        palavras_com_a_legenda(editor._palavras, corte), corte.inicio, corte.fim
+    )
+    na_tela = []
+    for _inicio, _fim, texto in montar_eventos(faladas):
+        limpo = re.sub(r"\{[^}]*\}", "", texto).replace("\\N", "\n")
+        if not na_tela or na_tela[-1] != limpo:
+            na_tela.append(limpo)
+    assert editor._texto.get("1.0", "end-1c").split("\n\n") == na_tela
+
+
+@pytest.mark.gui
+def test_editar_a_legenda_e_sair_do_campo_refaz_as_quebras_sem_mexer_nas_palavras(editor):
+    editor.selecionar(editor._ordem[0])
+    caixa = editor._texto._textbox
+    # junta tudo numa linha só e acrescenta uma palavra grande no começo
+    palavras = editor._texto.get("1.0", "end-1c").split()
+    editor._texto.delete("1.0", "end")
+    editor._texto.insert("1.0", "Extraordinariamente " + " ".join(palavras))
+    editor._ao_editar_legenda()
+    editor._reorganizar_legenda()
+    texto = caixa.get("1.0", "end-1c")
+    assert texto.split() == ["Extraordinariamente", *palavras]  # as palavras são as mesmas
+    assert "\n\n" in texto and texto.startswith("Extraordinariamente")
+    assert "legenda editada" in editor._rotulo_editada.cget("text")
+    assert all(len(b.split("\n")) <= 2 for b in texto.split("\n\n"))
+
+
+@pytest.mark.gui
+def test_a_reorganizacao_nao_apaga_as_marcas_das_palavras(editor):
+    editor.selecionar(editor._ordem[0])
+    caixa = editor._texto._textbox
+    caixa.tag_add("marca_teste", "1.0", "1.5")
+    editor._texto.insert("end", " ")  # só mexe nos espaços
+    editor._reorganizar_legenda()
+    assert caixa.tag_ranges("marca_teste")
+
+
+@pytest.mark.gui
+def test_legenda_sem_mudar_palavras_nao_conta_como_editada_depois_de_reorganizar(editor):
+    editor.selecionar(editor._ordem[0])
+    texto = editor._texto.get("1.0", "end-1c")
+    editor._texto.delete("1.0", "end")
+    editor._texto.insert("1.0", texto.replace("\n\n", " ").replace("\n", " "))
+    editor._reorganizar_legenda()
+    editor._guardar_detalhe()
+    assert editor._cortes[editor._atual].legenda == ""
+    assert editor._texto.get("1.0", "end-1c") == texto

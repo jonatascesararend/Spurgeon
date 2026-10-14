@@ -7,13 +7,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from spurgeon.render.legenda import blocos_de_linhas, palavras_do_short, texto_em_blocos
 from spurgeon.shorts.analise import separar_frases
 from spurgeon.shorts.dados import Corte, Frase
 from spurgeon.shorts.selecao import respiro_nas_pontas
 from spurgeon.transcricao.edicao import aplicar_edicao, separar_pontuacao
 from spurgeon.transcricao.formato import Palavra
 
-DURACAO_MAXIMA_S = 60.0
+DURACAO_MAXIMA_S = 60.0  # o limite de um Short: acima disso o corte não pode virar Short
 DURACAO_MINIMA_S = 10.0
 NOTA_ALTA = 70.0
 NOTA_MEDIA = 50.0
@@ -21,6 +22,7 @@ _TOLERANCIA_S = 0.001
 _PAUSA_SEM_VIZINHA_S = 5.0
 
 Ponta = Literal["inicio", "fim"]
+AVISO_ACIMA_DO_LIMITE = "Com mais de 60 segundos o vídeo não pode ser um Short."
 
 
 class LimiteInvalido(ValueError):
@@ -66,11 +68,17 @@ def _com_limites(palavras: Sequence[Palavra], corte: Corte, primeira: int, ultim
     )
 
 
+def passa_do_limite(corte: Corte) -> bool:
+    """O corte tem mais de 60 s (e por isso não pode ser um Short)?"""
+    return corte.duracao > DURACAO_MAXIMA_S + _TOLERANCIA_S
+
+
 def mover_limite(palavras: Sequence[Palavra], corte: Corte, ponta: Ponta, passo: int) -> Corte:
     """Um novo corte com o início (ou o fim) deslocado `passo` palavras (+ avança, − recua).
 
-    Sempre cai em fronteira de palavra, com o respiro de costume. Levanta `LimiteInvalido` se o
-    resultado passar de 60 s, ficar com menos de 10 s ou sair da transcrição.
+    Sempre cai em fronteira de palavra, com o respiro de costume. Passar de 60 s é permitido (a
+    tela avisa, pois acima disso o corte não pode ser Short). Levanta `LimiteInvalido` se o
+    resultado ficar com menos de 10 s ou sair da transcrição.
     """
     primeira, ultima = indices_das_palavras(palavras, corte)
     if ponta == "inicio":
@@ -82,8 +90,6 @@ def mover_limite(palavras: Sequence[Palavra], corte: Corte, ponta: Ponta, passo:
     if primeira > ultima:
         raise LimiteInvalido("O corte ficaria sem nenhuma palavra.")
     novo = _com_limites(palavras, corte, primeira, ultima)
-    if novo.duracao > DURACAO_MAXIMA_S + _TOLERANCIA_S:
-        raise LimiteInvalido(f"O corte passaria de {DURACAO_MAXIMA_S:g} segundos.")
     if novo.duracao < DURACAO_MINIMA_S:
         raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")
     return novo
@@ -188,6 +194,50 @@ def contexto_das_pontas(
     )
 
 
+@dataclass(frozen=True)
+class PalavraNaJanela:
+    indice: int  # posição da palavra na transcrição inteira
+    texto: str
+    dentro: bool  # a palavra faz parte do corte?
+
+
+@dataclass(frozen=True)
+class JanelaDeContexto:
+    """Um trecho da transcrição ao redor de uma ponta do corte, com o que fica dentro e fora."""
+
+    ponta: Ponta
+    palavras: tuple[PalavraNaJanela, ...]
+    indice_do_limite: int  # a primeira palavra do corte (início) ou a última (fim)
+
+
+def janela_de_contexto(
+    palavras: Sequence[Palavra],
+    corte: Corte,
+    ponta: Ponta,
+    *,
+    fora: int = 220,
+    dentro: int = 60,
+) -> JanelaDeContexto:
+    """As palavras ao redor do início (ou do fim) do corte: `fora` além da ponta e `dentro` aquém.
+
+    Dá uma janela grande para a pessoa rolar o texto e ver o que fica de fora do Short (por exemplo
+    o começo de uma pergunta ou o argumento anterior), sem perder de vista onde o corte começa.
+    """
+    primeira, ultima = indices_das_palavras(palavras, corte)
+    if ponta == "inicio":
+        de, ate, limite = (
+            max(0, primeira - fora),
+            min(len(palavras) - 1, primeira + dentro),
+            primeira,
+        )
+    else:
+        de, ate, limite = max(0, ultima - dentro), min(len(palavras) - 1, ultima + fora), ultima
+    itens = tuple(
+        PalavraNaJanela(i, palavras[i].texto, primeira <= i <= ultima) for i in range(de, ate + 1)
+    )
+    return JanelaDeContexto(ponta, itens, limite)
+
+
 def ler_hashtags(texto: str) -> list[str]:
     """`fé, #Miquéias  shorts` → `['#fé', '#Miquéias', '#shorts']` (sem repetir)."""
     achadas: list[str] = []
@@ -234,8 +284,6 @@ def definir_limite(
     if primeira > ultima:
         raise LimiteInvalido("O início ficaria depois do fim.")
     novo = _com_limites(palavras, corte, primeira, ultima)
-    if novo.duracao > DURACAO_MAXIMA_S + _TOLERANCIA_S:
-        raise LimiteInvalido(f"O corte passaria de {DURACAO_MAXIMA_S:g} segundos.")
     if novo.duracao < DURACAO_MINIMA_S:
         raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")
     return novo
@@ -253,6 +301,21 @@ def palavras_do_corte(palavras: Sequence[Palavra], corte: Corte) -> list[Palavra
 def legenda_do_corte(palavras: Sequence[Palavra], corte: Corte) -> str:
     """O que aparece na legenda: a versão corrigida pela pessoa ou a da transcrição."""
     return corte.legenda or " ".join(p.texto for p in palavras_do_corte(palavras, corte))
+
+
+def legenda_em_blocos(palavras: Sequence[Palavra], corte: Corte, texto: str | None = None) -> str:
+    """A legenda do corte dividida como vai aparecer no vídeo.
+
+    Cada bloco tem até 2 linhas (separadas por Enter) e os blocos são separados por uma linha em
+    branco: a mesma divisão que a legenda queimada usa. `texto` é o que a pessoa digitou (para
+    reorganizar depois de uma edição); sem ele vale a legenda do corte.
+    """
+    dentro = palavras_do_corte(palavras, corte)
+    if texto is None:
+        base = palavras_com_a_legenda(palavras, corte)
+    else:
+        base = aplicar_edicao(dentro, texto) if dentro else []
+    return texto_em_blocos(blocos_de_linhas(palavras_do_short(base, corte.inicio, corte.fim)))
 
 
 def legenda_corrigida(palavras: Sequence[Palavra], corte: Corte, texto: str) -> str:

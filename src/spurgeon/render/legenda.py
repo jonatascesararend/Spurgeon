@@ -110,6 +110,31 @@ def posicao_da_quebra(textos: Sequence[str], max_caracteres: int) -> int | None:
     return min(range(1, len(textos)), key=custo)
 
 
+def blocos_de_linhas(
+    palavras: Sequence[PalavraDaLegenda], estilo: EstiloLegenda | None = None
+) -> list[list[str]]:
+    """O que aparece na tela, bloco a bloco: cada bloco tem uma ou duas linhas.
+
+    É a mesma divisão de `montar_eventos` (os mesmos grupos e as mesmas quebras), sem o karaokê,
+    para a pessoa ver no editor como a legenda vai ficar no vídeo.
+    """
+    e = estilo or EstiloLegenda()
+    blocos = []
+    for grupo in agrupar_em_frases(palavras, e):
+        textos = [p.texto for p in grupo]
+        quebra = posicao_da_quebra(textos, e.max_caracteres_por_linha)
+        if quebra is None:
+            blocos.append([" ".join(textos)])
+        else:
+            blocos.append([" ".join(textos[:quebra]), " ".join(textos[quebra:])])
+    return blocos
+
+
+def texto_em_blocos(blocos: Sequence[Sequence[str]]) -> str:
+    """As linhas de cada bloco separadas por Enter, e uma linha em branco entre os blocos."""
+    return "\n\n".join("\n".join(linhas) for linhas in blocos)
+
+
 def _tempo_ass(segundos: float) -> str:
     centesimos = round(max(0.0, segundos) * 100)
     horas, resto = divmod(centesimos, 360000)
