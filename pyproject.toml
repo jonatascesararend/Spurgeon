@@ -1,6 +1,6 @@
 [project]
 name = "spurgeon"
-version = "1.0.0"
+version = "1.1.0"
 description = "Studio Spurgeon: cortes e otimização de vídeos de sermões, aulas e Shorts"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -9,6 +9,7 @@ dependencies = [
     "platformdirs>=4.2",
     "psutil>=5.9",
     "tomli-w>=1.0",
+    "pillow>=10.3",  # marca d'água: ler a imagem, tirar o fundo e mostrar a miniatura
 ]
 
 [project.optional-dependencies]
@@ -19,6 +20,8 @@ ui = ["customtkinter>=5.2"]
 transcricao = [
     "faster-whisper>=1.1",
     "rapidfuzz>=3.9",
+    "pyspellchecker>=0.8",
+    "spylls>=0.1.7",
 ]
 # Seleção de cortes para os Shorts (Fase 4). O modelo de português do spaCy (40 MB) vem
 # direto da página oficial de modelos, pois não está no PyPI.
@@ -33,6 +36,8 @@ shorts = [
 ai = [
     "faster-whisper>=1.1",
     "rapidfuzz>=3.9",
+    "pyspellchecker>=0.8",
+    "spylls>=0.1.7",
     "spacy>=3.8,<3.9",
     "pt-core-news-md @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_md-3.8.0/pt_core_news_md-3.8.0-py3-none-any.whl",
     "ollama>=0.4",

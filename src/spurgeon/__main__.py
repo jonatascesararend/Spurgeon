@@ -87,6 +87,19 @@ def _processar(args: argparse.Namespace) -> int:
         valores.qualidade = args.qualidade
     valores.revisar_transcricao = False  # sem janela, ninguém para revisar
     valores.aprovar_cortes = False
+    valores.modo = args.modo
+    if args.introducao:
+        valores.introducao = True
+    if args.vinheta_final:
+        valores.vinheta_final = True
+    if args.marca:
+        valores.marca_dagua = True
+        valores.marca_imagem = str(args.marca)
+        valores.marca_canto = args.marca_canto
+        valores.marca_tamanho_pct = args.marca_tamanho
+        valores.marca_remover_fundo = args.marca_remover_fundo
+        valores.marca_no_video_longo = args.marca_em in ("longo", "ambos")
+        valores.marca_nos_shorts = args.marca_em in ("shorts", "ambos")
     if args.limiar_pausa:
         valores.limiar_pausa = args.limiar_pausa
     if args.pausa_residual:
@@ -238,6 +251,36 @@ def main(argv: list[str] | None = None) -> int:
         help="qualidade da renderização (padrão: a das configurações)",
     )
     processar.add_argument("--limiar-pausa", help="tamanho mínimo da pausa a cortar, em s (10,0)")
+    processar.add_argument(
+        "--modo",
+        choices=("completo", "so_shorts", "so_vinhetas"),
+        default="completo",
+        help="completo (padrão); só os Shorts, aproveitando o projeto; ou só juntar a "
+        "introdução e a vinheta a um vídeo longo já pronto",
+    )
+    processar.add_argument("--introducao", action="store_true", help="junta a introdução")
+    processar.add_argument("--vinheta-final", action="store_true", help="junta a vinheta final")
+    processar.add_argument("--marca", type=Path, help="imagem da marca d'água (PNG, JPG…)")
+    processar.add_argument(
+        "--marca-canto",
+        choices=("sup_esq", "sup_dir", "inf_esq", "inf_dir"),
+        default="inf_dir",
+        help="canto da marca d'água (padrão: inf_dir)",
+    )
+    processar.add_argument(
+        "--marca-tamanho", type=float, default=15.0, help="largura da marca, em %% do vídeo (15)"
+    )
+    processar.add_argument(
+        "--marca-remover-fundo",
+        action="store_true",
+        help="tira o fundo da imagem da marca (só vale se ela não tiver transparência)",
+    )
+    processar.add_argument(
+        "--marca-em",
+        choices=("longo", "shorts", "ambos"),
+        default="ambos",
+        help="onde a marca entra (padrão: ambos)",
+    )
     processar.add_argument("--pausa-residual", help="pausa mantida em cada corte, em s (1,0)")
     processar.set_defaults(funcao=_processar)
 

@@ -152,12 +152,14 @@ def test_opcao_irrelevante_nao_refaz_nada(pipeline, roteiro, contexto):
     assert roteiro.chamadas == []
 
 
-def test_arquivo_gerado_que_sumiu_refaz_a_etapa_e_as_seguintes(pipeline, roteiro, contexto):
+def test_arquivo_gerado_que_sumiu_so_refaz_a_propria_etapa(pipeline, roteiro, contexto):
+    # o arquivo reaparece igual: o que veio depois dele (a transcrição) continua valendo
     pipeline.executar(contexto)
     (contexto.pastas.work / "a.txt").unlink()
     roteiro.chamadas.clear()
     pipeline.executar(contexto)
-    assert roteiro.chamadas == ["a", "b"]
+    assert roteiro.chamadas == ["a"]
+    assert status(contexto)["b"] == StatusEtapa.CONCLUIDA
 
 
 def test_etapa_inativa_fica_fora_do_estado_e_entra_quando_ativada(pipeline, roteiro, contexto):

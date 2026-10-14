@@ -213,7 +213,7 @@ class RefinarPausas(Etapa):
     peso = 0.2
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_video_longo
+        return opcoes.processa_video_longo
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.pausas]
@@ -243,7 +243,7 @@ class GerarSrt(Etapa):
     peso = 0.3
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_video_longo
+        return opcoes.processa_video_longo
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.srt]

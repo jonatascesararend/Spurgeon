@@ -36,7 +36,22 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   encerra, pausar suspende o processo de verdade. Dentro de uma etapa use `ctx.ffmpeg(...)`.
 - Medidas de silêncio: use janelas RMS (`audio/pausas.py`), nunca o `silencedetect` do FFmpeg
   (compara picos instantâneos, não o RMS do ruído de fundo).
-- Etapas que geram o vídeo final devem ter `entrega = True`; sem nenhuma, `_work/` é mantida.
+- Etapas que geram o vídeo final devem ter `entrega = True`; sem nenhuma, `_work/` é mantida. Ao
+  concluir, só os arquivos pesados de `_work/` somem: os `.json` da análise ficam (permitem reabrir o
+  projeto sem refazer a IA; nunca volte a apagá-los).
+- Modos (`OpcoesProcessamento.modo`): `completo`, `so_shorts`, `so_vinhetas`. Use `processa_video_longo`
+  e `processa_shorts`, não `gerar_*`, para saber o que roda; etapas fora do modo ficam em
+  `estado.etapas_guardadas`. Só vinhetas = etapa `adicionar_vinhetas` (emenda sem recodificar).
+- Shorts já renderizados: `_work/shorts_renderizados.json` (por id do corte, com assinatura). O corte,
+  a legenda corrigida (`Corte.legenda`) e a marca d'água entram na assinatura; nada é apagado (os
+  desmarcados vão para `shorts_gerados/desmarcados/`).
+- Marca d'água em `render/marca.py` (overlay numa entrada extra de imagem); PNG com transparência
+  vale como está, o resto só perde o fundo se a pessoa pedir.
+- Interface: `ui/studio_shorts.py` (`EditorDeCortes`) serve à aba "Studio Shorts" e à janela de
+  aprovação; `ui/verificacao.py` (`PainelDePortugues`) serve à revisão da transcrição e à legenda.
+  O verificador (`transcricao/verificador.py`) é offline: Hunspell pt_BR via `spylls` diz o que
+  existe; `pyspellchecker` só sugere. Tk: ao trocar a imagem de um rótulo, ponha a nova antes de
+  soltar a antiga (senão dá "image pyimageN doesn't exist"); `CTkLabel.configure(image=None)` não limpa.
 - O áudio do sermão real é dual-mono (extraído em mono); o vídeo é HEVC 10 bits HDR (HLG).
 - Cada etapa do pipeline é uma `Etapa` (`core/pipeline.py`): idempotente, declara `depende_de`,
   `opcoes_relevantes` e `artefatos`. O estado fica em `estado.json` (escrita atômica).
@@ -55,6 +70,8 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
 - Testes de render usam vídeos sintéticos; o de sincronia usa quadros numerados em binário e ruído
   branco. `tests/test_render.py` leva ~2 min; a suíte inteira ~7 min.
 - Commits: o hook do pre-commit chama `uv`; no Git Bash ponha a pasta do winget do uv no PATH.
+  No Git Bash não há `python`, e heredocs com apóstrofos às vezes quebram: use a ferramenta de
+  edição ou um script para textos assim.
 
 ## Hardware desta máquina (alvo da v1)
 

@@ -23,6 +23,7 @@ def etapas_registradas() -> list[Etapa]:
     from spurgeon.render.finalizar import Finalizar
     from spurgeon.render.shorts import RenderizarShorts
     from spurgeon.render.video_longo import RenderizarVideoLongo
+    from spurgeon.render.vinhetas import AdicionarVinhetas
     from spurgeon.shorts.etapas import (
         AnalisarShorts,
         AprovarCortes,
@@ -50,5 +51,6 @@ def etapas_registradas() -> list[Etapa]:
         AprovarCortes(),
         RenderizarShorts(),
         RenderizarVideoLongo(),
+        AdicionarVinhetas(),
         Finalizar(),
     ]

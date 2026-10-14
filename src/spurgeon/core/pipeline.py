@@ -26,6 +26,7 @@ from spurgeon.core.sinais import SinalControle
 
 _INTERVALO_SALVAR_PROGRESSO_S = 1.0
 _INTERVALO_PAUSA_S = 0.2
+MOTIVO_ARQUIVO_SUMIU = "um arquivo gerado por ela não existe mais"
 
 
 class ResultadoEtapa(StrEnum):
@@ -136,6 +137,8 @@ class Etapa(ABC):
     #: True nas etapas que geram os arquivos finais (vídeo longo, Shorts). Só quando alguma
     #: delas roda é que os arquivos intermediários são apagados ao concluir.
     entrega: ClassVar[bool] = False
+    #: True nas etapas do modo "só introdução e vinheta" (todas as outras ficam de fora).
+    no_modo_vinhetas: ClassVar[bool] = False
 
     def ativa(self, opcoes: OpcoesProcessamento) -> bool:
         return True
@@ -169,23 +172,33 @@ class Pipeline:
         self.etapas = list(etapas)
 
     def ativas(self, opcoes: OpcoesProcessamento) -> list[Etapa]:
-        return [e for e in self.etapas if e.ativa(opcoes)]
+        ativas = [e for e in self.etapas if e.ativa(opcoes)]
+        if opcoes.so_vinhetas:
+            return [e for e in ativas if e.no_modo_vinhetas]
+        return ativas
 
     def preparar(self, ctx: ContextoProjeto) -> None:
         """Alinha o estado com as opções atuais: refaz o que ficou desatualizado."""
         ativas = self.ativas(ctx.opcoes)
-        existentes = {r.id: r for r in ctx.estado.etapas}
+        existentes = {r.id: r for r in [*ctx.estado.etapas_guardadas, *ctx.estado.etapas]}
         ctx.estado.etapas = [existentes.get(e.id) or EstadoEtapa(id=e.id) for e in ativas]
+        ids_ativos = {e.id for e in ativas}
+        ctx.estado.etapas_guardadas = [
+            registro for id_, registro in existentes.items() if id_ not in ids_ativos
+        ]
 
         # `pendentes` reúne as etapas que vão rodar de novo; quem depende delas também roda.
+        # Exceção: uma etapa só refeita porque o arquivo dela sumiu (a limpeza de `_work/` apaga os
+        # áudios) produz de novo o mesmo resultado, então não invalida quem veio depois.
         pendentes: set[str] = set()
         for etapa in ativas:
             registro = ctx.estado.etapa(etapa.id)
             motivo = self._motivo_para_refazer(etapa, registro, ctx, pendentes)
+            regenerando = motivo == MOTIVO_ARQUIVO_SUMIU
             if motivo:
                 ctx.log.info("Etapa '%s' será refeita: %s.", etapa.nome, motivo)
                 registro.zerar()
-            if registro.status == StatusEtapa.PENDENTE:
+            if registro.status == StatusEtapa.PENDENTE and not regenerando:
                 pendentes.add(etapa.id)
         ctx.salvar()
 
@@ -204,7 +217,7 @@ class Pipeline:
         if registro.status == StatusEtapa.CONCLUIDA and not all(
             p.exists() for p in etapa.artefatos(ctx)
         ):
-            return "um arquivo gerado por ela não existe mais"
+            return MOTIVO_ARQUIVO_SUMIU
         return None
 
     def executar(self, ctx: ContextoProjeto) -> ResultadoPipeline:

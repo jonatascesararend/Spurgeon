@@ -1,6 +1,6 @@
 # Guia de Projeto: Studio Spurgeon de Cortes e Otimização de Vídeos (Sermões, Aulas e Shorts)
 
-> **Versão 3 — 2026-10-13: versão 1.0 do aplicativo** (Fases 0 a 6 concluídas e testadas com o sermão real de 65 min).
+> **Versão 4 — 2026-10-13: versão 1.1 do aplicativo.** A 1.0 (Fases 0 a 6) foi testada com o sermão real de 65 min; a 1.1 (Fase 7) acrescenta a marca d'água, os modos "só Shorts" e "só vinhetas", a abertura de projetos, a aba **Studio Shorts** e o verificador de português.
 > As decisões da pré-entrevista estão confirmadas pelo autor; a seção 6 registra as decisões, as escolhas feitas sem consulta e as pendências.
 
 ---
@@ -30,9 +30,9 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 
 ### 1.3 Fluxo geral do usuário
 
-1. Selecionar o vídeo longo (a janela abre em `Downloads/`) ou colar o caminho.
+1. Selecionar o vídeo longo (a janela abre em `Downloads/`) ou colar o caminho — **ou** clicar em **Abrir projeto…** e escolher a pasta de um projeto já criado, para aproveitar tudo o que ele já tem (a tela volta com o nome, a data, o vídeo e as opções do projeto).
 2. Conferir nome do sermão e data da gravação (preenchidos automaticamente, editáveis).
-3. Escolher as opções de processamento e clicar em **Iniciar Processamento**.
+3. Escolher o **modo** (Tudo, Só Shorts ou Só vinhetas), as opções de processamento e a marca d'água, e clicar em **Iniciar Processamento**.
 4. O app cria a pasta do projeto, **abre-a no Explorer** e inicia o log `processamento.log`.
 5. O pipeline roda em segundo plano (subprocesso) com barra de progresso, tempo restante estimado e painel de logs em tempo real.
 6. Em dois pontos o processo **pausa para revisão humana** (transcrição e cortes dos Shorts). Esses pontos podem ser desligados.
@@ -67,8 +67,10 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
    ▼
 [9] Renderizar Shorts (9:16 + legenda ASS) ─► shorts_gerados/
    ▼
-[10] Finalizar: apagar _work/, registrar resumo no log
+[10] Finalizar: apagar os intermediários pesados de _work/, registrar resumo no log
 ```
+
+**Modos (v1.1).** O mesmo pipeline roda em três modos (`OpcoesProcessamento.modo`): `completo` (tudo o que estiver marcado); `so_shorts` (os passos do vídeo longo ficam de fora, e a transcrição e a análise já feitas são aproveitadas); `so_vinhetas` (só a etapa `adicionar_vinhetas`: codifica a introdução e a vinheta com o mesmo preset do vídeo, emenda sem recodificar o vídeo principal e desloca o `.srt`; o resultado é `video_longo_com_vinhetas.mp4`). `Pipeline.ativas` filtra as etapas pelo modo, e o registro das etapas fora do modo fica em `estado.etapas_guardadas`, para não se perder o que já foi feito.
 
 **Por que transcrever uma vez antes de cortar silêncio:** o .srt sempre bate com o vídeo final, os Shorts saem do material original, e não é preciso retranscrever depois de cortar. O vínculo entre as duas linhas do tempo é um **mapa de tempo** (lista de trechos mantidos → função `t_original → t_editado`).
 
@@ -101,13 +103,13 @@ Spurgeon/
 ├── src/spurgeon/
 │   ├── core/                   ← config, log, estado, hardware, pipeline, ffmpeg, mapa de tempo
 │   ├── audio/                  ← extrair, limpar, normalizar
-│   ├── transcricao/            ← whisper, vocabulário, srt
-│   ├── shorts/                 ← nlp, llm, candidatos, metadados
-│   ├── render/                 ← video_longo, shorts, ass
-│   └── ui/                     ← janela principal, painéis de revisão
+│   ├── transcricao/            ← whisper, vocabulário, srt, dicionário e verificador de português
+│   ├── shorts/                 ← nlp, llm, candidatos, metadados, edição dos cortes
+│   ├── render/                 ← video_longo, shorts, ass, marca d'água, vinhetas
+│   └── ui/                     ← janela principal, abas, painéis de revisão, Studio Shorts
 ├── tests/
 ├── Downloads/                  ← ENTRADA: vídeos brutos          (ignorado no git)
-├── recursos/                   ← introdução, vinheta, vocabulário, fontes
+├── recursos/                   ← introdução, vinheta, vocabulário, fontes, marca d'água, dicionários
 ├── modelos/                    ← modelos baixados (Whisper, spaCy)  (ignorado no git)
 └── Projetos/                   ← SAÍDA, criada pelo app           (ignorado no git)
 ```
@@ -381,12 +383,13 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
     │   ├── 🎬 short_01_<nome_dado_pelo_llm>.mp4
     │   ├── 📄 short_01_<nome_dado_pelo_llm>.txt   ← título, descrição e hashtags
     │   └── ...
-    └── 📁 _work/                      ← intermediários (apagada ao concluir)
+    └── 📁 _work/                      ← intermediários (os pesados são apagados ao concluir; os .json da análise ficam)
 ```
 
 * **Nome e data:** a pasta usa a data da gravação. Se a pasta já existir e for o **mesmo vídeo** (conferido por hash), o app **retoma o projeto**. Se for outro vídeo com o mesmo nome, ele pergunta antes de misturar os arquivos.
 * **Vídeo original:** é **referenciado** (não copiado) pelo caminho.
-* **Intermediários:** `_work/` é apagada **só após o sucesso total**. Se algo falhar ou for cancelado, ela permanece para a retomada (opção "manter intermediários" no Avançado).
+* **Intermediários:** os arquivos pesados de `_work/` (áudios, partes do vídeo, legendas ASS, fontes) são apagados **só após o sucesso total**. Se algo falhar ou for cancelado, ela permanece para a retomada (opção "manter intermediários" no Avançado). **Desde a 1.1 os `.json` da análise ficam** (candidatos, notas da IA, cortes e títulos dos Shorts, registro do que já foi renderizado, medidas de volume): são poucos MB e permitem reabrir o projeto, escolher outros Shorts e corrigir legendas sem refazer a análise. Os áudios são refeitos sob demanda (~11 min no sermão real) se for preciso renderizar de novo.
+  * *Lição (2026-10-13):* antes da 1.1 a limpeza apagava tudo, e a seleção dos Shorts do sermão real só pôde ser recuperada refazendo a avaliação da IA (~35 min). Por isso a análise é preservada.
 * **Log (`processamento.log`):** texto legível com horário, nível e etapa; erros com traceback e o que o sistema fez em seguida.
 
 **Implementação (concluída em 2026-10-13).**
@@ -396,6 +399,36 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 * **Tempo estimado antes de começar:** a janela mostra, ao escolher o vídeo e a cada mudança de opção, o tempo estimado total e o da renderização nesta máquina (HDR ou não, preset, Shorts, modelo do Whisper).
 * **Progresso:** o peso de cada renderização no progresso total e no tempo restante acompanha a qualidade escolhida (`Etapa.peso_para(opcoes)`).
 * **Linha de comando:** `--shorts`, `--legendas` e `--qualidade maxima|alta|equilibrado|rapido`; as revisões ficam desligadas sem janela.
+
+### Fase 7: Studio Shorts, marca d'água, modos e português (versão 1.1) — concluída em 2026-10-13
+
+Pedidos do autor depois da 1.0, todos feitos e testados.
+
+**Marca d'água** (`render/marca.py`, cartão "4. Marca d'água", `ui/painel_marca.py`).
+
+* A imagem é escolhida na janela. **PNG com fundo transparente é usado como está.** Qualquer outra imagem (JPG, WebP… ou PNG sem transparência) ganha a opção **"Remover o fundo da imagem"**: a cor do fundo é a da borda, e só some o que está ligado à borda por pixels dessa cor (o branco *dentro* de um logotipo fica), com a orla suavizada e as margens vazias cortadas. O resultado é um PNG com canal alfa em `_work/`.
+* **Canto** (superior/inferior × esquerdo/direito) e **tamanho** (3 a 50% da largura do vídeo, 15% por padrão; margem de 3%), com duas prévias na tela: a imagem sobre um xadrez e um quadro 16:9 com a marca no canto e no tamanho escolhidos. Marcas separadas para o **vídeo longo** e para os **Shorts**.
+* No FFmpeg a marca é uma entrada extra de imagem (`overlay`): no vídeo longo, depois da conversão HDR→SDR; nos Shorts, entre a ampliação e a legenda queimada (a legenda fica por cima). A assinatura de cada render inclui o conteúdo da marca, o canto e o tamanho: mudar a marca renderiza de novo só o que ela afeta.
+
+**Modos e projetos abertos** (`ui/painel_opcoes.py`, `ui/painel_entrada.py`, `ui/app.py`).
+
+* Seletor **Tudo / Só Shorts / Só vinhetas** e botão **Abrir projeto…**: lê o `estado.json`, preenche nome, data (a do projeto, não a do arquivo), vídeo e opções, mostra o que o projeto já tem e abre a aba Studio Shorts se os cortes existirem. Se o vídeo original sumiu, ainda dá para ver e editar os cortes; renderizar pede o vídeo.
+* "Só vinhetas" exige um projeto com o vídeo longo pronto (a tela avisa) e acrescenta o que faltar sem recodificar o vídeo (vídeo anterior preservado; `.srt` deslocado pelo tamanho da introdução).
+* A linha de comando ganhou `--modo`, `--introducao`, `--vinheta-final` e `--marca`, `--marca-canto`, `--marca-tamanho`, `--marca-remover-fundo`, `--marca-em`.
+
+**Aba Studio Shorts** (`ui/studio_shorts.py` = `EditorDeCortes`, `ui/aba_studio.py`; a janela de aprovação dos cortes usa o mesmo editor).
+
+* A aba fica **desativada** até os cortes existirem (áudio normalizado, legenda extraída e Shorts calculados) e **travada** com o motivo enquanto um processamento roda ou espera revisão.
+* Cada Short sugerido aparece com **categoria, início–fim, duração, título, trecho da legenda, nota calculada** e o estado: *✔ renderizado*, *⟳ alterado: renderizar de novo* ou nada (novo). O botão **Renderizar N Shorts** grava as alterações e roda o modo "só Shorts" (sem pausas de revisão); o que já está pronto e não mudou não é refeito, os desmarcados vão para `shorts_gerados/desmarcados/` (nada é apagado) e a tela estima o tempo e avisa se o áudio precisar ser refeito.
+* **Início e fim:** campos de tempo editáveis (`8:21,3`, caem na palavra mais próxima) e botões para **acrescentar ou tirar uma palavra ou uma frase** em cada ponta, sempre com no máximo 60 s e no mínimo 10 s. Uma caixa mostra as palavras que ficam **de fora** (em cinza) ao lado das que entram, e avisos apontam o que costuma dar errado: começar no meio de uma frase ou com "mas/então/isso…", terminar no meio de uma frase ou numa pergunta (a resposta pode ter ficado de fora). Serve para não cortar uma pergunta retórica ao meio nem abrir com um pedaço de outro argumento.
+* **Legenda:** editável por Short (`Corte.legenda`), com os tempos da fala preservados; "Desfazer correções" volta ao texto da transcrição. A correção entra na assinatura do Short quando a legenda é queimada (opção "Legendas dinâmicas"), então corrigir e renderizar de novo refaz só aquele Short. Mudar o início ou o fim descarta as correções daquele corte (o texto-base mudou) e a tela avisa.
+
+**Verificador de português** (`transcricao/verificador.py`, `transcricao/dicionario.py`, `ui/verificacao.py`).
+
+* Na **revisão da transcrição** (botão "Verificar português" e F8) e na **legenda de cada Short**. Tudo offline: o dicionário **Hunspell pt_BR** do projeto VERO/LibreOffice (`recursos/dicionarios/pt_BR/`, LGPLv3/MPL, lido pelo `spylls`) diz se a palavra existe; o `pyspellchecker` e a distância de edição só sugerem, e cada sugestão passa pelo dicionário brasileiro (nada de "incómodo" ou "aspetos"). "Mais sugestões" chama o Hunspell, melhor mas lento.
+* Acha: palavra fora do dicionário (nomes do `vocabulario_teologico.txt` e palavras que se repetem 3 vezes ou mais no texto não contam), **palavra repetida** ("nós nós"), **frase começando em minúscula** e nomes sagrados em minúscula, **pontuação solta** (`palavra ,`), **hífen solto** do Whisper (`chamá -las`) e parênteses sem par. No sermão real: ~60 avisos em 302 trechos, quase todos corrigíveis com um clique ("Corrigir os 27 de pontuação").
+* Cada aviso mostra sugestões, **Ignorar** (vale até fechar o aplicativo) e **Está certa: guardar no vocabulário** (grava no `vocabulario_teologico.txt`, que também melhora o Whisper nas próximas transcrições).
+* **Não** corrige concordância, crase nem sentido. Para isso seria preciso o LanguageTool (Java, ~300 MB): fica como opção futura.
 
 ---
 
@@ -430,7 +463,7 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 
 * Preview de vídeo na interface; fila de vários vídeos.
 * Enquadramento com rastreamento de rosto ou fundo desfocado (hoje: recorte central fixo).
-* Logo, marca d'água, título fixo no vídeo; introdução e vinheta nos Shorts.
+* Título fixo no vídeo; introdução e vinheta nos Shorts. (A marca d'água entrou na 1.1.)
 * Remoção de muletas de fala ("é...", "hum").
 * Diarização (identificar vários falantes).
 * Empacotamento em `.exe` (PyInstaller), a fazer depois para distribuir a outros PCs.
@@ -486,3 +519,7 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
 6. **Shorts numerados pela ordem em que aparecem no sermão** (`short_01_…`), não pela nota.
 7. **Todos os cortes sugeridos vêm marcados** (20) e as reservas desmarcadas (8), como pedido; a nota mínima para vir marcado é 45 (opção avançada).
 8. **Espaço em disco:** este PC tem pouco espaço no C: (7 a 10 GB livres durante o desenvolvimento). O vídeo longo em Máxima ocupa ~2,7 GB e os 20 Shorts ~1,2 GB; a junção tem um modo econômico, mas o modelo do Ollama (5 GB) e o do Whisper (1,5 GB) pesam. Se for processar vários sermões, vale liberar espaço ou mover `Projetos/` para outro disco.
+9. **(1.1) "Se for PNG, remover o fundo":** li o pedido como "PNG com transparência vale como está; se não for PNG, ou o PNG não tiver transparência, ofereça remover o fundo". Remover o fundo só funciona bem com fundo liso; a prévia mostra o resultado antes de renderizar.
+10. **(1.1) Português:** o verificador usa o dicionário `pt_BR` do LibreOffice (aceita algumas formas de Portugal, como "facto" ou "aspeto", mas recusa as grafias do acordo europeu como "perceção"). Não é um corretor gramatical completo (seção da Fase 7).
+11. **(1.1) Legenda corrigida** só aparece no vídeo com as "Legendas dinâmicas" ligadas; sem elas a correção fica guardada no corte.
+12. **(1.1) Modos persistem como "Tudo":** o modo escolhido vale só para aquela execução; o aplicativo sempre abre em "Tudo" e lembra o que for a marca d'água e as demais opções.

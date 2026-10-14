@@ -17,3 +17,6 @@ uv.lock text eol=lf
 *.wav binary
 *.ttf binary
 *.otf binary
+
+# Dicionário Hunspell: lido como está (um CR sobrando quebra as marcas de cada palavra).
+recursos/dicionarios/** -text

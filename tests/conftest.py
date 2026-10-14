@@ -9,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from spurgeon.core.config import ConfigApp, OpcoesProcessamento, Pastas
+from spurgeon.core.config import ConfigApp, OpcoesProcessamento, Pastas, raiz_repositorio
 from spurgeon.core.erros import ErroConfiguracao
 from spurgeon.core.estado import EntradaVideo, Estado
 from spurgeon.core.ffmpeg import localizar_binario
 from spurgeon.core.log import criar_log_projeto, encerrar_log
 from spurgeon.core.pipeline import ContextoProjeto
 from spurgeon.core.projeto import PastasProjeto
+from spurgeon.transcricao.formato import Bloco, Palavra, Segmento, Transcricao
 
 
 def pytest_collection_modifyitems(items):
@@ -172,3 +173,55 @@ def contexto(tmp_path, config_tmp, video_falso) -> Iterator[ContextoProjeto]:
         log=log,
     )
     encerrar_log(log)
+
+
+@pytest.fixture(scope="session")
+def video_hdr(tmp_path_factory) -> Path:
+    """Vídeo de 3 s em HEVC 10 bits marcado como HDR HLG (BT.2020), como o do iPhone."""
+    destino = tmp_path_factory.mktemp("hdr") / "hdr.mp4"
+    subprocess.run(
+        [
+            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30000/1001:duration=3",
+            "-pix_fmt", "yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
+            "-x265-params",
+            "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:log-level=error",
+            str(destino),
+        ],
+        check=True,
+    )  # fmt: skip
+    return destino
+
+
+@pytest.fixture
+def ctx_shorts(contexto, video_hdr, audio_com_pausas, tmp_path):
+    """Contexto de Shorts sobre o vídeo HDR de 3 s, com fonte e vocabulário do repositório."""
+    contexto.opcoes.gerar_shorts = True
+    contexto.opcoes.qualidade = "rapido"
+    contexto.opcoes.legendas_dinamicas = True
+    contexto.opcoes.normalizar_volume = True
+    contexto.estado.entrada = EntradaVideo.de_arquivo(video_hdr)
+    contexto.config.pastas.recursos = raiz_repositorio() / "recursos"
+    contexto.pastas.work.mkdir(parents=True, exist_ok=True)
+    contexto.pastas.audio_normalizado.write_bytes(audio_com_pausas.read_bytes())
+    palavras = [
+        Palavra("Graça", 0.1, 0.5), Palavra("e", 0.6, 0.7), Palavra("paz,", 0.8, 1.2),
+        Palavra("irmãos.", 1.4, 1.9),
+    ]  # fmt: skip
+    Transcricao("t", 3.0, blocos=[Bloco(0, 3, [Segmento(palavras)], True)]).salvar(
+        contexto.pastas.transcricao
+    )
+    return contexto
+
+
+@pytest.fixture(scope="session")
+def dicionario_br():
+    """O dicionário pt_BR já carregado (leva alguns segundos; vale para a sessão toda)."""
+    pytest.importorskip("spylls")
+    pytest.importorskip("spellchecker")
+    from spurgeon.transcricao.dicionario import DicionarioBr
+
+    dicionario = DicionarioBr(Pastas().dicionario_pt_br)
+    assert dicionario.disponivel, "recursos/dicionarios/pt_BR/ deve estar no repositório"
+    dicionario.preparar()
+    return dicionario

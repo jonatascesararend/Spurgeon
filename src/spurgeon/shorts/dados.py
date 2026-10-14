@@ -91,6 +91,8 @@ class Corte:
     incluir: bool = True
     reserva: bool = False  # sugerido além do limite; só entra se a pessoa marcar
     editado: bool = False  # a pessoa mexeu no início ou no fim; a nota é a do corte original
+    #: a legenda corrigida pela pessoa (todas as palavras do corte); vazia = a da transcrição
+    legenda: str = ""
 
     @property
     def duracao(self) -> float:

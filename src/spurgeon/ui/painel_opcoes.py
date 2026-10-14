@@ -8,8 +8,10 @@ import customtkinter as ctk
 
 from spurgeon.core.config import INFO_MODELOS_WHISPER, PRESETS_X264, Pastas
 from spurgeon.ui.formulario import (
+    DICAS_MODO,
     ROTULO_USO_75,
     ROTULO_USO_100,
+    ROTULOS_MODO,
     ValoresFormulario,
     aviso_qualidade,
     aviso_whisper,
@@ -17,6 +19,7 @@ from spurgeon.ui.formulario import (
     rotulos_qualidade,
     rotulos_whisper,
 )
+from spurgeon.ui.painel_marca import PainelMarca
 
 _COR_DICA = "gray60"
 _COR_AVISO = "#e0a030"
@@ -43,6 +46,8 @@ class PainelOpcoes(ctk.CTkFrame):
         self._todos: list[ctk.CTkBaseClass] = []
         self._por_nome: dict[str, ctk.CTkBaseClass] = {}
 
+        self._rotulos_modo = {rotulo: modo for modo, rotulo in ROTULOS_MODO.items()}
+        self.modo = ctk.StringVar(value=ROTULOS_MODO[valores.modo])
         self.uso = ctk.IntVar(value=valores.uso_cpu)
         self.whisper = ctk.StringVar()
         self.qualidade = ctk.StringVar()
@@ -81,6 +86,8 @@ class PainelOpcoes(ctk.CTkFrame):
 
         self._montar_processamento()
         self._montar_gerar()
+        self.marca = PainelMarca(self, valores, pasta_inicial=pastas.recursos, ao_mudar=self._mudou)
+        self.marca.pack(fill="x", pady=(0, 10))
         self._montar_revisao()
         self._montar_avancado()
         self.selecionar_whisper(valores.whisper_modelo)
@@ -182,6 +189,11 @@ class PainelOpcoes(ctk.CTkFrame):
 
     def _montar_gerar(self) -> None:
         c = self._cartao("3. O que gerar")
+        self._seletor_modo = ctk.CTkSegmentedButton(
+            c, values=list(ROTULOS_MODO.values()), variable=self.modo, command=self._mudou_modo
+        )
+        self._seletor_modo.pack(fill="x", padx=12, pady=(0, 2))
+        self._dica_modo = self._dica(c)
         self._check(c, "Limpar áudio (DeepFilterNet)", "limpar_audio")
         self._check(c, "Normalizar volume", "normalizar_volume")
         self._check(c, "Gerar vídeo completo sem silêncios + arquivo .srt", "gerar_video_longo")
@@ -202,7 +214,7 @@ class PainelOpcoes(ctk.CTkFrame):
         )
 
     def _montar_revisao(self) -> None:
-        c = self._cartao("4. Pontos de revisão")
+        c = self._cartao("5. Pontos de revisão")
         self._check(
             c, "Pausar para revisar a transcrição (.srt) antes de continuar", "revisar_transcricao"
         )
@@ -287,12 +299,28 @@ class PainelOpcoes(ctk.CTkFrame):
     # --- leitura e estado ---------------------------------------------------------------------
     def valores(self) -> ValoresFormulario:
         return ValoresFormulario(
+            modo=self._rotulos_modo.get(self.modo.get(), "completo"),
             uso_cpu=self.uso.get(),
             whisper_modelo=self._rotulos_whisper.get(self.whisper.get(), "large-v3-turbo"),
             qualidade=self._rotulos_qualidade.get(self.qualidade.get(), "maxima"),
             **{nome: var.get() for nome, var in self.bools.items()},
             **{nome: var.get() for nome, var in self.textos.items()},
+            **self.marca.valores(),
         )
+
+    def aplicar_valores(self, v: ValoresFormulario) -> None:
+        """Põe na tela as opções de um projeto aberto (ou as padrão)."""
+        self.modo.set(ROTULOS_MODO[v.modo])
+        self.uso.set(v.uso_cpu)
+        for nome, var in self.bools.items():
+            var.set(getattr(v, nome))
+        for nome, var in self.textos.items():
+            var.set(getattr(v, nome))
+        self.selecionar_whisper(v.whisper_modelo)
+        self.selecionar_qualidade(v.qualidade)
+        self.marca.aplicar(v)
+        self.atualizar_habilitacoes()
+        self._ao_mudar()
 
     def selecionar_whisper(self, modelo: str) -> None:
         for rotulo, nome in self._rotulos_whisper.items():
@@ -324,6 +352,15 @@ class PainelOpcoes(ctk.CTkFrame):
     def _mudou_menu(self, _valor: str) -> None:
         self._mudou()
 
+    def _mudou_modo(self, _valor: str) -> None:
+        if self.valores().modo == "so_shorts":
+            self.bools["gerar_shorts"].set(True)  # neste modo os Shorts são o produto
+        self._mudou()
+
+    def definir_modo(self, modo: str) -> None:
+        self.modo.set(ROTULOS_MODO[modo])
+        self._mudou_modo("")
+
     def atualizar_habilitacoes(self) -> None:
         v = self.valores()
         intro = self._pastas.introducao.exists()
@@ -333,7 +370,14 @@ class PainelOpcoes(ctk.CTkFrame):
 
         for widget in self._todos:
             widget.configure(state="normal" if livre else "disabled")
+        self._seletor_modo.configure(state="normal" if livre else "disabled")
+        self._dica_modo.configure(text=DICAS_MODO[v.modo])
+        self.marca.aplicar_habilitacoes(h, livre=livre)
         regras = {
+            "limpar_audio": h.limpar_audio,
+            "gerar_video_longo": h.gerar_video_longo,
+            "gerar_shorts": h.gerar_shorts,
+            "revisar_transcricao": h.revisar_transcricao,
             "limiar_pausa": h.limiar_pausa,
             "introducao": h.introducao,
             "vinheta_final": h.vinheta_final,
@@ -356,7 +400,9 @@ class PainelOpcoes(ctk.CTkFrame):
         ausentes = f"Arquivo ausente em recursos/: {', '.join(faltam)}" if faltam else ""
         self._definir_dica(
             self._dica_recursos,
-            ausentes if v.gerar_video_longo else "",
+            ausentes
+            if v.modo != "so_shorts" and (v.gerar_video_longo or v.modo == "so_vinhetas")
+            else "",
             _COR_DICA,
             self._w_vinheta,
         )

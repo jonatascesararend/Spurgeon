@@ -149,3 +149,28 @@ def test_texto_da_estimativa():
     assert formatar_estimativa(300, 0) == "Tempo estimado nesta máquina: cerca de 5 min."
     texto = formatar_estimativa(7 * 3600 + 1800, 4 * 3600 + 360)
     assert "cerca de 7 h 30 min" in texto and "só a renderização: 4 h 06 min" in texto
+
+
+# --- estimativa por modo ----------------------------------------------------------------------
+
+
+def test_so_vinhetas_leva_minutos_nao_horas():
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.ui.estimativa import estimar_tempo_total
+
+    opcoes = OpcoesProcessamento(modo="so_vinhetas", introducao=True, vinheta_final=True)
+    total, render = estimar_tempo_total(3900.0, opcoes, hdr=True)
+    assert 60 <= total <= 600 and render == total
+    uma = OpcoesProcessamento(modo="so_vinhetas", introducao=True)
+    assert estimar_tempo_total(3900.0, uma, hdr=True)[0] < total
+
+
+def test_so_shorts_nao_conta_a_renderizacao_do_video_longo():
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.ui.estimativa import estimar_tempo_total
+
+    completo = OpcoesProcessamento(gerar_video_longo=True, gerar_shorts=True)
+    so_shorts = OpcoesProcessamento(modo="so_shorts", gerar_video_longo=True, gerar_shorts=True)
+    t_completo, r_completo = estimar_tempo_total(3900.0, completo, hdr=True)
+    t_shorts, r_shorts = estimar_tempo_total(3900.0, so_shorts, hdr=True)
+    assert r_shorts < r_completo and t_shorts < t_completo

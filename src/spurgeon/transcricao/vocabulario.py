@@ -44,6 +44,19 @@ def carregar_vocabulario(caminho: Path) -> list[str]:
     return termos
 
 
+def acrescentar_ao_vocabulario(caminho: Path, termo: str) -> bool:
+    """Põe o termo no fim do arquivo (cria o arquivo se faltar). `False` se já estava lá."""
+    termo = termo.strip()
+    if not termo or termo.casefold() in {t.casefold() for t in carregar_vocabulario(caminho)}:
+        return False
+    caminho = Path(caminho)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    existente = caminho.read_text(encoding="utf-8") if caminho.is_file() else ""
+    separador = "" if not existente or existente.endswith("\n") else "\n"
+    caminho.write_text(f"{existente}{separador}{termo}\n", encoding="utf-8")
+    return True
+
+
 def montar_dicas(termos: list[str], limite: int = LIMITE_DICAS_CARACTERES) -> str:
     """Os termos do topo da lista, separados por vírgula, até caber no limite."""
     partes: list[str] = []

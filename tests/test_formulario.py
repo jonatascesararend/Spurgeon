@@ -174,3 +174,106 @@ def test_avisos_de_tempo():
     assert "muito lenta" in aviso_qualidade("maxima", nvenc=False)
     assert aviso_qualidade("maxima", nvenc=True) is None
     assert aviso_qualidade("equilibrado", nvenc=False) is None
+
+
+# --- modos e marca d'água -----------------------------------------------------------------------
+
+
+def habilitacoes(**campos):
+    return calcular_habilitacoes(
+        ValoresFormulario(**campos), introducao_existe=True, vinheta_existe=True
+    )
+
+
+def test_modo_so_shorts_vira_so_shorts_e_nao_renderiza_o_video_longo():
+    opcoes = para_opcoes(ValoresFormulario(modo="so_shorts", gerar_shorts=False))
+    assert opcoes.modo == "so_shorts"
+    assert opcoes.gerar_shorts is True  # neste modo os Shorts são o produto
+    assert opcoes.processa_shorts and not opcoes.processa_video_longo
+
+
+def test_modo_so_shorts_ignora_introducao_e_vinheta():
+    opcoes = para_opcoes(ValoresFormulario(modo="so_shorts", introducao=True, vinheta_final=True))
+    assert not opcoes.introducao and not opcoes.vinheta_final
+
+
+def test_modo_so_vinhetas_exige_ao_menos_uma():
+    assert any("introdução" in m for m in erros_de(modo="so_vinhetas"))
+    opcoes = para_opcoes(ValoresFormulario(modo="so_vinhetas", vinheta_final=True))
+    assert opcoes.so_vinhetas and opcoes.vinheta_final
+    assert not opcoes.gerar_shorts and not opcoes.limpar_audio
+
+
+def test_modo_so_vinhetas_desliga_shorts_marca_e_limpeza():
+    v = ValoresFormulario(
+        modo="so_vinhetas", introducao=True, gerar_shorts=True, limpar_audio=True,
+        legendas_dinamicas=True, marca_dagua=True,
+    )  # fmt: skip
+    opcoes = para_opcoes(v)
+    assert not (opcoes.gerar_shorts or opcoes.legendas_dinamicas or opcoes.marca_dagua)
+    assert not opcoes.limpar_audio
+
+
+def test_habilitacoes_por_modo():
+    completo = habilitacoes()
+    assert completo.gerar_video_longo and completo.gerar_shorts and completo.limiar_pausa
+    assert completo.pode_iniciar and not completo.legendas_dinamicas
+    shorts = habilitacoes(modo="so_shorts")
+    assert not shorts.gerar_video_longo and not shorts.limiar_pausa and not shorts.introducao
+    assert shorts.legendas_dinamicas and shorts.aprovar_cortes and shorts.pode_iniciar
+    vinhetas = habilitacoes(modo="so_vinhetas")
+    assert vinhetas.introducao and vinhetas.vinheta_final
+    assert not (vinhetas.limpar_audio or vinhetas.marca_dagua or vinhetas.revisar_transcricao)
+    assert not vinhetas.pode_iniciar  # nenhuma das duas marcada
+    assert habilitacoes(modo="so_vinhetas", vinheta_final=True).pode_iniciar
+
+
+def test_habilitacoes_da_marca_dependem_do_que_sera_gerado():
+    sem_marca = habilitacoes()
+    assert not (sem_marca.marca_campos or sem_marca.marca_no_video_longo)
+    com = habilitacoes(marca_dagua=True)
+    assert com.marca_campos and com.marca_no_video_longo and not com.marca_nos_shorts
+    com_shorts = habilitacoes(marca_dagua=True, gerar_shorts=True, gerar_video_longo=False)
+    assert com_shorts.marca_nos_shorts and not com_shorts.marca_no_video_longo
+
+
+def test_marca_dagua_vai_para_as_opcoes(tmp_path):
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"x")
+    opcoes = para_opcoes(
+        ValoresFormulario(
+            marca_dagua=True,
+            marca_imagem=str(logo),
+            marca_canto="sup_esq",
+            marca_tamanho_pct=22.0,
+            marca_remover_fundo=True,
+            marca_nos_shorts=False,
+        )
+    )
+    assert opcoes.marca_dagua and opcoes.marca_imagem == str(logo)
+    assert opcoes.marca_canto == "sup_esq" and opcoes.marca_tamanho_pct == 22.0
+    assert opcoes.marca_no_longo and not opcoes.marca_nos_curtos
+    assert ValoresFormulario.de_opcoes(opcoes).marca_canto == "sup_esq"
+
+
+def test_marca_dagua_sem_imagem_ou_com_imagem_inexistente_e_erro(tmp_path):
+    assert any("imagem" in m for m in erros_de(marca_dagua=True))
+    assert any(
+        "não foi encontrada" in m
+        for m in erros_de(marca_dagua=True, marca_imagem=str(tmp_path / "sumiu.png"))
+    )
+
+
+def test_marca_dagua_tamanho_fora_da_faixa_e_erro(tmp_path):
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"x")
+    mensagens = erros_de(marca_dagua=True, marca_imagem=str(logo), marca_tamanho_pct=80.0)
+    assert any("Tamanho da marca" in m for m in mensagens)
+
+
+def test_marca_dagua_precisa_de_um_destino_entre_o_que_sera_gerado(tmp_path):
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"x")
+    # só o vídeo longo está sendo gerado, mas a marca só foi pedida nos Shorts
+    mensagens = erros_de(marca_dagua=True, marca_imagem=str(logo), marca_no_video_longo=False)
+    assert any("onde ela entra" in m for m in mensagens)

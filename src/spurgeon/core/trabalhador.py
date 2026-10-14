@@ -53,6 +53,7 @@ def executar(
     estado = carregar_estado(pastas.raiz)
     if estado is None:
         raise ErroConfiguracao(f"Não há estado.json em {pastas.raiz}; não é um projeto.")
+    pastas.criar()  # `_work/` some quando um processamento anterior terminou; reabrir recria
 
     log = criar_log_projeto(
         pastas.log,

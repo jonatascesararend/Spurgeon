@@ -29,10 +29,12 @@ from spurgeon.shorts.analise import (
 from spurgeon.shorts.dados import Avaliacao, Candidato, Corte
 from spurgeon.shorts.edicao import (
     LimiteInvalido,
+    contexto_das_pontas,
     faixa_da_nota,
     indices_das_palavras,
     ler_hashtags,
     mover_limite,
+    mover_por_frase,
     palavras_das_pontas,
     resumir,
 )
@@ -826,3 +828,91 @@ def test_sem_a_medicao_de_nivel_a_selecao_avisa_e_usa_o_respiro_fixo(ctx_shorts,
     with caplog.at_level("WARNING"):
         rodar(SelecionarShorts(), ctx_shorts)
     assert "respiro fixo" in caplog.text
+
+
+# --- ajuste do início e do fim por frase, e o contexto das pontas -----------------------------
+
+
+def corte_entre(palavras: list[Palavra], primeira: int, ultima: int) -> Corte:
+    base = cortes_do_sermao(palavras)[0]
+    return replace(base, inicio=palavras[primeira].inicio, fim=palavras[ultima].fim)
+
+
+def test_frase_anterior_entra_pelo_inicio_e_a_de_abertura_sai():
+    palavras = sermao_falso()
+    corte = cortes_do_sermao(palavras)[0]
+    primeira, ultima = indices_das_palavras(palavras, corte)
+    mais = mover_por_frase(palavras, corte, "inicio", -1)
+    assert indices_das_palavras(palavras, mais) == (primeira - 12, ultima)
+    menos = mover_por_frase(palavras, corte, "inicio", +1)
+    assert indices_das_palavras(palavras, menos) == (primeira + 12, ultima)
+
+
+def test_no_meio_da_frase_o_ajuste_vai_ao_comeco_ou_ao_fim_dela():
+    palavras = sermao_falso()
+    corte = cortes_do_sermao(palavras)[0]
+    primeira, ultima = indices_das_palavras(palavras, corte)
+    no_meio = mover_limite(palavras, corte, "inicio", 4)  # abre 4 palavras dentro de uma frase
+    assert indices_das_palavras(palavras, mover_por_frase(palavras, no_meio, "inicio", -1))[0] == (
+        primeira
+    )
+    assert indices_das_palavras(palavras, mover_por_frase(palavras, no_meio, "inicio", +1))[0] == (
+        primeira + 12
+    )
+    corta_fim = mover_limite(palavras, corte, "fim", -5)  # termina 5 palavras antes do ponto
+    assert indices_das_palavras(palavras, mover_por_frase(palavras, corta_fim, "fim", +1))[1] == (
+        ultima
+    )
+    assert indices_das_palavras(palavras, mover_por_frase(palavras, corta_fim, "fim", -1))[1] == (
+        ultima - 12
+    )
+
+
+def test_ajuste_por_frase_respeita_os_limites_do_corte_e_da_transcricao():
+    palavras = sermao_falso()
+    corte = cortes_do_sermao(palavras)[0]
+    for _ in range(100):  # empurra o fim até passar dos 60 s
+        try:
+            corte = mover_por_frase(palavras, corte, "fim", +1)
+        except LimiteInvalido as erro:
+            assert "passaria de 60" in str(erro)
+            break
+    else:
+        pytest.fail("devia passar dos 60 s")
+    inicial = corte_entre(palavras, 0, 40)
+    with pytest.raises(LimiteInvalido, match="Não há mais fala"):
+        mover_por_frase(palavras, inicial, "inicio", -1)
+    with pytest.raises(ValueError, match="sentido"):
+        mover_por_frase(palavras, inicial, "fim", 0)
+
+
+def test_contexto_mostra_o_que_fica_de_fora_nas_duas_pontas():
+    palavras = sermao_falso()
+    corte = corte_entre(palavras, 24, 59)
+    contexto = contexto_das_pontas(palavras, corte, fora=5, dentro=3)
+    assert contexto.antes.split() == [p.texto for p in palavras[19:24]]
+    assert contexto.comeco.split() == [p.texto for p in palavras[24:27]]
+    assert contexto.fim.split() == [p.texto for p in palavras[57:60]]
+    assert contexto.depois.split() == [p.texto for p in palavras[60:65]]
+
+
+def test_avisa_de_inicio_e_fim_no_meio_da_frase():
+    palavras = sermao_falso()
+    contexto = contexto_das_pontas(palavras, corte_entre(palavras, 28, 55))
+    assert any("começa no meio de uma frase" in a.lower() for a in contexto.avisos)
+    assert any("termina no meio de uma frase" in a.lower() for a in contexto.avisos)
+
+
+def test_avisa_de_abertura_dependente_e_de_fim_em_pergunta():
+    palavras = sermao_falso()
+    # a frase 1 abre com "Mas" e a frase 3 termina em "?"
+    contexto = contexto_das_pontas(palavras, corte_entre(palavras, 12, 47))
+    assert palavras[12].texto == "Mas"
+    assert any("depende do que foi dito antes" in a for a in contexto.avisos)
+    assert any("termina numa pergunta" in a.lower() for a in contexto.avisos)
+
+
+def test_corte_bem_fechado_nao_recebe_avisos():
+    palavras = sermao_falso()
+    contexto = contexto_das_pontas(palavras, corte_entre(palavras, 24, 59))
+    assert contexto.avisos == ()

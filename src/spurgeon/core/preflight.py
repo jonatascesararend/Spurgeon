@@ -58,12 +58,15 @@ def executar_preflight(
     opcoes = opcoes or config.padroes
     especifico = video is not None
     resultados = [_python(), *_ffmpeg(opcoes), *_pastas(config, opcoes, especifico)]
-    if opcoes.limpar_audio or not especifico:
+    if opcoes.marca_dagua:
+        resultados.append(_marca(opcoes))
+    if (opcoes.limpar_audio and not opcoes.so_vinhetas) or not especifico:
         resultados.append(_deep_filter(config))
-    resultados += _whisper(config, opcoes)
+    if not (opcoes.so_vinhetas and especifico):  # só emendar vinhetas não transcreve nada
+        resultados += _whisper(config, opcoes)
     resultados += _hardware_e_disco(config, video, opcoes)
-    if opcoes.gerar_shorts or not especifico:
-        resultados.append(_ollama(opcoes, exigido=opcoes.gerar_shorts and especifico))
+    if opcoes.processa_shorts or not especifico:
+        resultados.append(_ollama(opcoes, exigido=opcoes.processa_shorts and especifico))
     return resultados
 
 
@@ -127,6 +130,31 @@ def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) ->
             detalhe = str(caminho) if caminho.exists() else f"ainda não existe: {caminho.name}"
             resultados.append(Verificacao(nome, Nivel.OK, detalhe))
     return resultados
+
+
+def _marca(opcoes: OpcoesProcessamento) -> Verificacao:
+    imagem = Path(opcoes.marca_imagem) if opcoes.marca_imagem.strip() else None
+    if imagem is None:
+        return Verificacao("Marca d'água", Nivel.ERRO, "ligada, mas nenhuma imagem foi escolhida")
+    if not imagem.is_file():
+        return Verificacao("Marca d'água", Nivel.ERRO, f"imagem não encontrada: {imagem}")
+    try:
+        from spurgeon.render.marca import ler_info
+
+        info = ler_info(imagem)
+    except (OSError, ValueError) as erro:
+        return Verificacao(
+            "Marca d'água", Nivel.ERRO, f"não foi possível abrir {imagem.name}: {erro}"
+        )
+    transparencia = "com fundo transparente" if info.tem_transparencia else "sem fundo transparente"
+    if not info.tem_transparencia and not opcoes.marca_remover_fundo:
+        return Verificacao(
+            "Marca d'água",
+            Nivel.AVISO,
+            f"{imagem.name} ({info.formato}) {transparencia}: a imagem inteira, com o fundo, "
+            "ficará sobre o vídeo",
+        )
+    return Verificacao("Marca d'água", Nivel.OK, f"{imagem.name} ({info.formato}, {transparencia})")
 
 
 def _whisper(config: ConfigApp, opcoes: OpcoesProcessamento) -> list[Verificacao]:
@@ -252,9 +280,11 @@ def _espaco_necessario_gb(video: Path, opcoes: OpcoesProcessamento) -> float:
     if duracao <= 0:
         return _FATOR_ESPACO_VIDEO * video.stat().st_size / 1024**3
     crf = opcoes.preset_qualidade().crf
+    if opcoes.so_vinhetas:  # uma cópia do vídeo longo já pronto, com a introdução e a vinheta
+        return estimar_tamanho_bytes(duracao, crf) * 1.1 / 1024**3 + _MARGEM_DISCO_GB
     total = duracao * 48000 * 2 * _AUDIOS_INTERMEDIARIOS
-    if opcoes.gerar_video_longo:
+    if opcoes.processa_video_longo:
         total += estimar_tamanho_bytes(duracao, crf) * 1.15
-    if opcoes.gerar_shorts:
+    if opcoes.processa_shorts:
         total += estimar_tamanho_bytes(opcoes.shorts_limite_seguranca * 60.0, crf, vertical=True)
     return total / 1024**3 + _MARGEM_DISCO_GB

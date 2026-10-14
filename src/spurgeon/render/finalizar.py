@@ -38,17 +38,21 @@ class Finalizar(Etapa):
     depende_de = ("renderizar_shorts", "renderizar_video_longo", "gerar_srt")
     peso = 0.5
 
+    no_modo_vinhetas = True
+
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_video_longo or opcoes.gerar_shorts
+        return opcoes.processa_video_longo or opcoes.processa_shorts or opcoes.so_vinhetas
 
     def executar(self, ctx: ContextoProjeto) -> None:
         problemas: list[str] = []
         avisos: list[str] = []
         resumo: list[str] = []
-        if ctx.opcoes.gerar_video_longo:
+        if ctx.opcoes.processa_video_longo:
             self._video_longo(ctx, problemas, avisos, resumo)
-        if ctx.opcoes.gerar_shorts:
+        if ctx.opcoes.processa_shorts:
             self._shorts(ctx, problemas, avisos, resumo)
+        if ctx.opcoes.so_vinhetas:
+            self._com_vinhetas(ctx, problemas, resumo)
 
         ctx.log.info("Resultado em %s:", ctx.pastas.raiz)
         for linha in resumo:
@@ -113,6 +117,21 @@ class Finalizar(Etapa):
                 f"({formatar_duracao(duracao_video)})."
             )
         resumo.append(f"{srt.name}: {quantidade} legendas")
+
+    def _com_vinhetas(self, ctx, problemas: list[str], resumo: list[str]) -> None:
+        video = ctx.pastas.video_com_vinhetas
+        if not video.exists():
+            problemas.append(f"O vídeo com introdução e vinheta não foi gerado ({video.name}).")
+            return
+        info = sondar(video)
+        if not (info.tem_video and info.tem_audio):
+            problemas.append(f"{video.name} está sem imagem ou sem som.")
+        resumo.append(
+            f"{video.name}: {formatar_duracao(info.duracao_s)}, {info.largura}x{info.altura}, "
+            f"{video.stat().st_size / 1e9:.2f} GB"
+        )
+        if ctx.pastas.srt_com_vinhetas.exists():
+            resumo.append(f"{ctx.pastas.srt_com_vinhetas.name}: legendas com o tempo da introdução")
 
     # --- Shorts -----------------------------------------------------------------------------
     def _shorts(self, ctx, problemas: list[str], avisos: list[str], resumo: list[str]) -> None:

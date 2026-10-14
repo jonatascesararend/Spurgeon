@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import combinations, pairwise
@@ -141,3 +142,29 @@ def formatar_srt(legendas: Iterable[Legenda]) -> str:
             + "\n".join(leg.linhas)
         )
     return "\n\n".join(blocos) + "\n" if blocos else ""
+
+
+_LINHA_DE_TEMPO = re.compile(
+    r"^(\d+):(\d{2}):(\d{2})[,.](\d{3}) --> (\d+):(\d{2}):(\d{2})[,.](\d{3})(.*)$"
+)
+
+
+def _em_segundos(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+
+def deslocar_srt(texto: str, segundos: float) -> str:
+    """O mesmo .srt com todos os tempos adiantados `segundos` (para a introdução que entrou).
+
+    Só mexe nas linhas de tempo (`00:01:02,500 --> 00:01:05,000`); o texto fica como está.
+    """
+    saida = []
+    for linha in texto.split("\n"):
+        achado = _LINHA_DE_TEMPO.match(linha)
+        if achado:
+            g = achado.groups()
+            inicio = _em_segundos(*g[0:4]) + segundos
+            fim = _em_segundos(*g[4:8]) + segundos
+            linha = f"{formatar_tempo(inicio)} --> {formatar_tempo(fim)}{g[8]}"
+        saida.append(linha)
+    return "\n".join(saida)

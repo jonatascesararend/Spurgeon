@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from spurgeon.core.arquivos import ler_json
 from spurgeon.core.config import OpcoesProcessamento
 from spurgeon.core.erros import ErroConfiguracao, ErroFFmpeg, ProjetoConflito
 from spurgeon.core.estado import EntradaVideo, Estado, carregar_estado, salvar_estado
@@ -55,6 +57,19 @@ class PastasProjeto:
         return self.raiz / "video_longo_otimizado.mp4"
 
     @property
+    def video_com_vinhetas(self) -> Path:
+        return self.raiz / "video_longo_com_vinhetas.mp4"
+
+    @property
+    def srt_com_vinhetas(self) -> Path:
+        return self.raiz / "legendas_video_longo_com_vinhetas.srt"
+
+    @property
+    def video_longo_info(self) -> Path:
+        """O que o vídeo longo tem (introdução, vinheta) e com que qualidade foi renderizado."""
+        return self.work / "video_longo_info.json"
+
+    @property
     def audio_original(self) -> Path:
         return self.work / "audio_original.wav"
 
@@ -81,6 +96,10 @@ class PastasProjeto:
     @property
     def cortes_shorts(self) -> Path:
         return self.work / "cortes_shorts.json"
+
+    @property
+    def shorts_renderizados(self) -> Path:
+        return self.work / "shorts_renderizados.json"
 
     @property
     def metadados(self) -> Path:
@@ -134,6 +153,18 @@ def nome_pasta_projeto(data: date, nome: str) -> str:
     return f"{data:%Y-%m-%d}_{sanitizar_nome(nome)}"
 
 
+def ler_nome_e_data(pasta: Path) -> tuple[str, date] | None:
+    """`2026-10-04_Miqueias_2._6-11` → (`Miqueias 2. 6-11`, data); None se o nome foge do padrão."""
+    achado = re.match(r"^(\d{4}-\d{2}-\d{2})_(.+)$", Path(pasta).name)
+    if achado is None:
+        return None
+    try:
+        dia = date.fromisoformat(achado.group(1))
+    except ValueError:
+        return None
+    return achado.group(2).replace("_", " ").strip(), dia
+
+
 def data_gravacao(video: Path) -> date:
     """Data da gravação: metadado `creation_time` (no fuso local); senão, a do arquivo."""
     try:
@@ -185,10 +216,60 @@ def criar_ou_retomar_projeto(
 
 
 def limpar_intermediarios(pastas: PastasProjeto) -> None:
-    shutil.rmtree(pastas.work, ignore_errors=True)
+    """Apaga o que é grande e se refaz (áudios, partes do vídeo, legendas ASS, fontes).
+
+    Ficam os `.json` de `_work/` (a análise: candidatos, notas, cortes e títulos dos Shorts, o que
+    já foi renderizado): são poucos MB e deixam reabrir o projeto sem refazer a análise.
+    """
+    if not pastas.work.exists():
+        return
+    for item in pastas.work.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item, ignore_errors=True)
+        elif item.suffix.lower() != ".json":
+            item.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):  # sem nenhum json a pasta some (rmdir só remove vazia)
+        pastas.work.rmdir()
 
 
 def abrir_pasta(caminho: Path) -> None:
     """Abre a pasta no Explorer (só Windows)."""
     if sys.platform == "win32":
         os.startfile(caminho)
+
+
+def descrever_projeto(pastas: PastasProjeto) -> str:
+    """O que o projeto já tem, em uma linha (ao abrir um projeto existente)."""
+    partes: list[str] = []
+    if pastas.transcricao.exists():
+        partes.append("transcrição")
+    if pastas.srt.exists():
+        partes.append("legendas .srt")
+    if pastas.video_longo.exists():
+        partes.append("vídeo longo")
+    if pastas.video_com_vinhetas.exists():
+        partes.append("vídeo com introdução e vinheta")
+    if pastas.cortes_shorts.exists():
+        try:
+            sugeridos = len(ler_json(pastas.cortes_shorts))
+        except (OSError, ValueError):
+            sugeridos = 0
+        feitos = sum(
+            1
+            for e in _registro_dos_shorts(pastas).values()
+            if (pastas.shorts / e.get("arquivo", "")).is_file()
+        )
+        partes.append(f"{sugeridos} Shorts sugeridos, {feitos} renderizados")
+    return (
+        "Já existe: " + ", ".join(partes) + "." if partes else "O projeto ainda não tem resultados."
+    )
+
+
+def _registro_dos_shorts(pastas: PastasProjeto) -> dict[str, dict]:
+    try:
+        dados = ler_json(pastas.shorts_renderizados)
+    except (OSError, ValueError):
+        return {}
+    return (
+        {k: v for k, v in dados.items() if isinstance(v, dict)} if isinstance(dados, dict) else {}
+    )

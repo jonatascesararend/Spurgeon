@@ -85,57 +85,57 @@ def aberto(raiz, pastas, caixas):
 @pytest.mark.gui
 def test_todos_os_cortes_principais_vem_marcados_e_as_reservas_desmarcadas(aberto, pastas):
     cortes = carregar_cortes(pastas.cortes_shorts)
-    assert [m.get() for m in aberto._marcas] == [c.incluir for c in cortes]
+    assert [m.get() for m in aberto.editor._marcas] == [c.incluir for c in cortes]
     assert any(c.reserva and not c.incluir for c in cortes)
-    assert sum(m.get() for m in aberto._marcas) == sum(not c.reserva for c in cortes)
+    assert sum(m.get() for m in aberto.editor._marcas) == sum(not c.reserva for c in cortes)
     assert f"{sum(not c.reserva for c in cortes)} de {len(cortes)} marcados" in (
-        aberto._resumo.cget("text")
+        aberto.editor._resumo.cget("text")
     )
 
 
 @pytest.mark.gui
 def test_lista_vem_na_ordem_da_nota_e_pode_ir_para_a_ordem_do_horario(aberto):
-    notas = [aberto._cortes[i].nota for i in aberto._ordem]
+    notas = [aberto.editor._cortes[i].nota for i in aberto.editor._ordem]
     assert notas == sorted(notas, reverse=True)
-    aberto._seletor_ordem.set("Horário")
-    aberto._reordenar()
-    inicios = [aberto._cortes[i].inicio for i in aberto._ordem]
+    aberto.editor._seletor_ordem.set("Horário")
+    aberto.editor._reordenar()
+    inicios = [aberto.editor._cortes[i].inicio for i in aberto.editor._ordem]
     assert inicios == sorted(inicios)
 
 
 @pytest.mark.gui
 def test_o_detalhe_mostra_a_nota_o_alerta_e_o_texto(aberto):
-    i = next(i for i, c in enumerate(aberto._cortes) if c.alerta_contexto)
-    aberto.selecionar(i)
-    corte = aberto._cortes[i]
-    assert f"Nota {corte.nota:.0f} de 100" in aberto._rotulo_nota.cget("text")
-    assert "pode soar legalista" in aberto._rotulo_alerta.cget("text")
-    assert aberto._var_titulo.get() == corte.titulo
-    assert aberto._texto.get("1.0", "end-1c") == corte.texto
-    barra, valor = aberto._partes["retencao"]
+    i = next(i for i, c in enumerate(aberto.editor._cortes) if c.alerta_contexto)
+    aberto.editor.selecionar(i)
+    corte = aberto.editor._cortes[i]
+    assert f"Nota {corte.nota:.0f} de 100" in aberto.editor._rotulo_nota.cget("text")
+    assert "pode soar legalista" in aberto.editor._rotulo_alerta.cget("text")
+    assert aberto.editor._var_titulo.get() == corte.titulo
+    assert aberto.editor._texto.get("1.0", "end-1c") == corte.texto
+    barra, valor = aberto.editor._partes["retencao"]
     assert valor.cget("text") == f"{corte.detalhe['retencao']:g} de 40"
     assert barra.get() == pytest.approx(corte.detalhe["retencao"] / 40)
 
 
 @pytest.mark.gui
 def test_desmarcar_todos_e_marcar_todos(aberto):
-    aberto.marcar_todos(False)
-    assert not any(m.get() for m in aberto._marcas)
-    assert "0 de" in aberto._resumo.cget("text")
-    aberto.marcar_todos(True)
-    assert all(c.incluir for c in aberto._cortes)
+    aberto.editor.marcar_todos(False)
+    assert not any(m.get() for m in aberto.editor._marcas)
+    assert "0 de" in aberto.editor._resumo.cget("text")
+    aberto.editor.marcar_todos(True)
+    assert all(c.incluir for c in aberto.editor._cortes)
 
 
 @pytest.mark.gui
 def test_editar_o_titulo_e_salvar_grava_no_arquivo(aberto, pastas):
-    aberto.selecionar(aberto._ordem[0])
-    aberto._var_titulo.set("  Novo título ")
-    aberto._campo_hashtags.delete(0, "end")
-    aberto._campo_hashtags.insert(0, "graça, #Miquéias")
-    aberto.selecionar(aberto._ordem[1])  # trocar de corte também guarda o anterior
+    aberto.editor.selecionar(aberto.editor._ordem[0])
+    aberto.editor._var_titulo.set("  Novo título ")
+    aberto.editor._campo_hashtags.delete(0, "end")
+    aberto.editor._campo_hashtags.insert(0, "graça, #Miquéias")
+    aberto.editor.selecionar(aberto.editor._ordem[1])  # trocar de corte também guarda o anterior
     assert aberto.salvar_e_fechar() is True
     gravados = {c.id: c for c in carregar_cortes(pastas.cortes_shorts)}
-    primeiro = gravados[aberto._cortes[aberto._ordem[0]].id]
+    primeiro = gravados[aberto.editor._cortes[aberto.editor._ordem[0]].id]
     assert primeiro.titulo == "Novo título"
     assert primeiro.hashtags == ["#graça", "#Miquéias"]
     assert aberto.salvo
@@ -143,32 +143,32 @@ def test_editar_o_titulo_e_salvar_grava_no_arquivo(aberto, pastas):
 
 @pytest.mark.gui
 def test_mover_o_inicio_muda_o_corte_e_marca_como_editado(aberto):
-    aberto.selecionar(aberto._ordem[0])
-    i = aberto._atual
-    antes = aberto._cortes[i]
-    assert aberto.mover("inicio", -1)
-    depois = aberto._cortes[i]
+    aberto.editor.selecionar(aberto.editor._ordem[0])
+    i = aberto.editor._atual
+    antes = aberto.editor._cortes[i]
+    assert aberto.editor.mover("inicio", -1)
+    depois = aberto.editor._cortes[i]
     assert depois.inicio < antes.inicio and depois.editado and depois.nota == antes.nota
-    assert aberto._texto.get("1.0", "end-1c") == depois.texto
-    assert aberto.mover("inicio", 1)
-    assert aberto._cortes[i].inicio == pytest.approx(antes.inicio)
+    assert aberto.editor._texto.get("1.0", "end-1c") == depois.texto
+    assert aberto.editor.mover("inicio", 1)
+    assert aberto.editor._cortes[i].inicio == pytest.approx(antes.inicio)
 
 
 @pytest.mark.gui
 def test_nao_deixa_passar_de_60_segundos_e_avisa_na_tela(aberto):
-    aberto.selecionar(aberto._ordem[0])
+    aberto.editor.selecionar(aberto.editor._ordem[0])
     movimentos = 0
-    while aberto.mover("fim", 1):
+    while aberto.editor.mover("fim", 1):
         movimentos += 1
         assert movimentos < 300
-    assert aberto._cortes[aberto._atual].duracao <= 60.0 + 1e-6
-    assert "passaria de 60" in aberto._rotulo_ajuste.cget("text")
+    assert aberto.editor._cortes[aberto.editor._atual].duracao <= 60.0 + 1e-6
+    assert "passaria de 60" in aberto.editor._rotulo_ajuste.cget("text")
 
 
 @pytest.mark.gui
 def test_salvar_sem_titulo_nos_marcados_e_recusado(aberto, pastas):
-    aberto.selecionar(aberto._ordem[0])
-    aberto._var_titulo.set("   ")
+    aberto.editor.selecionar(aberto.editor._ordem[0])
+    aberto.editor._var_titulo.set("   ")
     assert aberto.salvar_e_fechar() is False
     assert any("sem título" in m for _, m in aberto.caixas)
     assert not aberto.salvo and aberto.winfo_exists()
@@ -177,7 +177,7 @@ def test_salvar_sem_titulo_nos_marcados_e_recusado(aberto, pastas):
 
 @pytest.mark.gui
 def test_salvar_sem_nenhum_corte_marcado_pede_confirmacao(aberto, pastas, monkeypatch):
-    aberto.marcar_todos(False)
+    aberto.editor.marcar_todos(False)
     respostas = iter(["Voltar", "Salvar"])
     monkeypatch.setattr(dialogos, "mostrar", lambda *_a, **_k: next(respostas))
     assert aberto.salvar_e_fechar() is False
@@ -197,7 +197,7 @@ def test_cancelar_sem_mudancas_fecha_sem_perguntar_e_nao_mexe_no_arquivo(aberto,
 @pytest.mark.gui
 def test_cancelar_com_mudancas_pergunta_e_descarta(aberto, pastas, monkeypatch):
     antes = pastas.cortes_shorts.read_bytes()
-    aberto.marcar_todos(False)
+    aberto.editor.marcar_todos(False)
     monkeypatch.setattr(dialogos, "mostrar", lambda _j, _t, _m, *, botoes=("OK",), **_k: botoes[0])
     aberto._cancelar()  # “Continuar editando”
     assert aberto.winfo_exists()
@@ -217,17 +217,17 @@ def test_abrir_a_revisao_pelo_id_da_etapa_sem_cortes_avisa(raiz, tmp_path, caixa
 
 @pytest.mark.gui
 def test_atalhos_andam_pela_lista_e_marcam_o_corte_aberto(aberto):
-    primeiro = aberto._ordem[0]
-    aberto.selecionar(primeiro)
-    aberto._andar(1)
-    assert aberto._atual == aberto._ordem[1]
-    aberto._andar(-1)
-    aberto._andar(-1)  # já é o primeiro: não sai da lista
-    assert aberto._atual == primeiro
-    antes = aberto._marcas[primeiro].get()
-    aberto.alternar_atual()
-    assert aberto._marcas[primeiro].get() is (not antes)
-    assert aberto._cortes[primeiro].incluir is (not antes)
+    primeiro = aberto.editor._ordem[0]
+    aberto.editor.selecionar(primeiro)
+    aberto.editor._andar(1)
+    assert aberto.editor._atual == aberto.editor._ordem[1]
+    aberto.editor._andar(-1)
+    aberto.editor._andar(-1)  # já é o primeiro: não sai da lista
+    assert aberto.editor._atual == primeiro
+    antes = aberto.editor._marcas[primeiro].get()
+    aberto.editor.alternar_atual()
+    assert aberto.editor._marcas[primeiro].get() is (not antes)
+    assert aberto.editor._cortes[primeiro].incluir is (not antes)
 
 
 @pytest.mark.gui
@@ -241,5 +241,5 @@ def test_a_lista_mostra_inicio_e_fim_de_cada_corte(aberto):
                     textos.append(filho.cget("text"))
             coletar(filho)
 
-    coletar(aberto._lista)
+    coletar(aberto.editor._lista)
     assert any("–" in t and " s" in t for t in textos if isinstance(t, str))

@@ -98,6 +98,8 @@ _RENDER_HDR = {
 }  # fmt: skip
 _FATOR_SDR = 0.75  # sem a conversão HDR→SDR o filtro pesa menos
 _FRACAO_DOS_SHORTS = 0.3  # os Shorts somam ~20 min de vídeo para um sermão de ~65 min
+_VINHETAS_BASE_S = 45.0  # sondar o vídeo, emendar e conferir a emenda
+_VINHETAS_POR_CLIPE_S = 40.0  # codificar uns segundos de vídeo com o preset do vídeo longo
 
 
 def estimar_render_s(duracao_s: float, preset: str, *, hdr: bool, shorts: bool = False) -> float:
@@ -107,18 +109,23 @@ def estimar_render_s(duracao_s: float, preset: str, *, hdr: bool, shorts: bool =
 
 def estimar_tempo_total(duracao_s: float, opcoes, *, hdr: bool) -> tuple[float, float]:
     """(tempo total, só a renderização) estimados, em segundos, para um vídeo desta duração."""
+    if opcoes.so_vinhetas:  # só codifica a introdução e a vinheta e emenda sem recodificar
+        total = _VINHETAS_BASE_S + _VINHETAS_POR_CLIPE_S * (
+            int(opcoes.introducao) + int(opcoes.vinheta_final)
+        )
+        return total, total
     por_segundo = _EXTRAIR_E_MEDIR + _PAUSAS_E_LEGENDAS
     por_segundo += _LIMPAR_AUDIO if opcoes.limpar_audio else 0.0
     por_segundo += _NORMALIZAR if opcoes.normalizar_volume else 0.0
     por_segundo += _WHISPER.get(opcoes.whisper_modelo, 0.74)
-    if opcoes.gerar_shorts:
+    if opcoes.processa_shorts:
         modelo = opcoes.ollama_modelo.lower()
         por_segundo += next((v for k, v in _IA_DOS_SHORTS.items() if k in modelo), _IA_PADRAO)
     preset = opcoes.preset_qualidade().preset
     render = 0.0
-    if opcoes.gerar_video_longo:
+    if opcoes.processa_video_longo:
         render += estimar_render_s(duracao_s, preset, hdr=hdr)
-    if opcoes.gerar_shorts:
+    if opcoes.processa_shorts:
         render += estimar_render_s(duracao_s, preset, hdr=hdr, shorts=True)
     return duracao_s * por_segundo + render, render
 

@@ -185,3 +185,72 @@ def test_ffmpeg_sem_zscale_ou_tonemap_e_erro_porque_o_hdr_do_celular_nao_convert
     resultados = por_nome(executar_preflight(config_tmp, video=video_teste))
     assert resultados["FFmpeg: recursos"].nivel == Nivel.ERRO
     assert "zscale" in resultados["FFmpeg: recursos"].detalhe
+
+
+# --- marca d'água e modos ---------------------------------------------------------------------
+
+
+def verificacao(resultados, nome):
+    return next((r for r in resultados if r.nome == nome), None)
+
+
+def test_marca_ligada_sem_imagem_ou_com_imagem_sumida_e_erro(config_tmp, video_teste, tmp_path):
+    sem = OpcoesProcessamento(marca_dagua=True, marca_imagem="")
+    resultados = executar_preflight(config_tmp, video=video_teste, opcoes=sem)
+    assert verificacao(resultados, "Marca d'água").nivel == Nivel.ERRO
+    sumida = OpcoesProcessamento(marca_dagua=True, marca_imagem=str(tmp_path / "x.png"))
+    resultados = executar_preflight(config_tmp, video=video_teste, opcoes=sumida)
+    assert "não encontrada" in verificacao(resultados, "Marca d'água").detalhe
+
+
+def test_marca_png_transparente_passa_e_jpg_sem_remover_fundo_avisa(
+    config_tmp, video_teste, tmp_path
+):
+    from PIL import Image
+
+    png = tmp_path / "logo.png"
+    Image.new("RGBA", (30, 30), (0, 0, 0, 0)).save(png)
+    jpg = tmp_path / "logo.jpg"
+    Image.new("RGB", (30, 30), (255, 255, 255)).save(jpg)
+    ok = executar_preflight(
+        config_tmp,
+        video=video_teste,
+        opcoes=OpcoesProcessamento(marca_dagua=True, marca_imagem=str(png)),
+    )
+    assert verificacao(ok, "Marca d'água").nivel == Nivel.OK
+    aviso = executar_preflight(
+        config_tmp,
+        video=video_teste,
+        opcoes=OpcoesProcessamento(marca_dagua=True, marca_imagem=str(jpg)),
+    )
+    assert verificacao(aviso, "Marca d'água").nivel == Nivel.AVISO
+    removendo = executar_preflight(
+        config_tmp,
+        video=video_teste,
+        opcoes=OpcoesProcessamento(
+            marca_dagua=True, marca_imagem=str(jpg), marca_remover_fundo=True
+        ),
+    )
+    assert verificacao(removendo, "Marca d'água").nivel == Nivel.OK
+
+
+def test_so_vinhetas_nao_cobra_whisper_nem_ollama_nem_deep_filter(config_tmp, video_teste):
+    opcoes = OpcoesProcessamento(
+        modo="so_vinhetas", vinheta_final=True, gerar_shorts=True, limpar_audio=True
+    )
+    nomes = {r.nome for r in executar_preflight(config_tmp, video=video_teste, opcoes=opcoes)}
+    assert not nomes & {"Modelo Whisper", "faster-whisper", "Ollama", "deep-filter"}
+
+
+def test_so_shorts_cobra_o_ollama_mas_nao_a_renderizacao_do_video_longo(
+    config_tmp, video_teste, monkeypatch
+):
+    monkeypatch.setattr(preflight, "_modelos_ollama", lambda: ["qwen3:8b"])
+    opcoes = OpcoesProcessamento(modo="so_shorts", gerar_shorts=True, gerar_video_longo=True)
+    resultados = executar_preflight(config_tmp, video=video_teste, opcoes=opcoes)
+    assert verificacao(resultados, "Ollama").nivel == Nivel.OK
+    sem_longo = preflight._espaco_necessario_gb(video_teste, opcoes)
+    completo = preflight._espaco_necessario_gb(
+        video_teste, OpcoesProcessamento(gerar_video_longo=True, gerar_shorts=True)
+    )
+    assert sem_longo < completo

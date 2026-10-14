@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from spurgeon.core.arquivos import escrever_json_atomico
-from spurgeon.core.config import OpcoesProcessamento, raiz_repositorio
+from spurgeon.core.config import OpcoesProcessamento
 from spurgeon.core.estado import EntradaVideo
 from spurgeon.core.ffmpeg import InfoMidia, localizar_binario, sondar
 from spurgeon.core.tempo import MapaTempo, Trecho, calcular_trechos_mantidos
@@ -27,6 +27,7 @@ from spurgeon.render.shorts import (
     RenderizarShorts,
     filtro_de_audio,
     filtro_de_video,
+    ler_registro,
     planejar_shorts,
     texto_de_publicacao,
 )
@@ -237,7 +238,7 @@ def test_roteiro_do_audio_corta_cada_trecho_com_atrim_exato():
 
 def test_roteiro_do_audio_com_introducao_e_vinheta_sem_som():
     def clipe(tem_audio):
-        return vl._Clipe(Path("c.mp4"), info(tem_audio=tem_audio, canais_audio=2), 60, "c.mp4")
+        return vl.Clipe(Path("c.mp4"), info(tem_audio=tem_audio, canais_audio=2), 60, "c.mp4")
 
     roteiro = vl.script_do_audio(
         trechos_de((0, 10)), intro=clipe(True), vinheta=clipe(False), quadros_principais=300,
@@ -380,7 +381,7 @@ def test_filtro_de_video_do_short_segue_a_ordem_recorte_sdr_ampliacao_legenda():
     posicoes = [cadeia.index(item) for item in ordem]
     assert posicoes == sorted(posicoes)
     assert cadeia.index("setsar=1") < cadeia.index("ass=legendas/s.ass:fontsdir=fontes")
-    assert cadeia.endswith("format=yuv420p")
+    assert cadeia.startswith("[0:v]") and cadeia.endswith("format=yuv420p[v]")
     assert "ass=" not in filtro_de_video(info(), FPS, deslocamento_pct=0.0, legenda=None)
 
 
@@ -394,24 +395,6 @@ def test_filtro_de_audio_do_short_tem_fade_nas_pontas_e_volume_medido():
 
 
 # --- com FFmpeg de verdade ------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def video_hdr(tmp_path_factory) -> Path:
-    """Vídeo de 3 s em HEVC 10 bits marcado como HDR HLG (BT.2020), como o do iPhone."""
-    destino = tmp_path_factory.mktemp("hdr") / "hdr.mp4"
-    subprocess.run(
-        [
-            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30000/1001:duration=3",
-            "-pix_fmt", "yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
-            "-x265-params",
-            "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:log-level=error",
-            str(destino),
-        ],
-        check=True,
-    )  # fmt: skip
-    return destino
 
 
 @pytest.mark.ffmpeg
@@ -612,29 +595,6 @@ def test_modo_economico_apaga_as_partes_na_juncao_e_o_video_sai_igual(
 # --- Shorts ---------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def ctx_shorts(contexto, video_hdr, audio_com_pausas, tmp_path):
-    """Contexto de Shorts sobre o vídeo HDR de 3 s, com fonte e vocabulário do repositório."""
-    contexto.opcoes.gerar_shorts = True
-    contexto.opcoes.qualidade = "rapido"
-    contexto.opcoes.legendas_dinamicas = True
-    contexto.opcoes.normalizar_volume = True
-    contexto.estado.entrada = EntradaVideo.de_arquivo(video_hdr)
-    contexto.config.pastas.recursos = raiz_repositorio() / "recursos"
-    contexto.pastas.work.mkdir(parents=True, exist_ok=True)
-    contexto.pastas.audio_normalizado.write_bytes(audio_com_pausas.read_bytes())
-    palavras = [
-        Palavra("Graça", 0.1, 0.5), Palavra("e", 0.6, 0.7), Palavra("paz,", 0.8, 1.2),
-        Palavra("irmãos.", 1.4, 1.9),
-    ]  # fmt: skip
-    from spurgeon.transcricao.formato import Bloco, Segmento, Transcricao
-
-    Transcricao("t", 3.0, blocos=[Bloco(0, 3, [Segmento(palavras)], True)]).salvar(
-        contexto.pastas.transcricao
-    )
-    return contexto
-
-
 @pytest.mark.ffmpeg
 def test_short_sai_vertical_com_legenda_volume_e_texto(ctx_shorts):
     gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5)])
@@ -682,25 +642,67 @@ def test_short_pronto_nao_e_refeito_mas_o_texto_e_atualizado(ctx_shorts):
 
 
 @pytest.mark.ffmpeg
-def test_short_desmarcado_some_da_pasta(ctx_shorts):
+def test_short_desmarcado_vai_para_a_pasta_desmarcados_e_volta_sem_renderizar(ctx_shorts):
+    pasta = ctx_shorts.pastas.shorts
     gravar_cortes(
         ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro")]
     )
     rodar(RenderizarShorts(), ctx_shorts)
-    nomes = sorted(p.name for p in ctx_shorts.pastas.shorts.iterdir())
-    assert nomes == [
+    assert sorted(p.name for p in pasta.iterdir() if p.is_file()) == [
         "short_01_corte_1.mp4", "short_01_corte_1.txt",
         "short_02_outro.mp4", "short_02_outro.txt",
     ]  # fmt: skip
+
     gravar_cortes(
         ctx_shorts.pastas.cortes_shorts,
         [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro", incluir=False)],
     )
     rodar(RenderizarShorts(), ctx_shorts)
-    assert sorted(p.name for p in ctx_shorts.pastas.shorts.iterdir()) == [
+    assert sorted(p.name for p in pasta.iterdir() if p.is_file()) == [
         "short_01_corte_1.mp4",
         "short_01_corte_1.txt",
     ]
+    assert sorted(p.name for p in (pasta / "desmarcados").iterdir()) == [
+        "short_02_outro.mp4",
+        "short_02_outro.txt",
+    ]  # nada foi apagado
+
+    marca = (pasta / "desmarcados" / "short_02_outro.mp4").stat().st_mtime_ns
+    gravar_cortes(
+        ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro")]
+    )
+    rodar(RenderizarShorts(), ctx_shorts)
+    assert (pasta / "short_02_outro.mp4").stat().st_mtime_ns == marca  # voltou, sem renderizar
+    assert not (pasta / "desmarcados" / "short_02_outro.mp4").exists()
+
+
+@pytest.mark.ffmpeg
+def test_mudar_a_selecao_renumera_os_prontos_em_vez_de_renderizar_de_novo(ctx_shorts):
+    pasta = ctx_shorts.pastas.shorts
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(2, 0.5, 3.0, slug="b")])
+    rodar(RenderizarShorts(), ctx_shorts)
+    antes = (pasta / "short_01_b.mp4").stat().st_mtime_ns
+
+    # entra um corte que começa antes: o "b" deixa de ser o 1 e passa a ser o 2
+    gravar_cortes(
+        ctx_shorts.pastas.cortes_shorts,
+        [corte(1, 0.0, 2.5, slug="a"), corte(2, 0.5, 3.0, slug="b")],
+    )
+    rodar(RenderizarShorts(), ctx_shorts)
+    assert (pasta / "short_02_b.mp4").stat().st_mtime_ns == antes
+    assert (pasta / "short_02_b.txt").exists() and (pasta / "short_01_a.mp4").exists()
+    assert not (pasta / "short_01_b.mp4").exists()
+    registro = ler_registro(ctx_shorts.pastas.shorts_renderizados)
+    assert registro["2"]["arquivo"] == "short_02_b.mp4"
+
+
+def test_registro_ignora_o_que_nao_tem_o_formato_esperado(tmp_path):
+    caminho = tmp_path / "r.json"
+    assert ler_registro(caminho) == {}
+    caminho.write_text('{"short_01.mp4": "abc", "3": {"arquivo": "x.mp4", "assinatura": "y"}}')
+    assert ler_registro(caminho) == {"3": {"arquivo": "x.mp4", "assinatura": "y"}}
+    caminho.write_text("lixo")
+    assert ler_registro(caminho) == {}
 
 
 @pytest.mark.ffmpeg

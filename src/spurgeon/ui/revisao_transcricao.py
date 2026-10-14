@@ -13,10 +13,13 @@ from tkinter import TclError
 
 import customtkinter as ctk
 
+from spurgeon.core.config import Pastas
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.transcricao.edicao import aplicar_edicoes, separar_pontuacao
 from spurgeon.transcricao.formato import Transcricao, segundos_para_rotulo
+from spurgeon.transcricao.verificador import verificador_compartilhado
 from spurgeon.ui import dialogos
+from spurgeon.ui.verificacao import PainelDePortugues
 
 PROB_BAIXA = 0.5
 # Palavrinhas ("e", "o", "se") têm confiança baixa o tempo todo sem estarem erradas.
@@ -114,6 +117,8 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
         self.bind("<Control-s>", lambda _e: self.salvar_e_fechar())
         self.bind("<Control-f>", lambda _e: self._busca.focus())
         self.bind("<F3>", lambda _e: self._proximo())
+        self.bind("<F8>", lambda _e: self._portugues.proximo(1))
+        self.bind("<Shift-F8>", lambda _e: self._portugues.proximo(-1))
         if modal:
             self.after(150, self.focus)
             self.grab_set()
@@ -142,10 +147,10 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
                 "direto aqui. Palavras em laranja são as que o Whisper teve menos certeza "
                 f"({duvidosas}). Não divida nem junte linhas e mantenha o [horário] no começo."
             ),
-        ).grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=(12, 6))
 
         barra = ctk.CTkFrame(self, fg_color="transparent")
-        barra.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 6))
+        barra.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 6))
         self._busca = ctk.CTkEntry(barra, width=200, placeholder_text="Localizar…")
         self._busca.pack(side="left")
         self._busca.bind("<Return>", lambda _e: self._proximo())
@@ -160,6 +165,9 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
         ctk.CTkButton(barra, text="Trocar em tudo", width=120, command=self._trocar_em_tudo).pack(
             side="left"
         )
+        ctk.CTkButton(
+            barra, text="Verificar português", width=140, command=self._verificar_portugues
+        ).pack(side="right")
 
         self._texto = ctk.CTkTextbox(self, wrap="word", undo=True, font=ctk.CTkFont(size=14))
         self._texto.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 8))
@@ -168,8 +176,18 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
         caixa.tag_config("baixa", foreground=_COR_BAIXA)
         caixa.tag_config("achado", background=_COR_ACHADO)
 
+        pastas_do_app = self._pastas_do_aplicativo()
+        self._portugues = PainelDePortugues(
+            self,
+            caixa,
+            lambda: verificador_compartilhado(pastas_do_app),
+            vocabulario=pastas_do_app.vocabulario,
+            prefixo=_MARCA,
+        )  # aparece (coluna 1) na primeira verificação
+        self._portugues_visivel = False
+
         rodape = ctk.CTkFrame(self, fg_color="transparent")
-        rodape.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 12))
+        rodape.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
         ctk.CTkButton(rodape, text="Salvar e fechar", command=self.salvar_e_fechar).pack(
             side="right"
         )
@@ -177,8 +195,32 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
             rodape, text="Cancelar", width=90, fg_color=("gray70", "gray30"), command=self._cancelar
         ).pack(side="right", padx=8)
         ctk.CTkLabel(
-            rodape, text="Ctrl+S salva · Ctrl+F busca · F3 próximo", text_color="gray60"
+            rodape,
+            text="Ctrl+S salva · Ctrl+F busca · F3 próximo achado · F8 próximo aviso de português",
+            text_color="gray60",
         ).pack(side="left")
+
+    def _pastas_do_aplicativo(self) -> Pastas:
+        config = getattr(self._janela, "config_app", None)
+        return config.pastas if config is not None else Pastas()
+
+    def _verificar_portugues(self) -> None:
+        if not self._portugues_visivel:
+            self._portugues.grid(row=2, column=1, sticky="ns", padx=(0, 14), pady=(0, 8))
+            self._portugues_visivel = True
+            self._ampliar_para_o_painel()
+        self._portugues.verificar()
+
+    def _ampliar_para_o_painel(self) -> None:
+        """Dá ao painel de português o espaço que ele ocupa, se a tela comportar."""
+        escala = self._get_window_scaling()
+        self.update_idletasks()
+        largura = int(self.winfo_width() / escala) + 330
+        maxima = int(self.winfo_screenwidth() / escala * 0.98)
+        altura = int(self.winfo_height() / escala)
+        x, y = int(self.winfo_x() / escala), int(self.winfo_y() / escala)
+        largura = min(largura, maxima)
+        self.geometry(f"{largura}x{altura}+{max(0, min(x, maxima - largura))}+{y}")
 
     def _preencher(self) -> None:
         caixa = self._texto._textbox
@@ -240,6 +282,7 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
             return
         # troca só o corpo das linhas, para manter as cores; recarrega o texto todo
         caixa.edit_separator()
+        self._portugues.limpar()  # as marcas do verificador não sobrevivem ao texto novo
         caixa.delete("1.0", "end")
         for numero, linha in enumerate(novo.split("\n")):
             if numero:

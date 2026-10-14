@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from spurgeon.core.arquivos import ler_json
+from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
 from spurgeon.core.formatacao import formatar_duracao
@@ -26,6 +26,13 @@ from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.core.tempo import Trecho
 from spurgeon.render import filtros as f
+from spurgeon.render.marca import (
+    MarcaDagua,
+    assinatura_da_marca,
+    marca_para_o_projeto,
+    montar_marca,
+    trecho_do_filtro,
+)
 
 DURACAO_DA_PARTE_S = 600.0
 VERSAO_DO_RENDER = 1
@@ -121,7 +128,10 @@ def recortes_de_quadros(pedacos: list[tuple[float, float]], fps: Fraction) -> li
     return recortes
 
 
-def script_da_parte(parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps: Fraction) -> str:
+def script_da_parte(
+    parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps: Fraction,
+    marca: MarcaDagua | None = None,
+) -> str:  # fmt: skip
     """O filtro (para `-/filter_complex`) que monta uma parte a partir do vídeo original.
 
     Os tempos são relativos ao ponto onde a leitura começa (`-ss`). Cada pedaço pega um número
@@ -148,7 +158,13 @@ def script_da_parte(parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps
         entradas = "".join(f"[p{i}]" for i in range(len(recortes)))
         linhas.append(f"{entradas}concat=n={len(recortes)}:v=1:a=0[bruto]")
     # tpad repete o último quadro se faltar algum por arredondamento; `-frames:v` corta o excesso
-    linhas.append(f"[bruto]{f.cadeia_para_sdr(info)},tpad=stop_mode=clone:stop_duration=2[vout]")
+    sdr = f"[bruto]{f.cadeia_para_sdr(info)}"
+    if marca is None:
+        linhas.append(f"{sdr},tpad=stop_mode=clone:stop_duration=2[vout]")
+    else:  # a marca (entrada 1) entra depois da conversão para SDR, para não ser tonemapada
+        linhas.append(f"{sdr}[base]")
+        linhas.append(trecho_do_filtro(marca, base="base", entrada="1:v", saida="marcado"))
+        linhas.append("[marcado]tpad=stop_mode=clone:stop_duration=2[vout]")
     return ";\n".join(linhas)
 
 
@@ -163,7 +179,7 @@ def script_de_clipe(info: InfoMidia, largura: int, altura: int, fps: Fraction) -
 
 
 def script_do_audio(
-    trechos: list[Trecho], *, intro: _Clipe | None, vinheta: _Clipe | None,
+    trechos: list[Trecho], *, intro: Clipe | None, vinheta: Clipe | None,
     quadros_principais: int, fps: Fraction, canais: int | None, normalizar: bool, lufs: float,
     compensar_mono: bool = False,
 ) -> str:  # fmt: skip
@@ -221,7 +237,7 @@ def script_do_audio(
 
 
 @dataclass(frozen=True)
-class _Clipe:
+class Clipe:
     """Introdução ou vinheta: o arquivo, o que o FFmpeg sabe dele e quantos quadros ocupa."""
 
     caminho: Path
@@ -252,12 +268,18 @@ class RenderizarVideoLongo(Etapa):
         "limpar_audio",
         "normalizar_volume",
         "lufs_video_longo",
+        "marca_dagua",
+        "marca_imagem",
+        "marca_remover_fundo",
+        "marca_canto",
+        "marca_tamanho_pct",
+        "marca_no_video_longo",
     )
     peso = 123.0  # o do preset padrão (Máxima qualidade); `peso_para` ajusta
     entrega = True
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_video_longo
+        return opcoes.processa_video_longo
 
     def peso_para(self, opcoes) -> float:
         return f.peso_de_encode(opcoes)
@@ -281,6 +303,7 @@ class RenderizarVideoLongo(Etapa):
         vinheta = self._clipe(
             ctx, ctx.config.pastas.vinheta_final, "vinheta", fps, ctx.opcoes.vinheta_final
         )
+        marca = self._marca(ctx, largura)
         partes = planejar_partes(trechos, fps, DURACAO_DA_PARTE_S)
         principais = sum(p.quadros for p in partes)
         total_quadros = principais + sum(c.quadros for c in (intro, vinheta) if c)
@@ -288,7 +311,7 @@ class RenderizarVideoLongo(Etapa):
         preset = ctx.opcoes.preset_qualidade()
 
         pasta = ctx.pastas.work / "render_longo"
-        self._preparar_pasta(ctx, pasta, info, fps, trechos, audio, intro, vinheta)
+        self._preparar_pasta(ctx, pasta, info, fps, trechos, audio, intro, vinheta, marca)
         economico = self._conferir_disco(ctx, pasta, duracao_total, preset.crf)
         ctx.log.info(
             "Vídeo de %s em %d partes (%s, preset %s, CRF %d)%s.",
@@ -315,7 +338,9 @@ class RenderizarVideoLongo(Etapa):
             sequencia.append((intro.arquivo, float(Fraction(intro.quadros) / fps)))
         for parte in partes:
             ctx.ponto_seguro()
-            feito = self._parte(ctx, pasta, parte, video, info, fps, argumentos_codec, pesos, feito)
+            feito = self._parte(
+                ctx, pasta, parte, video, info, fps, argumentos_codec, pesos, feito, marca
+            )
             sequencia.append((parte.arquivo, float(Fraction(parte.quadros) / fps)))
         if vinheta:
             feito = self._clipe_pronto(
@@ -325,10 +350,21 @@ class RenderizarVideoLongo(Etapa):
         self._unir(ctx, pasta, sequencia, duracao_total, feito, economico=economico)
         shutil.rmtree(pasta, ignore_errors=True)
 
+    def _marca(self, ctx: ContextoProjeto, largura_do_video: int) -> MarcaDagua | None:
+        """A marca d'água do vídeo longo, já em PNG com transparência (ou None se não vale)."""
+        if not ctx.opcoes.marca_no_longo:
+            return None
+        if not Path(ctx.opcoes.marca_imagem).is_file():
+            raise ErroFerramenta(
+                f"A imagem da marca d'água não foi encontrada: {ctx.opcoes.marca_imagem}"
+            )
+        arquivo = marca_para_o_projeto(ctx.pastas.work, ctx.opcoes)
+        return montar_marca(arquivo, ctx.opcoes, largura_do_video)
+
     # --- preparo ----------------------------------------------------------------------------
     def _clipe(
         self, ctx: ContextoProjeto, caminho: Path, nome: str, fps: Fraction, ligado: bool
-    ) -> _Clipe | None:
+    ) -> Clipe | None:
         if not ligado:
             return None
         if not caminho.exists():
@@ -339,7 +375,7 @@ class RenderizarVideoLongo(Etapa):
         info = sondar(caminho)
         if not info.tem_video:
             raise ErroFerramenta(f"O arquivo {caminho.name} não tem vídeo.")
-        return _Clipe(caminho, info, quadros_da_duracao(info.duracao_s, fps), f"parte_{nome}.mp4")
+        return Clipe(caminho, info, quadros_da_duracao(info.duracao_s, fps), f"parte_{nome}.mp4")
 
     def _conferir_disco(
         self, ctx: ContextoProjeto, pasta: Path, duracao_s: float, crf: int
@@ -390,8 +426,8 @@ class RenderizarVideoLongo(Etapa):
             pesos[vinheta.arquivo] = (1 - reservado) * vinheta.quadros / total_quadros
         return pesos
 
-    def _assinatura(self, ctx, info, fps, trechos, audio, intro, vinheta) -> str:
-        def marca(caminho: Path) -> list:
+    def _assinatura(self, ctx, info, fps, trechos, audio, intro, vinheta, marca=None) -> str:
+        def marca_do_arquivo(caminho: Path) -> list:
             estatistica = caminho.stat()
             return [caminho.name, estatistica.st_size, int(estatistica.st_mtime)]
 
@@ -404,17 +440,20 @@ class RenderizarVideoLongo(Etapa):
             "tamanho": [info.largura, info.altura],
             "hdr": info.transferencia,
             "codec": [preset.preset, preset.crf, ctx.opcoes.usar_nvenc],
-            "audio": marca(audio),
+            "audio": marca_do_arquivo(audio),
             "normalizar": [ctx.opcoes.normalizar_volume, ctx.opcoes.lufs_video_longo],
-            "intro": marca(intro.caminho) if intro else None,
-            "vinheta": marca(vinheta.caminho) if vinheta else None,
+            "intro": marca_do_arquivo(intro.caminho) if intro else None,
+            "vinheta": marca_do_arquivo(vinheta.caminho) if vinheta else None,
             "duracao_da_parte": DURACAO_DA_PARTE_S,
+            "marca": assinatura_da_marca(marca.arquivo, marca) if marca else None,
         }
         return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
 
-    def _preparar_pasta(self, ctx, pasta: Path, info, fps, trechos, audio, intro, vinheta) -> None:
+    def _preparar_pasta(
+        self, ctx, pasta: Path, info, fps, trechos, audio, intro, vinheta, marca=None
+    ) -> None:
         """Recomeça do zero se algo que muda o resultado mudou desde a execução anterior."""
-        assinatura = self._assinatura(ctx, info, fps, trechos, audio, intro, vinheta)
+        assinatura = self._assinatura(ctx, info, fps, trechos, audio, intro, vinheta, marca)
         marcador = pasta / "assinatura.txt"
         if pasta.exists() and (not marcador.exists() or marcador.read_text() != assinatura):
             ctx.log.info("As opções ou o material mudaram: o render recomeça do início.")
@@ -471,7 +510,19 @@ class RenderizarVideoLongo(Etapa):
         parcial.replace(destino)
         return depois
 
-    def _parte(self, ctx, pasta: Path, parte: Parte, video: Path, info, fps, codec, pesos, feito):
+    def _parte(
+        self,
+        ctx,
+        pasta: Path,
+        parte: Parte,
+        video: Path,
+        info,
+        fps,
+        codec,
+        pesos,
+        feito,
+        marca=None,
+    ):
         destino = pasta / parte.arquivo
         faixa, depois = self._andamento(ctx, pesos, parte.arquivo, feito)
         if destino.exists():
@@ -480,11 +531,12 @@ class RenderizarVideoLongo(Etapa):
         inicio = max(0.0, parte.pedacos[0][0] - _MARGEM_DE_LEITURA_S)
         fim = parte.pedacos[-1][1] + _MARGEM_DE_LEITURA_S
         script = pasta / f"{destino.stem}.filter"
-        script.write_text(script_da_parte(parte, inicio, info, fps), encoding="utf-8")
+        script.write_text(script_da_parte(parte, inicio, info, fps, marca), encoding="utf-8")
         parcial = destino.with_name(destino.name + ".parcial")
         ctx.log.info("Renderizando a parte %d (%d quadros)…", parte.indice + 1, parte.quadros)
         ctx.ffmpeg(
             ["-y", "-ss", _n(inicio), "-t", _n(fim - inicio), "-i", video,
+             *(["-i", marca.arquivo] if marca else []),
              "-/filter_complex", script, "-map", "[vout]", "-an",
              "-frames:v", str(parte.quadros), *codec, "-f", "mp4", parcial],
             duracao_s=float(Fraction(parte.quadros) / fps), faixa=faixa,
@@ -493,7 +545,7 @@ class RenderizarVideoLongo(Etapa):
         return depois
 
     def _clipe_pronto(
-        self, ctx, pasta: Path, clipe: _Clipe, largura, altura, fps, codec, pesos, feito
+        self, ctx, pasta: Path, clipe: Clipe, largura, altura, fps, codec, pesos, feito
     ):
         destino = pasta / clipe.arquivo
         faixa, depois = self._andamento(ctx, pesos, clipe.arquivo, feito)
@@ -548,6 +600,17 @@ class RenderizarVideoLongo(Etapa):
                 f"{duracao_total:.1f} s. Rode de novo; se repetir, veja o processamento.log."
             )
         parcial.replace(ctx.pastas.video_longo)
+        preset = ctx.opcoes.preset_qualidade()
+        escrever_json_atomico(
+            ctx.pastas.video_longo_info,
+            {
+                "introducao": ctx.opcoes.introducao,
+                "vinheta_final": ctx.opcoes.vinheta_final,
+                "preset": preset.preset,
+                "crf": preset.crf,
+                "duracao_s": round(resultado.duracao_s, 3),
+            },
+        )
         tamanho = ctx.pastas.video_longo.stat().st_size
         ctx.log.info(
             "Vídeo longo pronto: %s, %.2f GB (%.1f Mb/s).",

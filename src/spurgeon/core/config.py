@@ -21,6 +21,10 @@ NOME_APP = "Spurgeon"
 
 ModeloWhisper = Literal["tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"]
 Qualidade = Literal["maxima", "alta", "equilibrado", "rapido", "personalizado"]
+#: o que o processamento faz: tudo; só os Shorts (aproveitando o que já foi feito); ou só juntar
+#: introdução e vinheta final a um vídeo longo que já está pronto
+Modo = Literal["completo", "so_shorts", "so_vinhetas"]
+CantoMarca = Literal["sup_esq", "sup_dir", "inf_esq", "inf_dir"]
 
 # Texto mostrado na lista de modelos da interface (Fase 1).
 INFO_MODELOS_WHISPER: dict[str, tuple[str, str]] = {
@@ -79,6 +83,11 @@ class Pastas(BaseModel):
     def fontes(self) -> Path:
         return self.recursos / "fontes"
 
+    @property
+    def dicionario_pt_br(self) -> Path:
+        """Prefixo dos arquivos Hunspell (`pt_BR.aff` e `pt_BR.dic`) do verificador de português."""
+        return self.recursos / "dicionarios" / "pt_BR" / "pt_BR"
+
     def garantir(self) -> None:
         """Cria as pastas do aplicativo que ainda não existem (entrada, projetos, recursos).
 
@@ -94,6 +103,8 @@ class OpcoesProcessamento(BaseModel):
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
+    modo: Modo = "completo"
+
     # Produtos e modificadores
     gerar_video_longo: bool = True
     gerar_shorts: bool = False
@@ -102,6 +113,15 @@ class OpcoesProcessamento(BaseModel):
     normalizar_volume: bool = False
     introducao: bool = False
     vinheta_final: bool = False
+
+    # Marca d'água (logotipo no canto do vídeo longo e/ou dos Shorts)
+    marca_dagua: bool = False
+    marca_imagem: str = ""
+    marca_remover_fundo: bool = False  # só vale para imagem sem transparência própria
+    marca_canto: CantoMarca = "inf_dir"
+    marca_tamanho_pct: float = Field(15.0, ge=3.0, le=50.0)  # % da largura do vídeo
+    marca_no_video_longo: bool = True
+    marca_nos_shorts: bool = True
 
     # Recursos
     uso_cpu_percentual: Literal[75, 100] = 75
@@ -157,6 +177,28 @@ class OpcoesProcessamento(BaseModel):
             raise ValueError(f"Preset x264 inválido: {self.x264_preset_personalizado}")
         return self
 
+    @property
+    def so_vinhetas(self) -> bool:
+        return self.modo == "so_vinhetas"
+
+    @property
+    def processa_video_longo(self) -> bool:
+        """Renderiza o vídeo longo (e o que vem antes dele: pausas, cortes e legendas)."""
+        return self.modo == "completo" and self.gerar_video_longo
+
+    @property
+    def processa_shorts(self) -> bool:
+        """Analisa e renderiza os Shorts."""
+        return self.modo != "so_vinhetas" and self.gerar_shorts
+
+    @property
+    def marca_no_longo(self) -> bool:
+        return self.marca_dagua and self.marca_no_video_longo
+
+    @property
+    def marca_nos_curtos(self) -> bool:
+        return self.marca_dagua and self.marca_nos_shorts
+
     def preset_qualidade(self) -> PresetQualidade:
         if self.qualidade == "personalizado":
             return PresetQualidade(
@@ -169,12 +211,24 @@ class OpcoesProcessamento(BaseModel):
     def problemas(self) -> list[str]:
         """Combinações de opções que a interface não deve deixar iniciar."""
         achados = []
-        if not (self.gerar_video_longo or self.gerar_shorts):
+        if self.modo == "so_vinhetas":
+            if not (self.introducao or self.vinheta_final):
+                achados.append("Marque a introdução, a vinheta final ou as duas.")
+        elif self.modo == "so_shorts":
+            if not self.gerar_shorts:
+                achados.append("No modo só Shorts, a geração de Shorts precisa estar ligada.")
+        elif not (self.gerar_video_longo or self.gerar_shorts):
             achados.append("Marque ao menos um produto: vídeo longo ou Shorts.")
         if self.legendas_dinamicas and not self.gerar_shorts:
             achados.append("As legendas dinâmicas só existem junto com os Shorts.")
-        if (self.introducao or self.vinheta_final) and not self.gerar_video_longo:
+        if (self.introducao or self.vinheta_final) and not (
+            self.gerar_video_longo or self.so_vinhetas
+        ):
             achados.append("Introdução e vinheta final só valem para o vídeo longo.")
+        if self.marca_dagua and not self.marca_imagem.strip():
+            achados.append("Escolha a imagem da marca d'água.")
+        if self.marca_dagua and not (self.marca_no_video_longo or self.marca_nos_shorts):
+            achados.append("Marque onde a marca d'água entra: vídeo longo, Shorts ou os dois.")
         return achados
 
     def validar_para_execucao(self) -> None:

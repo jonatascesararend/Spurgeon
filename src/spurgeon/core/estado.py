@@ -82,6 +82,9 @@ class Estado(BaseModel):
     entrada: EntradaVideo
     opcoes: OpcoesProcessamento = Field(default_factory=OpcoesProcessamento)
     etapas: list[EstadoEtapa] = Field(default_factory=list)
+    #: registros das etapas que não fazem parte do processamento de agora (outro modo ou outras
+    #: opções); ficam guardados para não se perder o que já foi feito quando voltarem a valer
+    etapas_guardadas: list[EstadoEtapa] = Field(default_factory=list)
     criado_em: datetime = Field(default_factory=agora)
     atualizado_em: datetime = Field(default_factory=agora)
 

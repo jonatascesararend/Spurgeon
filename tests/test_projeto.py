@@ -116,3 +116,47 @@ def test_data_da_gravacao_vem_do_metadado(tmp_path):
 @pytest.mark.ffmpeg
 def test_sem_metadado_usa_a_data_do_arquivo(video_teste):
     assert data_gravacao(video_teste) == date.fromtimestamp(video_teste.stat().st_mtime)
+
+
+def test_limpar_intermediarios_guarda_os_json_da_analise(tmp_path):
+    pastas = PastasProjeto(tmp_path / "proj")
+    pastas.criar()
+    (pastas.work / "audio.wav").write_text("x")
+    (pastas.work / "partes").mkdir()
+    (pastas.work / "partes" / "p1.mp4").write_text("x")
+    (pastas.work / "cortes_shorts.json").write_text("[]")
+    limpar_intermediarios(pastas)
+    assert sorted(p.name for p in pastas.work.iterdir()) == ["cortes_shorts.json"]
+
+
+def test_ler_nome_e_data_pela_pasta(tmp_path):
+    from datetime import date
+
+    from spurgeon.core.projeto import ler_nome_e_data
+
+    assert ler_nome_e_data(tmp_path / "2026-10-04_Miqueias_2._6-11") == (
+        "Miqueias 2. 6-11",
+        date(2026, 10, 4),
+    )
+    assert ler_nome_e_data(tmp_path / "sermao_sem_data") is None
+    assert ler_nome_e_data(tmp_path / "2026-13-45_invalida") is None
+
+
+def test_descrever_projeto_lista_o_que_ja_existe(tmp_path):
+    from spurgeon.core.projeto import descrever_projeto
+
+    pastas = PastasProjeto(tmp_path / "proj")
+    pastas.criar()
+    assert "ainda não tem resultados" in descrever_projeto(pastas)
+    pastas.transcricao.write_text("{}")
+    pastas.video_longo.write_text("x")
+    pastas.cortes_shorts.write_text('[{"id": 1}, {"id": 2}, {"id": 3}]')
+    pastas.shorts.mkdir()
+    (pastas.shorts / "short_01_a.mp4").write_text("x")
+    pastas.shorts_renderizados.write_text(
+        '{"1": {"arquivo": "short_01_a.mp4", "assinatura": "a"},'
+        ' "2": {"arquivo": "short_02_b.mp4", "assinatura": "b"}}'
+    )
+    texto = descrever_projeto(pastas)
+    assert "transcrição" in texto and "vídeo longo" in texto
+    assert "3 Shorts sugeridos, 1 renderizados" in texto

@@ -84,7 +84,7 @@ class AnalisarShorts(Etapa):
     peso = 1.0
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_shorts
+        return opcoes.processa_shorts
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.candidatos]
@@ -154,7 +154,7 @@ class AvaliarShorts(Etapa):
     peso = 16.0  # ~35 min com o qwen3:8b na CPU
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_shorts
+        return opcoes.processa_shorts
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.avaliacoes]
@@ -213,7 +213,7 @@ class SelecionarShorts(Etapa):
     peso = 8.0  # título, descrição e hashtags de cada corte (~15 min)
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_shorts
+        return opcoes.processa_shorts
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.cortes_shorts]
@@ -351,7 +351,7 @@ class AprovarCortes(Etapa):
     peso = 0.0
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.gerar_shorts and opcoes.pausar_aprovar_cortes
+        return opcoes.processa_shorts and opcoes.pausar_aprovar_cortes
 
     def executar(self, ctx: ContextoProjeto) -> ResultadoEtapa:
         ctx.log.info(
