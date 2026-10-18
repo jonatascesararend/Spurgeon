@@ -17,7 +17,7 @@ def test_padroes_seguem_o_projeto():
     assert o.pausa_residual_s == 1.0
     assert o.uso_cpu_percentual == 75
     assert o.whisper_modelo == "large-v3-turbo"
-    assert (o.shorts_duracao_min_s, o.shorts_duracao_max_s) == (30.0, 60.0)
+    assert (o.shorts_duracao_min_s, o.shorts_duracao_max_s) == (30.0, 180.0)
     assert o.pausar_revisar_transcricao and o.pausar_aprovar_cortes
     assert o.qualidade == "maxima"
     assert o.preset_qualidade().preset == "veryslow"
@@ -35,9 +35,10 @@ def test_limiar_de_pausa_decimal_dentro_da_faixa(limiar):
     assert OpcoesProcessamento(limiar_pausa_s=limiar).limiar_pausa_s == limiar
 
 
-def test_short_nao_passa_de_60_segundos():
+def test_short_nao_passa_de_180_segundos():
+    assert OpcoesProcessamento(shorts_duracao_max_s=180).shorts_duracao_max_s == 180
     with pytest.raises(ValidationError):
-        OpcoesProcessamento(shorts_duracao_max_s=61)
+        OpcoesProcessamento(shorts_duracao_max_s=181)
 
 
 def test_duracao_minima_nao_passa_da_maxima():

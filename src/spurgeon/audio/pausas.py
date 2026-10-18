@@ -15,9 +15,10 @@ from pathlib import Path
 
 from spurgeon.audio.nivel import JANELA_S, Medida, carregar_niveis
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
+from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.formatacao import formatar_duracao, formatar_numero
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
-from spurgeon.core.tempo import calcular_trechos_mantidos
+from spurgeon.core.tempo import calcular_trechos_mantidos, limitar_trechos
 
 # O menor tamanho de pausa que a interface permite (0,5 s). Detectamos tudo a partir daqui;
 # o limiar escolhido pelo usuário é aplicado depois, em `CalcularCortes`.
@@ -153,7 +154,7 @@ class CalcularCortes(Etapa):
     # `refinar_pausas` só existe quando a transcrição está no pipeline; o motor ignora a
     # dependência de etapas que não fazem parte da lista.
     depende_de = ("detectar_pausas", "refinar_pausas")
-    opcoes_relevantes = ("limiar_pausa_s", "pausa_residual_s")
+    opcoes_relevantes = ("limiar_pausa_s", "pausa_residual_s", "video_inicio_s", "video_fim_s")
     peso = 0.2
 
     def ativa(self, opcoes) -> bool:
@@ -170,14 +171,31 @@ class CalcularCortes(Etapa):
         refinadas = "pausas_refinadas" in dados
         pausas = [(a, b) for a, b in dados.get("pausas_refinadas", dados["pausas"])]
         trechos = calcular_trechos_mantidos(duracao, pausas, limiar, residual)
+        janela_ini, janela_fim = ctx.opcoes.janela_do_video(duracao)
+        if ctx.opcoes.tem_janela:
+            trechos = limitar_trechos(trechos, janela_ini, janela_fim)
+            ctx.log.info(
+                "O vídeo usa só de %s a %s do original.",
+                formatar_duracao(janela_ini),
+                formatar_duracao(janela_fim),
+            )
+        if not trechos:
+            raise ErroFerramenta(
+                "Não sobrou nenhum trecho de vídeo entre o começo e o fim escolhidos."
+            )
         editada = sum(t.duracao for t in trechos)
-        cortadas = sum(1 for a, b in pausas if b - a >= limiar and (b - a) > residual)
+        cortadas = sum(
+            1
+            for a, b in pausas
+            if b - a >= limiar and (b - a) > residual and a < janela_fim and b > janela_ini
+        )
 
         escrever_json_atomico(
             ctx.pastas.cortes,
             {
                 "duracao_original_s": duracao,
                 "duracao_editada_s": editada,
+                "janela_s": [round(janela_ini, 3), round(janela_fim, 3)],
                 "removido_s": duracao - editada,
                 "limiar_pausa_s": limiar,
                 "pausa_residual_s": residual,

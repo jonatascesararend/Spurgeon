@@ -84,8 +84,12 @@ class PainelDePortugues(ctk.CTkFrame):
         prefixo: re.Pattern[str] | None = None,
         ao_corrigir: Callable[[], None] | None = None,
         largura: int = 310,
+        compacto: bool = False,
     ):
+        """`compacto`: o painel tem só o tamanho do que mostra (a lista cresce com os avisos e some
+        quando não há nenhum), em vez de ocupar a altura toda que o pai lhe der."""
         super().__init__(master, width=largura)
+        self._compacto = compacto
         self._caixa = caixa
         self._obter_verificador = obter_verificador
         self._vocabulario = vocabulario
@@ -98,11 +102,13 @@ class PainelDePortugues(ctk.CTkFrame):
         self._geracao = 0  # cada verificação nova invalida o que a anterior ainda traria
         self._montar(largura)
         self._configurar_tags()
+        if compacto:
+            self._ajustar_ao_conteudo(0)
 
     # --- montagem -----------------------------------------------------------------------------
     def _montar(self, largura: int) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(2, weight=0 if self._compacto else 1)
         cabeca = ctk.CTkFrame(self, fg_color="transparent")
         cabeca.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 2))
         ctk.CTkLabel(cabeca, text="Português", font=ctk.CTkFont(weight="bold")).pack(side="left")
@@ -117,6 +123,7 @@ class PainelDePortugues(ctk.CTkFrame):
         moldura.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 4))
         moldura.columnconfigure(0, weight=1)
         moldura.rowconfigure(0, weight=1)
+        self._moldura = moldura
         self._lista = tk.Listbox(
             moldura,
             activestyle="none",
@@ -149,6 +156,7 @@ class PainelDePortugues(ctk.CTkFrame):
 
         rodape = ctk.CTkFrame(self, fg_color="transparent")
         rodape.grid(row=4, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self._rodape = rodape
         ctk.CTkButton(rodape, text="◀", width=36, command=lambda: self.proximo(-1)).pack(
             side="left"
         )
@@ -277,6 +285,18 @@ class PainelDePortugues(ctk.CTkFrame):
         self._situacao.configure(text=texto)
         if not pendentes:
             self._mostrar_detalhe(None)
+        if self._compacto:
+            self._ajustar_ao_conteudo(len(pendentes))
+
+    def _ajustar_ao_conteudo(self, pendentes: int) -> None:
+        """A lista tem uma linha por aviso (até 8) e some, com a navegação, se não há aviso."""
+        if pendentes:
+            self._lista.configure(height=min(pendentes, 8))
+            self._moldura.grid()
+            self._rodape.grid()
+        else:
+            self._moldura.grid_remove()
+            self._rodape.grid_remove()
 
     def _ao_escolher(self, _evento=None) -> None:
         escolhida = self._lista.curselection()

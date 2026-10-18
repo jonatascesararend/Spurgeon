@@ -75,3 +75,50 @@ def aviso(janela: ctk.CTk, titulo: str, mensagem: str) -> None:
 
 def confirmar(janela: ctk.CTk, titulo: str, mensagem: str, *, sim: str, nao: str) -> bool:
     return mostrar(janela, titulo, mensagem, botoes=(nao, sim)) == sim
+
+
+def pedir_texto(
+    janela: ctk.CTk, titulo: str, mensagem: str, *, inicial: str = "", confirmar: str = "Salvar"
+) -> str | None:
+    """Pergunta um texto numa caixa modal; devolve o texto, ou None se a pessoa desistiu."""
+    escolhido: dict[str, str | None] = {"valor": None}
+    caixa = ctk.CTkToplevel(janela)
+    caixa.title(titulo)
+    caixa.resizable(False, False)
+    caixa.transient(janela)
+    ctk.CTkLabel(caixa, text=titulo, font=ctk.CTkFont(size=16, weight="bold"), anchor="w").pack(
+        fill="x", padx=20, pady=(18, 6)
+    )
+    ctk.CTkLabel(caixa, text=mensagem, wraplength=420, justify="left", anchor="w").pack(
+        fill="x", padx=20, pady=(0, 8)
+    )
+    variavel = ctk.StringVar(value=inicial)
+    campo = ctk.CTkEntry(caixa, textvariable=variavel, width=420)
+    campo.pack(padx=20, pady=(0, 14))
+
+    def fechar(valor: str | None) -> None:
+        escolhido["valor"] = valor
+        caixa.destroy()
+
+    linha = ctk.CTkFrame(caixa, fg_color="transparent")
+    linha.pack(fill="x", padx=20, pady=(0, 16))
+    ctk.CTkButton(
+        linha, text=confirmar, width=110, command=lambda: fechar(variavel.get().strip() or None)
+    ).pack(side="right", padx=(8, 0))
+    ctk.CTkButton(
+        linha,
+        text="Cancelar",
+        width=110,
+        fg_color=("gray70", "gray30"),
+        command=lambda: fechar(None),
+    ).pack(side="right")
+    campo.bind("<Return>", lambda _e: fechar(variavel.get().strip() or None))
+    caixa.protocol("WM_DELETE_WINDOW", lambda: fechar(None))
+    caixa.update_idletasks()
+    x = janela.winfo_rootx() + (janela.winfo_width() - caixa.winfo_width()) // 2
+    y = janela.winfo_rooty() + (janela.winfo_height() - caixa.winfo_height()) // 3
+    caixa.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    caixa.after(150, campo.focus)
+    caixa.grab_set()
+    janela.wait_window(caixa)
+    return escolhido["valor"]

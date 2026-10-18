@@ -47,7 +47,11 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
         self.rowconfigure(0, weight=1)
         config = getattr(janela, "config_app", None)
         self.editor = EditorDeCortes(
-            self, pastas, pastas_do_app=pastas_do_app or (config.pastas if config else None)
+            self,
+            pastas,
+            pastas_do_app=pastas_do_app or (config.pastas if config else None),
+            tarefas=getattr(janela, "tarefas", None),
+            origem_da_previa=getattr(janela, "origem_da_previa", None),
         )
         self.editor.grid(row=0, column=0, sticky="nsew")
         self._montar_rodape()

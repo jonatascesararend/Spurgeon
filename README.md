@@ -12,18 +12,26 @@ O plano completo, as decisões, os resultados medidos e o roadmap estão em [Pro
    revisar o texto.
 3. **Vídeo longo:** corta as pausas maiores que o limite escolhido, converte o HDR do iPhone para
    SDR, junta introdução e vinheta e gera `video_longo_otimizado.mp4` e o `.srt`.
-4. **Shorts (até 60 s, 9:16, 1080×1920):** uma IA local (Ollama) escolhe os melhores trechos,
+4. **Shorts (até 180 s, com preferência por ~60 s; 9:16, 1080×1920):** uma IA local (Ollama) escolhe os melhores trechos,
    dá uma nota de qualidade a cada um e cria título, descrição e hashtags. Uma janela deixa
    aprovar, desmarcar, corrigir os textos e ajustar o início e o fim de cada corte. Os Shorts saem
    com legenda dinâmica (palavra falada em amarelo) e volume de −14 LUFS.
 5. **Studio Shorts:** uma aba lista os Shorts sugeridos (trecho da legenda, nota calculada e título)
    para escolher o que renderizar, com o início e o fim ajustáveis por palavra ou frase e a legenda
-   editável. Depois é só renderizar o que falta, sem refazer o resto.
+   editável. Depois é só renderizar o que falta, sem refazer o resto. A aba **Shorts livre** deixa
+   escolher a dedo um trecho do texto do sermão (com busca por palavras parecidas ou por tema): a IA
+   dá a nota e escreve título e hashtags, e o corte entra na lista como "gerado manualmente".
 6. **Marca d'água:** logotipo (PNG transparente, ou outra imagem com o fundo removido) no canto e no
    tamanho escolhidos, no vídeo longo e/ou nos Shorts.
 7. **Português:** verificador offline (dicionário pt_BR) na revisão da transcrição e nas legendas
    dos Shorts: palavras erradas, repetidas, maiúsculas e pontuação, com correção em um clique.
-8. **Conferência final:** confere os arquivos e registra o resumo no log.
+8. **Começo e fim do vídeo:** corta o que sobra antes e depois (`0:07`, ou `-2:04` para tirar do final), com
+   o quadro exato de cada corte e uma prévia de 15 s de cada ponta.
+9. **Zoom e tratamento de imagem:** aproxima a câmera do pregador (área cortada sombreada no quadro)
+   e ajusta brilho, contraste, cor, brancos e sombras com o antes e o depois lado a lado, sugestão
+   automática e presets que guardam o estilo dos vídeos.
+10. **Introdução e vinheta:** arquivo à escolha e fade de imagem e som entre elas e o vídeo.
+11. **Conferência final:** confere os arquivos e registra o resumo no log.
 
 Três modos: **Tudo**, **Só Shorts** (aproveita o que o projeto já tem) e **Só vinhetas** (junta a
 introdução e a vinheta a um vídeo longo pronto, em minutos). **Abrir projeto…** reabre qualquer
@@ -67,6 +75,10 @@ uv run spurgeon processar "Downloads\video.MOV" --limpar-audio --normalizar --sh
                               --modo so_shorts|so_vinhetas  --introducao  --vinheta-final
                               --marca logo.png --marca-canto inf_dir --marca-tamanho 15
                               --marca-remover-fundo  --marca-em longo|shorts|ambos
+                              --inicio 0:07 --fim 1:04:56   (ou --fim=-2:04, tira do final)
+                              --zoom 120 --zoom-x 54 --zoom-y 50  --preset-zoom NOME
+                              --preset-tratamento NOME  --fade 0,5
+                              --introducao-arquivo A.mp4  --vinheta-arquivo B.mp4
 uv run spurgeon doctor        verifica o ambiente (pré-verificação)
 uv run spurgeon hardware      mostra o hardware detectado e a recomendação
 uv run spurgeon acordado      mantém o PC acordado e sem bloquear por algumas horas

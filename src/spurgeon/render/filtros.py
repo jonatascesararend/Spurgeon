@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
+from spurgeon.core.aparencia import Enquadramento
 from spurgeon.core.config import OpcoesProcessamento
 from spurgeon.core.ffmpeg import InfoMidia
 
@@ -64,20 +65,37 @@ def cadeia_para_sdr(info: InfoMidia) -> str:
     )
 
 
-def recorte_vertical(info: InfoMidia, deslocamento_pct: float = 0.0) -> str:
+def recorte_vertical(
+    info: InfoMidia,
+    deslocamento_pct: float = 0.0,
+    enquadramento: Enquadramento | None = None,
+    zoom_do_short: Enquadramento | None = None,
+) -> str:
     """O recorte 9:16 central (ou deslocado) de um vídeo horizontal, em pixels pares.
 
     Para um vídeo de 1080p, 608×1080 saem do meio da imagem, onde fica o pregador. O deslocamento
     é uma porcentagem da largura do vídeo (positivo = para a direita).
+
+    Com zoom, o 9:16 sai de dentro do recorte do zoom (o mesmo enquadramento do vídeo longo): o
+    deslocamento passa a ser uma porcentagem da largura desse recorte, a partir do centro do zoom.
+
+    `zoom_do_short` é o zoom só dos Shorts: aproxima de novo, dentro do 9:16 já recortado.
     """
     largura, altura = info.largura or 1920, info.altura or 1080
+    x0 = y0 = 0
+    if enquadramento is not None and enquadramento.ativo:
+        x0, y0, largura, altura = enquadramento.regiao(largura, altura)
     if largura * ALTURA_SHORT <= altura * LARGURA_SHORT:  # já é vertical (ou quase)
-        return f"crop={largura // 2 * 2}:{altura // 2 * 2}:0:0"
-    corte_l = round(altura * LARGURA_SHORT / ALTURA_SHORT / 2) * 2
-    corte_l = min(corte_l, largura // 2 * 2)
-    x = (largura - corte_l) / 2 + largura * deslocamento_pct / 100
-    x = int(min(max(x, 0), largura - corte_l)) // 2 * 2
-    return f"crop={corte_l}:{altura // 2 * 2}:{x}:0"
+        x, y, w, h = x0, y0, largura // 2 * 2, altura // 2 * 2
+    else:
+        w = min(round(altura * LARGURA_SHORT / ALTURA_SHORT / 2) * 2, largura // 2 * 2)
+        h = altura // 2 * 2
+        deslocado = (largura - w) / 2 + largura * deslocamento_pct / 100
+        x, y = x0 + int(min(max(deslocado, 0), largura - w)) // 2 * 2, y0
+    if zoom_do_short is not None and zoom_do_short.ativo:
+        dx, dy, w, h = zoom_do_short.regiao(w, h)
+        x, y = x + dx, y + dy
+    return f"crop={w}:{h}:{x}:{y}"
 
 
 def argumentos_video(

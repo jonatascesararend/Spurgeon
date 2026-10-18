@@ -17,6 +17,9 @@ from spurgeon.core.config import ConfigApp
 from spurgeon.core.projeto import PastasProjeto
 
 _SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+#: o trabalho roda um degrau abaixo do normal: com o processador cheio a janela continua respondendo
+#: (os filhos, como o FFmpeg, herdam a prioridade)
+_PRIORIDADE_BAIXA = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 COMANDOS = ("pausar", "retomar", "cancelar")
 
 
@@ -64,7 +67,7 @@ class ExecutorProjeto:
             errors="replace",
             bufsize=1,
             env=env,
-            creationflags=_SEM_JANELA,
+            creationflags=_SEM_JANELA | _PRIORIDADE_BAIXA,
         )
         erros: deque[str] = deque(maxlen=40)
         leitor_erros = threading.Thread(

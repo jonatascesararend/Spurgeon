@@ -111,3 +111,13 @@ class MapaTempo:
             if fi > ini:
                 pedacos.append((self.original_para_editado(ini), self.original_para_editado(fi)))
         return pedacos
+
+
+def limitar_trechos(trechos: Sequence[Trecho], inicio: float, fim: float) -> list[Trecho]:
+    """Mantém só o que cai dentro de [inicio, fim]: o vídeo que a pessoa quer, do começo ao fim."""
+    limitados = []
+    for t in trechos:
+        ini, fi = max(t.inicio, inicio), min(t.fim, fim)
+        if fi - ini > 1e-6:
+            limitados.append(Trecho(ini, fi))
+    return limitados

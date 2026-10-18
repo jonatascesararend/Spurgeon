@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from spurgeon.core.aparencia import Enquadramento, TratamentoImagem
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
@@ -26,6 +27,11 @@ from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.core.tempo import Trecho
 from spurgeon.render import filtros as f
+from spurgeon.render.imagem import (
+    filtro_ampliar_zoom,
+    filtro_recorte_do_zoom,
+    filtro_tratamento,
+)
 from spurgeon.render.marca import (
     MarcaDagua,
     assinatura_da_marca,
@@ -35,7 +41,7 @@ from spurgeon.render.marca import (
 )
 
 DURACAO_DA_PARTE_S = 600.0
-VERSAO_DO_RENDER = 1
+VERSAO_DO_RENDER = 2
 _MARGEM_DE_LEITURA_S = 0.5
 _TOLERANCIA_DE_DURACAO_S = 0.5
 _MARGEM_DE_DISCO = 1_000_000_000
@@ -128,15 +134,30 @@ def recortes_de_quadros(pedacos: list[tuple[float, float]], fps: Fraction) -> li
     return recortes
 
 
+def fade_ffmpeg(tipo: str, inicio_s: float, duracao_s: float) -> str:
+    return f"fade=t={tipo}:st={_n(max(0.0, inicio_s))}:d={_n(duracao_s)}"
+
+
+def fade_efetivo(fade_s: float, duracao_s: float) -> float:
+    """O fade nunca passa de metade do trecho em que acontece (um clipe curtinho não some)."""
+    return min(fade_s, duracao_s / 2) if fade_s > 0 else 0.0
+
+
 def script_da_parte(
     parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps: Fraction,
-    marca: MarcaDagua | None = None,
+    marca: MarcaDagua | None = None, *, enquadramento: Enquadramento | None = None,
+    tratamento: TratamentoImagem | None = None, fade_entrada_s: float = 0.0,
+    fade_saida_s: float = 0.0,
 ) -> str:  # fmt: skip
     """O filtro (para `-/filter_complex`) que monta uma parte a partir do vídeo original.
 
     Os tempos são relativos ao ponto onde a leitura começa (`-ss`). Cada pedaço pega um número
     exato de quadros da grade de `fps`: `trim` escolhe os quadros k com
     `(k - 0.5)/fps <= tempo < (k + n - 0.5)/fps`.
+
+    Depois dos cortes vêm, nesta ordem: o recorte do zoom, a conversão para SDR, a ampliação do
+    zoom de volta ao tamanho do vídeo, o tratamento de imagem e os fades de entrada e de saída
+    (do vídeo que vem depois da introdução e do que vai para a vinheta).
     """
     taxa = f.texto_fps(fps)
     relativos = [(a - inicio_da_leitura, b - inicio_da_leitura) for a, b in parte.pedacos]
@@ -158,36 +179,76 @@ def script_da_parte(
         entradas = "".join(f"[p{i}]" for i in range(len(recortes)))
         linhas.append(f"{entradas}concat=n={len(recortes)}:v=1:a=0[bruto]")
     # tpad repete o último quadro se faltar algum por arredondamento; `-frames:v` corta o excesso
-    sdr = f"[bruto]{f.cadeia_para_sdr(info)}"
+    enquadramento = enquadramento or Enquadramento()
+    cadeia = []
+    recorte = filtro_recorte_do_zoom(info.largura or 1920, info.altura or 1080, enquadramento)
+    if recorte:
+        cadeia.append(recorte)
+    cadeia.append(f.cadeia_para_sdr(info))
+    ampliar = filtro_ampliar_zoom(info.largura or 1920, info.altura or 1080, enquadramento)
+    if ampliar:
+        cadeia.append(ampliar)
+    cor = filtro_tratamento(tratamento) if tratamento is not None else None
+    if cor:
+        cadeia.append(cor)
+    duracao_da_parte = float(Fraction(parte.quadros) / fps)
+    fades = []  # no fim da cadeia, para a marca d'água também sumir no preto
+    entrada = fade_efetivo(fade_entrada_s, duracao_da_parte)
+    if entrada:
+        fades.append(fade_ffmpeg("in", 0.0, entrada))
+    saida = fade_efetivo(fade_saida_s, duracao_da_parte)
+    if saida:
+        fades.append(fade_ffmpeg("out", duracao_da_parte - saida, saida))
+    final = ",".join([*fades, "tpad=stop_mode=clone:stop_duration=2"])
+    sdr = "[bruto]" + ",".join(cadeia)
     if marca is None:
-        linhas.append(f"{sdr},tpad=stop_mode=clone:stop_duration=2[vout]")
+        linhas.append(f"{sdr},{final}[vout]")
     else:  # a marca (entrada 1) entra depois da conversão para SDR, para não ser tonemapada
         linhas.append(f"{sdr}[base]")
         linhas.append(trecho_do_filtro(marca, base="base", entrada="1:v", saida="marcado"))
-        linhas.append("[marcado]tpad=stop_mode=clone:stop_duration=2[vout]")
+        linhas.append(f"[marcado]{final}[vout]")
     return ";\n".join(linhas)
 
 
-def script_de_clipe(info: InfoMidia, largura: int, altura: int, fps: Fraction) -> str:
-    """Padroniza a introdução ou a vinheta (tamanho, taxa de quadros, formato e SDR)."""
+def script_de_clipe(
+    info: InfoMidia, largura: int, altura: int, fps: Fraction, *, quadros: int = 0,
+    fade_entrada_s: float = 0.0, fade_saida_s: float = 0.0,
+) -> str:  # fmt: skip
+    """Padroniza a introdução ou a vinheta (tamanho, taxa de quadros, formato e SDR).
+
+    Os fades (quando pedidos) passam pelo preto: a vinheta final entra de dentro dele e a
+    introdução sai para ele. `quadros` é o tamanho exato do clipe, para o fade de saída cair no fim.
+    """
+    duracao = float(Fraction(quadros) / fps) if quadros else 0.0
+    fades = []
+    entrada = fade_efetivo(fade_entrada_s, duracao) if duracao else 0.0
+    if entrada:
+        fades.append(fade_ffmpeg("in", 0.0, entrada))
+    saida = fade_efetivo(fade_saida_s, duracao) if duracao else 0.0
+    if saida:
+        fades.append(fade_ffmpeg("out", duracao - saida, saida))
     return (
         f"[0:v]fps={f.texto_fps(fps)},{f.cadeia_para_sdr(info)},"
         f"scale={largura}:{altura}:force_original_aspect_ratio=decrease:flags=lanczos,"
         f"pad={largura}:{altura}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,"
-        "tpad=stop_mode=clone:stop_duration=2[vout]"
+        + "".join(f"{x}," for x in fades)
+        + "tpad=stop_mode=clone:stop_duration=2[vout]"
     )
 
 
 def script_do_audio(
     trechos: list[Trecho], *, intro: Clipe | None, vinheta: Clipe | None,
     quadros_principais: int, fps: Fraction, canais: int | None, normalizar: bool, lufs: float,
-    compensar_mono: bool = False,
+    compensar_mono: bool = False, fade_s: float = 0.0,
 ) -> str:  # fmt: skip
     """Junta, em estéreo de 48 kHz, o áudio da introdução, do vídeo (só nos trechos mantidos) e
     da vinheta.
 
     Os cortes usam `atrim`, exato até a amostra (o demuxer `concat` do FFmpeg erra até dezenas
     de milissegundos por corte, o que desalinharia a imagem).
+
+    Com `fade_s`, o som sai da introdução para o silêncio e o do vídeo entra dele (e o inverso na
+    vinheta final), no mesmo ponto em que a imagem passa pelo preto.
     """
 
     def exato(quadros: int) -> str:
@@ -208,9 +269,16 @@ def script_do_audio(
             f"concat=n={len(trechos)}:v=0:a=1"
         )
     estereo = f.filtro_audio_estereo(canais, compensar_mono=compensar_mono)
+    duracao_principal = float(Fraction(quadros_principais) / fps)
+    fades_principal = ""
+    if intro and fade_s:
+        fades_principal += f",afade=t=in:st=0:d={_n(fade_efetivo(fade_s, duracao_principal))}"
+    if vinheta and fade_s:
+        d = fade_efetivo(fade_s, duracao_principal)
+        fades_principal += f",afade=t=out:st={_n(duracao_principal - d)}:d={_n(d)}"
     linhas.append(
         f"{principal},{estereo},apad=pad_dur=2,"
-        f"atrim=duration={exato(quadros_principais)},asetpts=PTS-STARTPTS[am]"
+        f"atrim=duration={exato(quadros_principais)},asetpts=PTS-STARTPTS{fades_principal}[am]"
     )
     ordem = []
     for nome, clipe, entrada in (("ai", intro, 1), ("av", vinheta, 2 if intro else 1)):
@@ -223,9 +291,17 @@ def script_do_audio(
         )
         if clipe.info.tem_audio and normalizar:
             origem += f",loudnorm=I={lufs:g}:TP=-1.5:LRA=11"
+        fade = ""
+        if fade_s:
+            d = fade_efetivo(fade_s, float(Fraction(clipe.quadros) / fps))
+            fade = (
+                f",afade=t=out:st={_n(float(Fraction(clipe.quadros) / fps) - d)}:d={_n(d)}"
+                if nome == "ai"
+                else f",afade=t=in:st=0:d={_n(d)}"
+            )
         linhas.append(
             f"{origem},apad=pad_dur=2,atrim=duration={exato(clipe.quadros)},"
-            f"asetpts=PTS-STARTPTS[{nome}]"
+            f"asetpts=PTS-STARTPTS{fade}[{nome}]"
         )
     if intro:
         ordem.append("[ai]")
@@ -265,6 +341,21 @@ class RenderizarVideoLongo(Etapa):
         "usar_nvenc",
         "introducao",
         "vinheta_final",
+        "introducao_arquivo",
+        "vinheta_arquivo",
+        "fade_vinhetas",
+        "fade_vinhetas_s",
+        "zoom_pct",
+        "zoom_centro_x_pct",
+        "zoom_centro_y_pct",
+        "tratamento_ativo",
+        "tratamento_brilho",
+        "tratamento_contraste",
+        "tratamento_saturacao",
+        "tratamento_temperatura",
+        "tratamento_matiz",
+        "tratamento_brancos",
+        "tratamento_sombras",
         "limpar_audio",
         "normalizar_volume",
         "lufs_video_longo",
@@ -299,9 +390,19 @@ class RenderizarVideoLongo(Etapa):
         if not trechos:
             raise ErroFerramenta("Não sobrou nenhum trecho de vídeo para renderizar.")
         audio = ctx.pastas.audio_final(ctx.opcoes)
-        intro = self._clipe(ctx, ctx.config.pastas.introducao, "intro", fps, ctx.opcoes.introducao)
+        intro = self._clipe(
+            ctx,
+            ctx.config.pastas.arquivo_introducao(ctx.opcoes.introducao_arquivo),
+            "intro",
+            fps,
+            ctx.opcoes.introducao,
+        )
         vinheta = self._clipe(
-            ctx, ctx.config.pastas.vinheta_final, "vinheta", fps, ctx.opcoes.vinheta_final
+            ctx,
+            ctx.config.pastas.arquivo_vinheta(ctx.opcoes.vinheta_arquivo),
+            "vinheta",
+            fps,
+            ctx.opcoes.vinheta_final,
         )
         marca = self._marca(ctx, largura)
         partes = planejar_partes(trechos, fps, DURACAO_DA_PARTE_S)
@@ -339,7 +440,19 @@ class RenderizarVideoLongo(Etapa):
         for parte in partes:
             ctx.ponto_seguro()
             feito = self._parte(
-                ctx, pasta, parte, video, info, fps, argumentos_codec, pesos, feito, marca
+                ctx,
+                pasta,
+                parte,
+                video,
+                info,
+                fps,
+                argumentos_codec,
+                pesos,
+                feito,
+                marca,
+                intro_antes=intro is not None,
+                vinheta_depois=vinheta is not None,
+                ultima=len(partes) - 1,
             )
             sequencia.append((parte.arquivo, float(Fraction(parte.quadros) / fps)))
         if vinheta:
@@ -446,6 +559,9 @@ class RenderizarVideoLongo(Etapa):
             "vinheta": marca_do_arquivo(vinheta.caminho) if vinheta else None,
             "duracao_da_parte": DURACAO_DA_PARTE_S,
             "marca": assinatura_da_marca(marca.arquivo, marca) if marca else None,
+            "fade": ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0,
+            "zoom": ctx.opcoes.enquadramento.model_dump(),
+            "tratamento": ctx.opcoes.tratamento.model_dump(),
         }
         return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -493,6 +609,7 @@ class RenderizarVideoLongo(Etapa):
                 normalizar=ctx.opcoes.normalizar_volume,
                 lufs=ctx.opcoes.lufs_video_longo,
                 compensar_mono=ctx.opcoes.normalizar_volume,
+                fade_s=ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0,
             ),
             encoding="utf-8",
         )
@@ -522,6 +639,9 @@ class RenderizarVideoLongo(Etapa):
         pesos,
         feito,
         marca=None,
+        intro_antes: bool = False,
+        vinheta_depois: bool = False,
+        ultima: int = 0,
     ):
         destino = pasta / parte.arquivo
         faixa, depois = self._andamento(ctx, pesos, parte.arquivo, feito)
@@ -531,7 +651,16 @@ class RenderizarVideoLongo(Etapa):
         inicio = max(0.0, parte.pedacos[0][0] - _MARGEM_DE_LEITURA_S)
         fim = parte.pedacos[-1][1] + _MARGEM_DE_LEITURA_S
         script = pasta / f"{destino.stem}.filter"
-        script.write_text(script_da_parte(parte, inicio, info, fps, marca), encoding="utf-8")
+        fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
+        script.write_text(
+            script_da_parte(
+                parte, inicio, info, fps, marca,
+                enquadramento=ctx.opcoes.enquadramento, tratamento=ctx.opcoes.tratamento,
+                fade_entrada_s=fade if intro_antes and parte.indice == 0 else 0.0,
+                fade_saida_s=fade if vinheta_depois and parte.indice == ultima else 0.0,
+            ),
+            encoding="utf-8",
+        )  # fmt: skip
         parcial = destino.with_name(destino.name + ".parcial")
         ctx.log.info("Renderizando a parte %d (%d quadros)…", parte.indice + 1, parte.quadros)
         ctx.ffmpeg(
@@ -553,7 +682,15 @@ class RenderizarVideoLongo(Etapa):
             ctx.progresso(depois)
             return depois
         script = pasta / f"{destino.stem}.filter"
-        script.write_text(script_de_clipe(clipe.info, largura, altura, fps), encoding="utf-8")
+        fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
+        script.write_text(
+            script_de_clipe(
+                clipe.info, largura, altura, fps, quadros=clipe.quadros,
+                fade_entrada_s=fade if clipe.arquivo == "parte_vinheta.mp4" else 0.0,
+                fade_saida_s=fade if clipe.arquivo == "parte_intro.mp4" else 0.0,
+            ),
+            encoding="utf-8",
+        )  # fmt: skip
         parcial = destino.with_name(destino.name + ".parcial")
         ctx.ffmpeg(
             ["-y", "-i", clipe.caminho, "-/filter_complex", script, "-map", "[vout]",
@@ -606,6 +743,7 @@ class RenderizarVideoLongo(Etapa):
             {
                 "introducao": ctx.opcoes.introducao,
                 "vinheta_final": ctx.opcoes.vinheta_final,
+                "fade": ctx.opcoes.fade_vinhetas,
                 "preset": preset.preset,
                 "crf": preset.crf,
                 "duracao_s": round(resultado.duracao_s, 3),

@@ -267,3 +267,107 @@ def test_dependencia_fora_de_ordem_e_ids_repetidos_sao_recusados(roteiro):
         Pipeline([b, a])
     with pytest.raises(ValueError):
         Pipeline([a, a])
+
+
+def _linhas_do_log(contexto) -> str:
+    return contexto.pastas.log.read_text(encoding="utf-8")
+
+
+def test_log_diz_a_posicao_e_a_duracao_de_cada_etapa(pipeline, contexto):
+    pipeline.executar(contexto)
+    log = _linhas_do_log(contexto)
+    assert "Iniciando: Etapa A (etapa 1 de 2)" in log
+    assert "Iniciando: Etapa B (etapa 2 de 2)" in log
+    assert "Concluído: Etapa A em " in log
+    assert "Modo completo: 2 etapas ativas, 2 por fazer" in log
+
+
+def test_executar_vigiado_devolve_o_resultado_e_avisa_enquanto_espera(contexto):
+    import time
+
+    def devagar():
+        time.sleep(0.7)
+        return 42
+
+    resultado = contexto.executar_vigiado(
+        "Passo lento", devagar, detalhe=lambda: "5 de 10 MB", intervalo_s=0.2
+    )
+    assert resultado == 42
+    log = _linhas_do_log(contexto)
+    assert "Passo lento: ainda em andamento há " in log
+    assert "(5 de 10 MB)" in log
+
+
+def test_executar_vigiado_repassa_a_falha_do_passo(contexto):
+    def quebra():
+        raise ValueError("deu ruim")
+
+    with pytest.raises(ValueError, match="deu ruim"):
+        contexto.executar_vigiado("Passo", quebra)
+
+
+def test_executar_vigiado_cancela_na_hora_sem_esperar_o_passo(contexto):
+    import threading
+    import time
+
+    from spurgeon.core.erros import Cancelado
+
+    solto = threading.Event()
+    contexto.cancelar.set()
+    inicio = time.monotonic()
+    with pytest.raises(Cancelado):
+        contexto.executar_vigiado("Passo", lambda: solto.wait(30))
+    assert time.monotonic() - inicio < 5
+    solto.set()
+    assert "Cancelamento pedido durante: Passo" in _linhas_do_log(contexto)
+
+
+def test_executar_vigiado_avisa_que_a_pausa_so_vale_depois_do_passo(contexto):
+    import time
+
+    contexto.pausar.set()
+    contexto.executar_vigiado("Passo", lambda: time.sleep(0.5))
+    log = _linhas_do_log(contexto)
+    assert "Pausa pedida: ela vale quando “Passo” terminar" in log
+
+
+def test_executar_vigiado_alerta_quando_demora_demais(contexto):
+    import time
+
+    contexto.executar_vigiado(
+        "Passo", lambda: time.sleep(0.6), alerta_apos_s=0.2, alerta="Confira o disco."
+    )
+    assert "Passo está demorando mais que o normal. Confira o disco." in _linhas_do_log(contexto)
+
+
+def test_batimento_avisa_enquanto_o_bloco_roda(contexto):
+    import time
+
+    with contexto.batimento("Bloco 1", detalhe=lambda: "3 trechos", intervalo_s=0.2):
+        time.sleep(0.7)
+    log = _linhas_do_log(contexto)
+    assert "Bloco 1: ainda em andamento há " in log
+    assert "(3 trechos)" in log
+
+
+def test_batimento_nao_diz_que_continua_trabalhando_enquanto_esta_em_pausa(contexto):
+    import time
+
+    contexto.pausar.set()
+    with contexto.batimento("Bloco 1", intervalo_s=0.1):
+        time.sleep(0.5)
+    log = _linhas_do_log(contexto)
+    assert "Pausa pedida: ela vale no próximo ponto seguro" in log
+    assert "Bloco 1: ainda em andamento" not in log
+
+
+def test_passo_demorado_mostra_no_log_onde_esta_parado(contexto):
+    import time
+
+    def trava_aqui():
+        time.sleep(0.8)
+
+    contexto.executar_vigiado("Passo", trava_aqui, alerta_apos_s=0.2, alerta="Confira o disco.")
+    log = _linhas_do_log(contexto)
+    assert "Onde o passo está parado agora" in log
+    assert "trava_aqui" in log

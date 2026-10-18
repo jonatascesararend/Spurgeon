@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 
 from spurgeon.audio.nivel import carregar_niveis
 from spurgeon.audio.pausas import DURACAO_MINIMA_S, encontrar_pausas, subtrair_intervalos
 from spurgeon.core.arquivos import escrever_json_atomico, escrever_texto_atomico, ler_json
+from spurgeon.core.diagnostico import LeituraDeDisco, situacao_da_maquina
 from spurgeon.core.ffmpeg import sondar
-from spurgeon.core.formatacao import formatar_duracao
+from spurgeon.core.formatacao import formatar_duracao, formatar_numero
 from spurgeon.core.hardware import detectar_hardware, recomendar, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa, ResultadoEtapa
 from spurgeon.core.tempo import MapaTempo, Trecho
@@ -21,6 +23,7 @@ from spurgeon.transcricao.modelo import (
     baixar_modelo,
     carregar_modelo,
     modelo_baixado,
+    pasta_modelo,
 )
 from spurgeon.transcricao.motor import (
     TAXA_HZ,
@@ -31,6 +34,8 @@ from spurgeon.transcricao.srt import formatar_srt, montar_legendas, remapear_pal
 from spurgeon.transcricao.vocabulario import carregar_vocabulario, corrigir_termos, montar_dicas
 
 _TOLERANCIA_PLANO_S = 1.0
+_CARGA_DEMORADA_S = 90.0  # carregar o modelo leva segundos; mais que isso merece um aviso
+_INTERVALO_BLOCO_S = 20.0
 
 
 class Transcrever(Etapa):
@@ -55,14 +60,18 @@ class Transcrever(Etapa):
         transcricao = _retomar_ou_criar(ctx, plano, duracao, assinatura)
 
         pendentes = [b for b in transcricao.blocos if not b.concluido]
+        ctx.log.info(
+            "Áudio de %s em %d bloco(s) (cortados nas pausas); %d a transcrever.",
+            formatar_duracao(duracao),
+            len(plano),
+            len(pendentes),
+        )
         if pendentes:
             feitos = len(transcricao.blocos) - len(pendentes)
             if feitos:
                 ctx.log.info("Retomando: %d de %d blocos já transcritos.", feitos, len(plano))
             modelo = _preparar_modelo(ctx)
-            from faster_whisper.audio import decode_audio
-
-            audio = decode_audio(str(ctx.pastas.audio_final(ctx.opcoes)), sampling_rate=TAXA_HZ)
+            audio = _decodificar_audio(ctx)
             ctx.log.info("Termos de apoio ao Whisper: %s", dicas or "(nenhum)")
             segundos_feitos = sum(b.fim - b.inicio for b in transcricao.blocos if b.concluido)
             for numero, bloco in enumerate(transcricao.blocos, start=1):
@@ -141,25 +150,89 @@ def _preparar_modelo(ctx: ContextoProjeto):
             nome,
             TAMANHO_MB.get(nome, 0),
         )
-        baixar_modelo(ctx.config, nome, cancelar=ctx.cancelar)
+        ultimo = {"pct": -10}
+
+        def progresso_do_download(fracao: float) -> None:
+            pct = int(fracao * 100) // 10 * 10
+            if pct != ultimo["pct"]:
+                ultimo["pct"] = pct
+                ctx.log.info("Modelo Whisper %s: %d%% baixado.", nome, pct)
+
+        baixar_modelo(ctx.config, nome, ao_progresso=progresso_do_download, cancelar=ctx.cancelar)
         ctx.log.info("Modelo baixado.")
     perfil = detectar_hardware(ctx.config.pastas.projetos)
     recomendacao = recomendar(perfil)
     threads = threads_para_uso(perfil, ctx.opcoes.uso_cpu_percentual)
+    arquivo = pasta_modelo(ctx.config, nome) / "model.bin"
+    total_mb = arquivo.stat().st_size / 1e6 if arquivo.exists() else 0.0
     ctx.log.info(
-        "Carregando o modelo %s (%s, %s, %d threads).",
+        "Carregando o modelo %s (%s, %s, %d threads; %.0f MB no disco). %s",
         nome,
         recomendacao.whisper_dispositivo,
         recomendacao.whisper_compute_type,
         threads,
+        total_mb,
+        situacao_da_maquina(),
     )
-    return carregar_modelo(
-        ctx.config,
-        nome,
-        dispositivo=recomendacao.whisper_dispositivo,
-        compute_type=recomendacao.whisper_compute_type,
-        threads=threads,
+    leitura = LeituraDeDisco()
+    inicio = time.monotonic()
+
+    def andamento() -> str:
+        return (
+            f"{leitura.lidos_mb():.0f} de {total_mb:.0f} MB lidos do disco · "
+            f"{situacao_da_maquina()}"
+        )
+
+    modelo = ctx.executar_vigiado(
+        "Carregando o modelo do Whisper",
+        lambda: carregar_modelo(
+            ctx.config,
+            nome,
+            dispositivo=recomendacao.whisper_dispositivo,
+            compute_type=recomendacao.whisper_compute_type,
+            threads=threads,
+        ),
+        detalhe=andamento,
+        alerta_apos_s=_CARGA_DEMORADA_S,
+        alerta=(
+            "Costuma levar uns segundos. Se os MB lidos quase não andam, o disco está lento "
+            "(antivírus ou outro programa usando o disco); se a RAM livre está perto de zero, "
+            "falta memória. Pausar e cancelar só valem quando o carregamento terminar."
+        ),
     )
+    ctx.log.info(
+        "Modelo carregado em %s. %s",
+        formatar_duracao(time.monotonic() - inicio),
+        situacao_da_maquina(),
+    )
+    return modelo
+
+
+def _decodificar_audio(ctx: ContextoProjeto):
+    """Lê o áudio do projeto para a memória (float32, 16 kHz), como o Whisper pede."""
+    caminho = ctx.pastas.audio_final(ctx.opcoes)
+    ctx.log.info("Decodificando o áudio %s para a memória…", caminho.name)
+    inicio = time.monotonic()
+
+    def decodificar():
+        from faster_whisper.audio import decode_audio
+
+        return decode_audio(str(caminho), sampling_rate=TAXA_HZ)
+
+    audio = ctx.executar_vigiado(
+        "Decodificando o áudio",
+        decodificar,
+        detalhe=situacao_da_maquina,
+        alerta_apos_s=_CARGA_DEMORADA_S,
+        alerta="Um áudio de sermão costuma decodificar em poucos segundos.",
+    )
+    ctx.log.info(
+        "Áudio pronto: %s (%.0f MB na memória) em %s.",
+        formatar_duracao(len(audio) / TAXA_HZ),
+        audio.nbytes / 1e6,
+        formatar_duracao(time.monotonic() - inicio),
+    )
+    return audio
 
 
 def _transcrever_bloco(
@@ -180,13 +253,56 @@ def _transcrever_bloco(
         segundos_para_rotulo(bloco.inicio),
         segundos_para_rotulo(bloco.fim),
     )
+    inicio = time.monotonic()
+    andamento = {"segmentos": 0, "ate": bloco.inicio}
 
     def ao_segmento(fim_absoluto: float) -> None:
         ctx.ponto_seguro()  # pausa e cancelamento valem a cada segmento pronto
+        andamento["segmentos"] += 1
+        andamento["ate"] = fim_absoluto
+        if andamento["segmentos"] == 1:
+            ctx.log.info(
+                "Primeiro trecho transcrito em %s (a detecção de voz e a primeira janela de 30 s "
+                "são as partes mais lentas).",
+                formatar_duracao(time.monotonic() - inicio),
+            )
         ctx.progresso((segundos_feitos + (fim_absoluto - bloco.inicio)) / duracao)
 
-    bloco.segmentos = transcrever_trecho(modelo, audio, bloco.inicio, bloco.fim, dicas, ao_segmento)
+    def descrever() -> str:
+        feito = andamento["ate"] - bloco.inicio
+        decorrido = time.monotonic() - inicio
+        texto = (
+            f"transcrito até {segundos_para_rotulo(andamento['ate'])} de "
+            f"{segundos_para_rotulo(bloco.fim)}, {andamento['segmentos']} trechos"
+        )
+        if feito > 1 and decorrido > 1:
+            velocidade = feito / decorrido
+            falta = (bloco.fim - andamento["ate"]) / velocidade
+            texto += (
+                f", {formatar_numero(velocidade)}× o tempo real, falta cerca de "
+                f"{formatar_duracao(falta)}"
+            )
+        elif not andamento["segmentos"]:
+            texto += ", ainda sem o primeiro trecho pronto"
+        return f"{texto} · {situacao_da_maquina()}"
+
+    with ctx.batimento(
+        f"Bloco {numero} de {total}",
+        detalhe=descrever,
+        intervalo_s=_INTERVALO_BLOCO_S,
+        quando_pausa="assim que o próximo trecho for transcrito (alguns segundos)",
+    ):
+        bloco.segmentos = transcrever_trecho(
+            modelo, audio, bloco.inicio, bloco.fim, dicas, ao_segmento
+        )
     bloco.concluido = True
+    ctx.log.info(
+        "Bloco %d de %d pronto em %s: %d trechos.",
+        numero,
+        total,
+        formatar_duracao(time.monotonic() - inicio),
+        len(bloco.segmentos),
+    )
 
 
 class RevisarTranscricao(Etapa):
@@ -239,7 +355,12 @@ class GerarSrt(Etapa):
     id = "gerar_srt"
     nome = "Gerando as legendas (.srt)"
     depende_de = ("transcrever", "revisar_transcricao", "calcular_cortes")
-    opcoes_relevantes = ("introducao", "srt_max_linhas", "srt_max_caracteres_por_linha")
+    opcoes_relevantes = (
+        "introducao",
+        "introducao_arquivo",
+        "srt_max_linhas",
+        "srt_max_caracteres_por_linha",
+    )
     peso = 0.3
 
     def ativa(self, opcoes) -> bool:
@@ -252,7 +373,9 @@ class GerarSrt(Etapa):
         cortes = ler_json(ctx.pastas.cortes)
         deslocamento = 0.0
         if ctx.opcoes.introducao:
-            deslocamento = sondar(ctx.config.pastas.introducao).duracao_s
+            deslocamento = sondar(
+                ctx.config.pastas.arquivo_introducao(ctx.opcoes.introducao_arquivo)
+            ).duracao_s
             ctx.log.info(
                 "Introdução de %s: os tempos das legendas avançam esse tanto.",
                 formatar_duracao(deslocamento),

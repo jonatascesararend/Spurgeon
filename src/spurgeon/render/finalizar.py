@@ -96,8 +96,14 @@ class Finalizar(Etapa):
         except (OSError, KeyError, ValueError):
             return None
         for ligado, caminho in (
-            (ctx.opcoes.introducao, ctx.config.pastas.introducao),
-            (ctx.opcoes.vinheta_final, ctx.config.pastas.vinheta_final),
+            (
+                ctx.opcoes.introducao,
+                ctx.config.pastas.arquivo_introducao(ctx.opcoes.introducao_arquivo),
+            ),
+            (
+                ctx.opcoes.vinheta_final,
+                ctx.config.pastas.arquivo_vinheta(ctx.opcoes.vinheta_arquivo),
+            ),
         ):
             if ligado and caminho.exists():
                 esperado += sondar(caminho).duracao_s
@@ -152,7 +158,10 @@ class Finalizar(Etapa):
             if (info.largura, info.altura) != (LARGURA_SHORT, ALTURA_SHORT) or not info.tem_audio:
                 problemas.append(f"{curto.video} não está em 1080x1920 com áudio.")
             if info.duracao_s > DURACAO_MAXIMA_S:
-                problemas.append(f"{curto.video} tem {info.duracao_s:.1f} s (o limite é 60 s).")
+                problemas.append(
+                    f"{curto.video} tem {info.duracao_s:.1f} s "
+                    f"(o limite é {DURACAO_MAXIMA_S - 0.5:g} s)."
+                )
             if not (ctx.pastas.shorts / curto.texto).exists():
                 avisos.append(f"Falta o texto de publicação {curto.texto}.")
             total_s += info.duracao_s

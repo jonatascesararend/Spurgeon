@@ -14,10 +14,15 @@ import platformdirs
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from spurgeon.core.aparencia import Enquadramento, TratamentoImagem
 from spurgeon.core.arquivos import escrever_texto_atomico
 from spurgeon.core.erros import ErroConfiguracao
 
 NOME_APP = "Spurgeon"
+VERSAO_CONFIG = 2  # 2: o limite dos Shorts passou de 60 para 180 s
+#: o maior Short possível (o YouTube aceita até 3 minutos); o ideal continua em torno de 60 s
+DURACAO_MAXIMA_SHORT_S = 180.0
+DURACAO_IDEAL_SHORT_S = 60.0
 
 ModeloWhisper = Literal["tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"]
 Qualidade = Literal["maxima", "alta", "equilibrado", "rapido", "personalizado"]
@@ -88,6 +93,13 @@ class Pastas(BaseModel):
         """Prefixo dos arquivos Hunspell (`pt_BR.aff` e `pt_BR.dic`) do verificador de português."""
         return self.recursos / "dicionarios" / "pt_BR" / "pt_BR"
 
+    def arquivo_introducao(self, escolhido: str = "") -> Path:
+        """A introdução a usar: o arquivo escolhido pela pessoa ou o `introducao.mp4` padrão."""
+        return Path(escolhido.strip()) if escolhido.strip() else self.introducao
+
+    def arquivo_vinheta(self, escolhido: str = "") -> Path:
+        return Path(escolhido.strip()) if escolhido.strip() else self.vinheta_final
+
     def garantir(self) -> None:
         """Cria as pastas do aplicativo que ainda não existem (entrada, projetos, recursos).
 
@@ -96,6 +108,26 @@ class Pastas(BaseModel):
         for pasta in (self.entrada, self.projetos, self.recursos, self.fontes):
             with contextlib.suppress(OSError):
                 pasta.mkdir(parents=True, exist_ok=True)
+
+
+CAMPOS_DO_TRATAMENTO = (
+    "tratamento_brilho",
+    "tratamento_contraste",
+    "tratamento_saturacao",
+    "tratamento_temperatura",
+    "tratamento_matiz",
+    "tratamento_brancos",
+    "tratamento_sombras",
+)
+#: campos acrescentados na 1.2 (ver `assinatura`)
+CAMPOS_NOVOS_NA_1_2 = frozenset(
+    {
+        "introducao_arquivo", "vinheta_arquivo", "fade_vinhetas", "fade_vinhetas_s",
+        "video_inicio_s", "video_fim_s", "zoom_pct", "zoom_centro_x_pct", "zoom_centro_y_pct",
+        "zoom_nos_shorts", "tratamento_ativo", "tratamento_nos_shorts", *CAMPOS_DO_TRATAMENTO,
+        "shorts_zoom_pct", "shorts_zoom_centro_x_pct", "shorts_zoom_centro_y_pct",
+    }
+)  # fmt: skip
 
 
 class OpcoesProcessamento(BaseModel):
@@ -113,6 +145,38 @@ class OpcoesProcessamento(BaseModel):
     normalizar_volume: bool = False
     introducao: bool = False
     vinheta_final: bool = False
+    #: arquivos escolhidos pela pessoa; vazio = o padrão de `recursos/` (introducao, vinheta_final)
+    introducao_arquivo: str = ""
+    vinheta_arquivo: str = ""
+    #: fade de imagem e som entre a introdução/vinheta e o vídeo (passando pelo preto)
+    fade_vinhetas: bool = False
+    fade_vinhetas_s: float = Field(0.5, ge=0.1, le=3.0)
+
+    # Onde o vídeo começa e termina (segundos do original); o resto é ignorado em tudo
+    video_inicio_s: float = Field(0.0, ge=0.0)
+    video_fim_s: float = Field(0.0, ge=0.0)  # 0 = até o fim
+
+    # Enquadramento: zoom no quadro (100% = sem zoom); vale para o vídeo longo e, se marcado, Shorts
+    zoom_pct: float = Field(100.0, ge=100.0, le=300.0)
+    zoom_centro_x_pct: float = Field(50.0, ge=0.0, le=100.0)
+    zoom_centro_y_pct: float = Field(50.0, ge=0.0, le=100.0)
+    zoom_nos_shorts: bool = True
+    # Zoom só dos Shorts: aproxima de novo, dentro do recorte 9:16 (100% = sem zoom). O centro é em
+    # % da largura e da altura desse recorte.
+    shorts_zoom_pct: float = Field(100.0, ge=100.0, le=300.0)
+    shorts_zoom_centro_x_pct: float = Field(50.0, ge=0.0, le=100.0)
+    shorts_zoom_centro_y_pct: float = Field(50.0, ge=0.0, le=100.0)
+
+    # Tratamento de imagem (cor e luz), de −100 a +100 em cada ajuste
+    tratamento_ativo: bool = False
+    tratamento_brilho: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_contraste: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_saturacao: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_temperatura: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_matiz: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_brancos: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_sombras: float = Field(0.0, ge=-100.0, le=100.0)
+    tratamento_nos_shorts: bool = True
 
     # Marca d'água (logotipo no canto do vídeo longo e/ou dos Shorts)
     marca_dagua: bool = False
@@ -141,8 +205,8 @@ class OpcoesProcessamento(BaseModel):
     srt_max_caracteres_por_linha: int = Field(42, ge=20, le=80)
 
     # Shorts
-    shorts_duracao_min_s: float = Field(30.0, ge=10.0, le=60.0)
-    shorts_duracao_max_s: float = Field(60.0, ge=10.0, le=60.0)
+    shorts_duracao_min_s: float = Field(30.0, ge=10.0, le=DURACAO_MAXIMA_SHORT_S)
+    shorts_duracao_max_s: float = Field(DURACAO_MAXIMA_SHORT_S, ge=10.0, le=DURACAO_MAXIMA_SHORT_S)
     shorts_limite_seguranca: int = Field(20, ge=1, le=100)
     shorts_pausa_interna_max_s: float = Field(3.0, ge=0.5, le=30.0)
     #: abaixo desta nota (0 a 100) um corte vira reserva: aparece na aprovação, mas desmarcado
@@ -175,7 +239,62 @@ class OpcoesProcessamento(BaseModel):
             raise ValueError("A duração mínima dos Shorts não pode passar da máxima.")
         if self.x264_preset_personalizado not in PRESETS_X264:
             raise ValueError(f"Preset x264 inválido: {self.x264_preset_personalizado}")
+        if self.video_fim_s and self.video_fim_s <= self.video_inicio_s:
+            raise ValueError("O vídeo precisa terminar depois do ponto em que começa.")
         return self
+
+    @property
+    def enquadramento(self) -> Enquadramento:
+        if self.zoom_pct <= 100.0:  # sem zoom o centro não quer dizer nada
+            return Enquadramento()
+        return Enquadramento(
+            zoom_pct=self.zoom_pct,
+            centro_x_pct=self.zoom_centro_x_pct,
+            centro_y_pct=self.zoom_centro_y_pct,
+        )
+
+    @property
+    def enquadramento_do_short(self) -> Enquadramento:
+        """O zoom que só os Shorts têm, aplicado dentro do recorte 9:16."""
+        if self.shorts_zoom_pct <= 100.0:
+            return Enquadramento()
+        return Enquadramento(
+            zoom_pct=self.shorts_zoom_pct,
+            centro_x_pct=self.shorts_zoom_centro_x_pct,
+            centro_y_pct=self.shorts_zoom_centro_y_pct,
+        )
+
+    @property
+    def tratamento(self) -> TratamentoImagem:
+        """O tratamento de imagem em vigor (neutro se estiver desligado)."""
+        if not self.tratamento_ativo:
+            return TratamentoImagem()
+        return TratamentoImagem(
+            brilho=self.tratamento_brilho,
+            contraste=self.tratamento_contraste,
+            saturacao=self.tratamento_saturacao,
+            temperatura=self.tratamento_temperatura,
+            matiz=self.tratamento_matiz,
+            brancos=self.tratamento_brancos,
+            sombras=self.tratamento_sombras,
+        )
+
+    @property
+    def enquadramento_nos_curtos(self) -> Enquadramento:
+        return self.enquadramento if self.zoom_nos_shorts else Enquadramento()
+
+    @property
+    def tratamento_nos_curtos(self) -> TratamentoImagem:
+        return self.tratamento if self.tratamento_nos_shorts else TratamentoImagem()
+
+    def janela_do_video(self, duracao_s: float) -> tuple[float, float]:
+        """(início, fim) em segundos do trecho do original que o projeto usa."""
+        fim = min(self.video_fim_s, duracao_s) if self.video_fim_s else duracao_s
+        return min(self.video_inicio_s, fim), fim
+
+    @property
+    def tem_janela(self) -> bool:
+        return self.video_inicio_s > 0 or self.video_fim_s > 0
 
     @property
     def so_vinhetas(self) -> bool:
@@ -236,10 +355,43 @@ class OpcoesProcessamento(BaseModel):
         if achados:
             raise ErroConfiguracao(" ".join(achados))
 
+    def _efetivos(self) -> dict:
+        """As opções como o processamento as enxerga: o que está desligado vale o neutro.
+
+        Os ajustes de cor com o tratamento desligado, o centro do zoom em 100%, o arquivo de uma
+        introdução que não foi marcada… não mudam o resultado, e não podem refazer horas de render.
+        """
+        d = self.model_dump(mode="json")
+        if not d["tratamento_ativo"]:
+            for nome in CAMPOS_DO_TRATAMENTO:
+                d[nome] = 0.0
+            d["tratamento_nos_shorts"] = True
+        if d["zoom_pct"] <= 100.0:
+            d["zoom_centro_x_pct"] = d["zoom_centro_y_pct"] = 50.0
+            d["zoom_nos_shorts"] = True
+        if d["shorts_zoom_pct"] <= 100.0:
+            d["shorts_zoom_centro_x_pct"] = d["shorts_zoom_centro_y_pct"] = 50.0
+        if not d["introducao"]:
+            d["introducao_arquivo"] = ""
+        if not d["vinheta_final"]:
+            d["vinheta_arquivo"] = ""
+        if not (d["introducao"] or d["vinheta_final"]) or not d["fade_vinhetas"]:
+            d["fade_vinhetas"], d["fade_vinhetas_s"] = False, 0.5
+        return d
+
     def assinatura(self, campos: Iterable[str]) -> str:
-        """Hash curto dos campos indicados; detecta mudança de opção entre execuções."""
-        dados = self.model_dump(mode="json")
-        recorte = {campo: dados[campo] for campo in sorted(campos)}
+        """Hash curto dos campos indicados; detecta mudança de opção entre execuções.
+
+        Os campos criados na 1.2 só entram quando saem do padrão: um projeto antigo, sem corte,
+        zoom, cor nem fade, mantém a assinatura de antes e não refaz o que já estava pronto.
+        """
+        dados = self._efetivos()
+        recorte = {
+            campo: dados[campo]
+            for campo in sorted(campos)
+            if campo not in CAMPOS_NOVOS_NA_1_2
+            or dados[campo] != OpcoesProcessamento.model_fields[campo].default
+        }
         bruto = json.dumps(recorte, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(bruto.encode("utf-8")).hexdigest()[:12]
 
@@ -249,8 +401,23 @@ class ConfigApp(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    versao: int = VERSAO_CONFIG
     pastas: Pastas = Field(default_factory=Pastas)
     padroes: OpcoesProcessamento = Field(default_factory=OpcoesProcessamento)
+    #: presets salvos pela pessoa (nome → ajustes), para repetir o estilo nos próximos vídeos
+    presets_enquadramento: dict[str, Enquadramento] = Field(default_factory=dict)
+    presets_tratamento: dict[str, TratamentoImagem] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrar(cls, dados):
+        """Configurações antigas: o limite dos Shorts de 60 s (o padrão de então) vira 180 s."""
+        if isinstance(dados, dict) and int(dados.get("versao", 1)) < 2:
+            padroes = dados.get("padroes")
+            if isinstance(padroes, dict) and padroes.get("shorts_duracao_max_s") == 60:
+                dados = {**dados, "padroes": {**padroes, "shorts_duracao_max_s": 180.0}}
+            dados = {**dados, "versao": VERSAO_CONFIG}
+        return dados
 
 
 def caminho_config() -> Path:

@@ -159,23 +159,23 @@ def test_mover_o_inicio_muda_o_corte_e_marca_como_editado(aberto):
 
 
 @pytest.mark.gui
-def test_passar_de_60_segundos_e_permitido_mas_avisa_na_tela(aberto):
+def test_passar_do_limite_e_permitido_mas_avisa_na_tela(aberto):
     aberto.editor.selecionar(aberto.editor._ordem[0])
     assert aberto.editor._rotulo_limite.cget("text") == ""
-    for _ in range(80):
+    for _ in range(500):
         assert aberto.editor.mover("fim", 1)
-    assert aberto.editor._cortes[aberto.editor._atual].duracao > 60.0
+    assert aberto.editor._cortes[aberto.editor._atual].duracao > 180.0
     assert "não pode ser um Short" in aberto.editor._rotulo_limite.cget("text")
-    assert "mais de 60 s" in aberto.editor._resumo.cget("text")
+    assert "mais de 180 s" in aberto.editor._resumo.cget("text")
 
 
 @pytest.mark.gui
-def test_salvar_recusa_corte_marcado_com_mais_de_60_segundos(aberto, pastas):
+def test_salvar_recusa_corte_marcado_acima_do_limite(aberto, pastas):
     aberto.editor.selecionar(aberto.editor._ordem[0])
-    for _ in range(80):
+    for _ in range(500):
         aberto.editor.mover("fim", 1)
     assert aberto.salvar_e_fechar() is False
-    assert any("Corte com mais de 60 segundos" in t for t, _ in aberto.caixas)
+    assert any("Corte com mais de 180 segundos" in t for t, _ in aberto.caixas)
     assert aberto.winfo_exists() and not aberto.salvo
     aberto.editor.alternar_atual()  # desmarcado, o corte longo não impede mais
     assert aberto.salvar_e_fechar() is True

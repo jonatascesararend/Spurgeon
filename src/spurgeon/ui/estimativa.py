@@ -123,10 +123,12 @@ def estimar_tempo_total(duracao_s: float, opcoes, *, hdr: bool) -> tuple[float, 
         por_segundo += next((v for k, v in _IA_DOS_SHORTS.items() if k in modelo), _IA_PADRAO)
     preset = opcoes.preset_qualidade().preset
     render = 0.0
+    inicio, fim = opcoes.janela_do_video(duracao_s)
+    utilizada = fim - inicio  # o que fica de fora do começo e do fim não é renderizado
     if opcoes.processa_video_longo:
-        render += estimar_render_s(duracao_s, preset, hdr=hdr)
+        render += estimar_render_s(utilizada, preset, hdr=hdr)
     if opcoes.processa_shorts:
-        render += estimar_render_s(duracao_s, preset, hdr=hdr, shorts=True)
+        render += estimar_render_s(utilizada, preset, hdr=hdr, shorts=True)
     return duracao_s * por_segundo + render, render
 
 

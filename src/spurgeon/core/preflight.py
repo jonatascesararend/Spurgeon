@@ -25,6 +25,7 @@ from spurgeon.core.ollama import URL_OLLAMA, localizar_ollama
 _FILTROS_NECESSARIOS = ("ass", "loudnorm", "zscale", "tonemap")  # zscale/tonemap: HDR→SDR
 _CODIFICADORES_NECESSARIOS = ("libx264", "aac")
 _DISCO_MINIMO_GB = 10.0
+_JANELA_MINIMA_S = 10.0  # menos que isso não dá vídeo
 _RAM_LIVRE_MINIMA_GB = 3.0
 _FATOR_ESPACO_VIDEO = 3  # sem conseguir ler a duração: o projeto ocupa ~3x o tamanho do vídeo
 _MARGEM_DISCO_GB = 0.5
@@ -60,6 +61,8 @@ def executar_preflight(
     resultados = [_python(), *_ffmpeg(opcoes), *_pastas(config, opcoes, especifico)]
     if opcoes.marca_dagua:
         resultados.append(_marca(opcoes))
+    if especifico and opcoes.tem_janela and not opcoes.so_vinhetas:
+        resultados.append(_janela_do_video(Path(video), opcoes))
     if (opcoes.limpar_audio and not opcoes.so_vinhetas) or not especifico:
         resultados.append(_deep_filter(config))
     if not (opcoes.so_vinhetas and especifico):  # só emendar vinhetas não transcreve nada
@@ -120,8 +123,8 @@ def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) ->
     except OSError as erro:
         resultados.append(Verificacao("Pasta de projetos", Nivel.ERRO, f"sem escrita: {erro}"))
     for pedido, nome, caminho in (
-        (opcoes.introducao, "Introdução", pastas.introducao),
-        (opcoes.vinheta_final, "Vinheta final", pastas.vinheta_final),
+        (opcoes.introducao, "Introdução", pastas.arquivo_introducao(opcoes.introducao_arquivo)),
+        (opcoes.vinheta_final, "Vinheta final", pastas.arquivo_vinheta(opcoes.vinheta_arquivo)),
     ):
         if pedido:
             nivel = Nivel.OK if caminho.exists() else Nivel.ERRO
@@ -130,6 +133,25 @@ def _pastas(config: ConfigApp, opcoes: OpcoesProcessamento, especifico: bool) ->
             detalhe = str(caminho) if caminho.exists() else f"ainda não existe: {caminho.name}"
             resultados.append(Verificacao(nome, Nivel.OK, detalhe))
     return resultados
+
+
+def _janela_do_video(video: Path, opcoes: OpcoesProcessamento) -> Verificacao:
+    """O começo e o fim escolhidos precisam deixar um pedaço do vídeo."""
+    try:
+        duracao = sondar(video).duracao_s
+    except (ErroFFmpeg, ErroConfiguracao):
+        return Verificacao("Começo e fim do vídeo", Nivel.OK, "não foi possível conferir")
+    inicio, fim = opcoes.janela_do_video(duracao)
+    if fim - inicio < _JANELA_MINIMA_S:
+        return Verificacao(
+            "Começo e fim do vídeo",
+            Nivel.ERRO,
+            f"o vídeo tem {duracao:.0f} s e o trecho escolhido ({inicio:.0f} s a {fim:.0f} s) "
+            f"não tem nem {_JANELA_MINIMA_S:.0f} s",
+        )
+    return Verificacao(
+        "Começo e fim do vídeo", Nivel.OK, f"usa de {inicio:.0f} s a {fim:.0f} s de {duracao:.0f} s"
+    )
 
 
 def _marca(opcoes: OpcoesProcessamento) -> Verificacao:

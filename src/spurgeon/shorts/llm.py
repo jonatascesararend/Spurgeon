@@ -36,12 +36,14 @@ TRECHO A AVALIAR (este é o corte, {duracao:.0f} segundos):
 CONTEXTO POSTERIOR (só para você entender; não faz parte do corte):
 {depois}
 
-Avalie o TRECHO como um possível Short de até 60 segundos:
+Avalie o TRECHO como um possível Short de YouTube (de 30 segundos a 3 minutos; o ideal é por \
+volta de 1 minuto, mas uma ideia que precisa de mais tempo pode valer um trecho longo):
 - categoria: "pergunta_gancho" (abre com uma pergunta que prende a atenção), "citacao_biblica" \
 (gira em torno de um texto bíblico), "aplicacao_pratica" (aplica a verdade à vida de quem ouve), \
 "conclusao" (fecha uma ideia ou o sermão) ou "outra".
 - nota: de 0 a 10, o potencial de prender quem assiste. Tem gancho? Desenvolve uma ideia central \
-completa? Termina com sentido? Seja exigente: 10 é raro.
+completa? Termina com sentido? Seja exigente: 10 é raro. Num trecho com mais de 90 segundos a \
+ideia precisa se sustentar o tempo todo, sem enrolação nem desvios; se perde o fio, dê nota baixa.
 - autossuficiente: true se quem nunca ouviu o resto do sermão entende o trecho; false se ele \
 depende de algo dito antes (por exemplo, começa com "isso", "ele" ou "como eu dizia").
 - alerta_contexto: deixe "" se o trecho isolado é seguro. Se, fora do sermão, ele pudesse ser \

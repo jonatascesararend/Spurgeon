@@ -19,7 +19,12 @@ from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.render import filtros as f
-from spurgeon.render.video_longo import Clipe, RenderizarVideoLongo, script_de_clipe
+from spurgeon.render.video_longo import (
+    Clipe,
+    RenderizarVideoLongo,
+    fade_efetivo,
+    script_de_clipe,
+)
 from spurgeon.transcricao.srt import deslocar_srt
 
 _TOLERANCIA_DE_DURACAO_S = 0.5
@@ -27,18 +32,35 @@ _PROBLEMA_NA_EMENDA = re.compile(r"(?i)error|invalid|corrupt|non-monoton|missing
 
 
 def script_do_clipe_completo(
-    clipe: Clipe, largura: int, altura: int, fps: Fraction, *, normalizar: bool, lufs: float
-) -> str:
-    """Imagem (`[vout]`) e som (`[aout]`) de uma introdução ou vinheta, prontos para emendar."""
-    duracao = f.numero_ffmpeg(float(Fraction(clipe.quadros) / fps))
+    clipe: Clipe, largura: int, altura: int, fps: Fraction, *, normalizar: bool, lufs: float,
+    fade_entrada_s: float = 0.0, fade_saida_s: float = 0.0,
+) -> str:  # fmt: skip
+    """Imagem (`[vout]`) e som (`[aout]`) de uma introdução ou vinheta, prontos para emendar.
+
+    Aqui só o clipe pode ganhar fade (a introdução sai para o preto e a vinheta entra dele): o
+    vídeo principal já está pronto e é emendado sem recodificar.
+    """
+    total = float(Fraction(clipe.quadros) / fps)
+    duracao = f.numero_ffmpeg(total)
     if clipe.info.tem_audio:
         origem = f"[0:a]{f.filtro_audio_estereo(clipe.info.canais_audio)}"
         if normalizar:
             origem += f",loudnorm=I={lufs:g}:TP=-1.5:LRA=11"
     else:
         origem = f"anullsrc=r={f.TAXA_AUDIO}:cl=stereo"
-    audio = f"{origem},apad=pad_dur=2,atrim=duration={duracao},asetpts=PTS-STARTPTS[aout]"
-    return script_de_clipe(clipe.info, largura, altura, fps) + ";\n" + audio
+    fades = ""
+    if fade_entrada_s:
+        entrada = f.numero_ffmpeg(fade_efetivo(fade_entrada_s, total))
+        fades += f",afade=t=in:st=0:d={entrada}"
+    if fade_saida_s:
+        saida = fade_efetivo(fade_saida_s, total)
+        fades += f",afade=t=out:st={f.numero_ffmpeg(total - saida)}:d={f.numero_ffmpeg(saida)}"
+    audio = f"{origem},apad=pad_dur=2,atrim=duration={duracao},asetpts=PTS-STARTPTS{fades}[aout]"
+    video = script_de_clipe(
+        clipe.info, largura, altura, fps, quadros=clipe.quadros,
+        fade_entrada_s=fade_entrada_s, fade_saida_s=fade_saida_s,
+    )  # fmt: skip
+    return video + ";\n" + audio
 
 
 def lista_de_emenda(arquivos: list[Path]) -> str:
@@ -57,6 +79,10 @@ class AdicionarVinhetas(Etapa):
     opcoes_relevantes = (
         "introducao",
         "vinheta_final",
+        "introducao_arquivo",
+        "vinheta_arquivo",
+        "fade_vinhetas",
+        "fade_vinhetas_s",
         "qualidade",
         "x264_preset_personalizado",
         "crf_personalizado",
@@ -95,12 +121,22 @@ class AdicionarVinhetas(Etapa):
         if ctx.opcoes.introducao:
             if anterior.get("introducao"):
                 raise ErroFerramenta("O vídeo longo deste projeto já tem a introdução.")
-            intro = etapa_de_render._clipe(ctx, ctx.config.pastas.introducao, "intro", fps, True)
+            intro = etapa_de_render._clipe(
+                ctx,
+                ctx.config.pastas.arquivo_introducao(ctx.opcoes.introducao_arquivo),
+                "intro",
+                fps,
+                True,
+            )
         if ctx.opcoes.vinheta_final:
             if anterior.get("vinheta_final"):
                 raise ErroFerramenta("O vídeo longo deste projeto já tem a vinheta final.")
             vinheta = etapa_de_render._clipe(
-                ctx, ctx.config.pastas.vinheta_final, "vinheta", fps, True
+                ctx,
+                ctx.config.pastas.arquivo_vinheta(ctx.opcoes.vinheta_arquivo),
+                "vinheta",
+                fps,
+                True,
             )
         clipes = [c for c in (intro, vinheta) if c is not None]
         if not clipes:
@@ -153,10 +189,13 @@ class AdicionarVinhetas(Etapa):
     ) -> Path:
         destino = pasta / clipe.arquivo
         script = pasta / f"{destino.stem}.filter"
+        fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
         script.write_text(
             script_do_clipe_completo(
                 clipe, largura, altura, fps,
                 normalizar=ctx.opcoes.normalizar_volume, lufs=ctx.opcoes.lufs_video_longo,
+                fade_entrada_s=fade if clipe.arquivo == "parte_vinheta.mp4" else 0.0,
+                fade_saida_s=fade if clipe.arquivo == "parte_intro.mp4" else 0.0,
             ),
             encoding="utf-8",
         )  # fmt: skip

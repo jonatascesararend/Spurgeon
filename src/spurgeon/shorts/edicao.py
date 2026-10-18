@@ -7,6 +7,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from spurgeon.core.config import DURACAO_MAXIMA_SHORT_S
+from spurgeon.core.formatacao import formatar_tempo_preciso, ler_tempo  # noqa: F401 (reexporta)
 from spurgeon.render.legenda import blocos_de_linhas, palavras_do_short, texto_em_blocos
 from spurgeon.shorts.analise import separar_frases
 from spurgeon.shorts.dados import Corte, Frase
@@ -14,7 +16,7 @@ from spurgeon.shorts.selecao import respiro_nas_pontas
 from spurgeon.transcricao.edicao import aplicar_edicao, separar_pontuacao
 from spurgeon.transcricao.formato import Palavra
 
-DURACAO_MAXIMA_S = 60.0  # o limite de um Short: acima disso o corte não pode virar Short
+DURACAO_MAXIMA_S = DURACAO_MAXIMA_SHORT_S  # acima disso o corte não pode virar Short
 DURACAO_MINIMA_S = 10.0
 NOTA_ALTA = 70.0
 NOTA_MEDIA = 50.0
@@ -22,7 +24,7 @@ _TOLERANCIA_S = 0.001
 _PAUSA_SEM_VIZINHA_S = 5.0
 
 Ponta = Literal["inicio", "fim"]
-AVISO_ACIMA_DO_LIMITE = "Com mais de 60 segundos o vídeo não pode ser um Short."
+AVISO_ACIMA_DO_LIMITE = f"Com mais de {DURACAO_MAXIMA_S:g} segundos o vídeo não pode ser um Short."
 
 
 class LimiteInvalido(ValueError):
@@ -69,15 +71,15 @@ def _com_limites(palavras: Sequence[Palavra], corte: Corte, primeira: int, ultim
 
 
 def passa_do_limite(corte: Corte) -> bool:
-    """O corte tem mais de 60 s (e por isso não pode ser um Short)?"""
+    """O corte passa do limite de um Short (180 s) (e por isso não pode ser um Short)?"""
     return corte.duracao > DURACAO_MAXIMA_S + _TOLERANCIA_S
 
 
 def mover_limite(palavras: Sequence[Palavra], corte: Corte, ponta: Ponta, passo: int) -> Corte:
     """Um novo corte com o início (ou o fim) deslocado `passo` palavras (+ avança, − recua).
 
-    Sempre cai em fronteira de palavra, com o respiro de costume. Passar de 60 s é permitido (a
-    tela avisa, pois acima disso o corte não pode ser Short). Levanta `LimiteInvalido` se o
+    Sempre cai em fronteira de palavra, com o respiro de costume. Passar do limite é permitido (a
+    tela avisa, pois acima dele o corte não pode ser Short). Levanta `LimiteInvalido` se o
     resultado ficar com menos de 10 s ou sair da transcrição.
     """
     primeira, ultima = indices_das_palavras(palavras, corte)
@@ -238,6 +240,25 @@ def janela_de_contexto(
     return JanelaDeContexto(ponta, itens, limite)
 
 
+@dataclass(frozen=True)
+class JanelaDoCorte:
+    """O corte inteiro e a transcrição ao redor dele, numa lista só (para uma caixa só)."""
+
+    palavras: tuple[PalavraNaJanela, ...]
+    primeira: int  # a primeira palavra do corte
+    ultima: int  # a última
+
+
+def janela_do_corte(palavras: Sequence[Palavra], corte: Corte, *, fora: int = 220) -> JanelaDoCorte:
+    """Todas as palavras do corte, mais `fora` palavras antes do começo e depois do fim."""
+    primeira, ultima = indices_das_palavras(palavras, corte)
+    de, ate = max(0, primeira - fora), min(len(palavras) - 1, ultima + fora)
+    itens = tuple(
+        PalavraNaJanela(i, palavras[i].texto, primeira <= i <= ultima) for i in range(de, ate + 1)
+    )
+    return JanelaDoCorte(itens, primeira, ultima)
+
+
 def ler_hashtags(texto: str) -> list[str]:
     """`fé, #Miquéias  shorts` → `['#fé', '#Miquéias', '#shorts']` (sem repetir)."""
     achadas: list[str] = []
@@ -333,25 +354,58 @@ def palavras_com_a_legenda(palavras: Sequence[Palavra], corte: Corte) -> list[Pa
     return aplicar_edicao(dentro, corte.legenda)
 
 
-_TEMPO = re.compile(r"^\s*(?:(\d+):)?(\d+):(\d{1,2}(?:[.,]\d+)?)\s*$|^\s*(\d+(?:[.,]\d+)?)\s*$")
+@dataclass(frozen=True)
+class MudancaDeLimite:
+    """O que um ajuste de início ou fim acrescentou ou tirou do corte, palavra por palavra."""
+
+    inicio_acrescentou: tuple[str, ...] = ()
+    inicio_tirou: tuple[str, ...] = ()
+    fim_acrescentou: tuple[str, ...] = ()
+    fim_tirou: tuple[str, ...] = ()
+
+    @property
+    def houve(self) -> bool:
+        return bool(
+            self.inicio_acrescentou or self.inicio_tirou or self.fim_acrescentou or self.fim_tirou
+        )
+
+    @property
+    def ponta(self) -> Ponta | None:
+        """Onde o corte mudou (o fim, se mudou nas duas pontas)."""
+        if self.fim_acrescentou or self.fim_tirou:
+            return "fim"
+        if self.inicio_acrescentou or self.inicio_tirou:
+            return "inicio"
+        return None
 
 
-def ler_tempo(texto: str) -> float:
-    """`8:21,3`, `1:02:05.5` ou `501.3` → segundos. Levanta ValueError se não for um tempo."""
-    achado = _TEMPO.match(texto)
-    if not achado:
-        raise ValueError(f"Tempo inválido: {texto!r}. Use minutos:segundos, por exemplo 8:21,3.")
-    horas, minutos, segundos, so_segundos = achado.groups()
-    if so_segundos is not None:
-        return float(so_segundos.replace(",", "."))
-    return int(horas or 0) * 3600 + int(minutos) * 60 + float(segundos.replace(",", "."))
+def comparar_cortes(palavras: Sequence[Palavra], antes: Corte, depois: Corte) -> MudancaDeLimite:
+    """As palavras que entraram e saíram do corte entre `antes` e `depois`."""
+    try:
+        p0, u0 = indices_das_palavras(palavras, antes)
+        p1, u1 = indices_das_palavras(palavras, depois)
+    except LimiteInvalido:
+        return MudancaDeLimite()
+
+    def textos(de: int, ate: int) -> tuple[str, ...]:
+        return tuple(p.texto for p in palavras[de : ate + 1]) if ate >= de else ()
+
+    return MudancaDeLimite(
+        inicio_acrescentou=textos(p1, min(p0 - 1, u1)) if p1 < p0 else (),
+        inicio_tirou=textos(p0, min(p1 - 1, u0)) if p1 > p0 else (),
+        fim_acrescentou=textos(max(u0 + 1, p1), u1) if u1 > u0 else (),
+        fim_tirou=textos(max(u1 + 1, p0), u0) if u1 < u0 else (),
+    )
 
 
-def formatar_tempo_preciso(segundos: float) -> str:
-    """501,3 → `8:21,3`; 3725,45 → `1:02:05,5` (décimos de segundo, vírgula decimal)."""
-    decimos = round(segundos * 10)
-    inteiros, decimo = divmod(decimos, 10)
-    horas, resto = divmod(inteiros, 3600)
-    minutos, seg = divmod(resto, 60)
-    base = f"{horas}:{minutos:02d}:{seg:02d}" if horas else f"{minutos}:{seg:02d}"
-    return f"{base},{decimo}"
+def contexto_da_legenda(
+    palavras: Sequence[Palavra], corte: Corte, quantas: int = 30
+) -> tuple[str, str]:
+    """(o que vem logo antes do corte, o que vem logo depois): fica de fora da legenda."""
+    try:
+        primeira, ultima = indices_das_palavras(palavras, corte)
+    except LimiteInvalido:
+        return "", ""
+    antes = " ".join(p.texto for p in palavras[max(0, primeira - quantas) : primeira])
+    depois = " ".join(p.texto for p in palavras[ultima + 1 : ultima + 1 + quantas])
+    return antes, depois

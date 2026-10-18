@@ -16,13 +16,16 @@ from pathlib import Path
 from typing import Any
 
 from spurgeon.audio.normalizar import filtro_aplicar, filtro_medir, ler_medicao
+from spurgeon.core.aparencia import Enquadramento, TratamentoImagem
 from spurgeon.core.arquivos import escrever_json_atomico, escrever_texto_atomico, ler_json
+from spurgeon.core.config import DURACAO_MAXIMA_SHORT_S
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.render import filtros as f
+from spurgeon.render.imagem import filtro_tratamento
 from spurgeon.render.legenda import EstiloLegenda, montar_ass, palavras_do_short
 from spurgeon.render.marca import (
     MarcaDagua,
@@ -36,8 +39,9 @@ from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 
-VERSAO_DO_RENDER = 1
-DURACAO_MAXIMA_S = 60.5  # 60 s do pedido mais a folga de arredondamento do último quadro
+VERSAO_DO_RENDER = 1  # não mude à toa: refaria todos os Shorts já prontos
+#: o limite de um Short mais a folga de arredondamento do último quadro
+DURACAO_MAXIMA_S = DURACAO_MAXIMA_SHORT_S + 0.5
 FADE_S = 0.1
 FADE_MINIMO_S = 0.02
 _TOLERANCIA_DE_DURACAO_S = 0.6
@@ -93,17 +97,23 @@ def filtro_de_video(
     deslocamento_pct: float,
     legenda: str | None,
     marca: MarcaDagua | None = None,
+    enquadramento: Enquadramento | None = None,
+    tratamento: TratamentoImagem | None = None,
+    zoom_do_short: Enquadramento | None = None,
 ) -> str:
     """O grafo do vídeo: da entrada `0:v` até `[v]`.
 
-    Recorte vertical, conversão para SDR, ampliação para 1080×1920, marca d'água (entrada `2:v`)
-    e legenda queimada, nesta ordem: a marca fica sob a legenda se as duas se encontrarem.
+    Recorte vertical (dentro do zoom, se houver, e com o zoom do Short), conversão para SDR,
+    tratamento de imagem, ampliação para 1080×1920, marca d'água (entrada `2:v`) e legenda
+    queimada, nesta ordem: a marca fica sob a legenda se as duas se encontrarem.
     """
+    cor = filtro_tratamento(tratamento) if tratamento is not None else None
     ate_a_ampliacao = ",".join(
         [
             f"fps={f.texto_fps(fps)}",
-            f.recorte_vertical(info, deslocamento_pct),
+            f.recorte_vertical(info, deslocamento_pct, enquadramento, zoom_do_short),
             f.cadeia_para_sdr(info),
+            *([cor] if cor else []),
             f"scale={f.LARGURA_SHORT}:{f.ALTURA_SHORT}:flags=lanczos",
             "setsar=1",
         ]
@@ -179,17 +189,47 @@ SITUACAO_PRONTO = "pronto"
 SITUACAO_ALTERADO = "alterado"  # o corte ou a legenda mudou depois de renderizado
 
 
-def detalhes_do_registro(corte: Corte) -> dict[str, Any]:
+def assinatura_visual(opcoes) -> str:
+    """A aparência do Short que não depende do corte: zoom, cor, recorte e marca d'água.
+
+    Serve à tela (o selo "renderizado" some se a aparência mudou); quem decide de fato o que
+    renderiza de novo é a `assinatura_do_short`.
+    """
+    marca = None
+    if opcoes.marca_nos_curtos:
+        arquivo = Path(opcoes.marca_imagem)
+        estatistica = arquivo.stat() if arquivo.is_file() else None
+        marca = [
+            opcoes.marca_imagem, estatistica.st_size if estatistica else 0,
+            int(estatistica.st_mtime) if estatistica else 0, opcoes.marca_remover_fundo,
+            opcoes.marca_canto, opcoes.marca_tamanho_pct,
+        ]  # fmt: skip
+    dados = {
+        "zoom": opcoes.enquadramento_nos_curtos.model_dump(),
+        "tratamento": opcoes.tratamento_nos_curtos.model_dump(),
+        "recorte": opcoes.recorte_deslocamento_x_pct,
+        "marca": marca,
+    }
+    if opcoes.enquadramento_do_short.ativo:  # só entra quando existe: o que saiu continua valendo
+        dados["zoom_do_short"] = opcoes.enquadramento_do_short.model_dump()
+    return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:10]
+
+
+def detalhes_do_registro(corte: Corte, visual: str | None = None) -> dict[str, Any]:
     """O que o registro guarda além da assinatura, para a tela saber se o Short ainda vale."""
-    return {
+    detalhes: dict[str, Any] = {
         "corte": [round(corte.inicio, 3), round(corte.fim, 3)],
         "legenda": hashlib.sha1(corte.legenda.encode()).hexdigest()[:10],
     }
+    if visual is not None:
+        detalhes["visual"] = visual
+    return detalhes
 
 
 def situacao_do_short(
-    corte: Corte, entrada: dict[str, Any] | None, arquivo_existe: bool, *, com_legenda: bool
-) -> str:
+    corte: Corte, entrada: dict[str, Any] | None, arquivo_existe: bool, *, com_legenda: bool,
+    visual: str | None = None,
+) -> str:  # fmt: skip
     """`novo`, `pronto` ou `alterado`, conforme o que o registro lembra do último render.
 
     É um aviso para a tela: quem decide de fato o que renderiza de novo é a assinatura.
@@ -201,6 +241,8 @@ def situacao_do_short(
     if "corte" in entrada and entrada["corte"] != atual["corte"]:
         return SITUACAO_ALTERADO
     if com_legenda and "legenda" in entrada and entrada["legenda"] != atual["legenda"]:
+        return SITUACAO_ALTERADO
+    if visual is not None and "visual" in entrada and entrada["visual"] != visual:
         return SITUACAO_ALTERADO
     return SITUACAO_PRONTO
 
@@ -229,6 +271,13 @@ def assinatura_do_short(
         "volume": [opcoes.limpar_audio, opcoes.normalizar_volume, opcoes.lufs_shorts],
         "marca": assinatura_da_marca(marca.arquivo, marca) if marca else None,
     }
+    # o estilo só entra quando existe: um Short renderizado sem zoom nem cor continua valendo
+    if opcoes.enquadramento_nos_curtos.ativo:
+        dados["zoom"] = opcoes.enquadramento_nos_curtos.model_dump()
+    if opcoes.enquadramento_do_short.ativo:
+        dados["zoom_do_short"] = opcoes.enquadramento_do_short.model_dump()
+    if not opcoes.tratamento_nos_curtos.neutro:
+        dados["tratamento"] = opcoes.tratamento_nos_curtos.model_dump()
     return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -317,6 +366,22 @@ class RenderizarShorts(Etapa):
         "legendas_dinamicas",
         "legenda_posicao_vertical",
         "recorte_deslocamento_x_pct",
+        "zoom_pct",
+        "zoom_centro_x_pct",
+        "zoom_centro_y_pct",
+        "zoom_nos_shorts",
+        "shorts_zoom_pct",
+        "shorts_zoom_centro_x_pct",
+        "shorts_zoom_centro_y_pct",
+        "tratamento_ativo",
+        "tratamento_brilho",
+        "tratamento_contraste",
+        "tratamento_saturacao",
+        "tratamento_temperatura",
+        "tratamento_matiz",
+        "tratamento_brancos",
+        "tratamento_sombras",
+        "tratamento_nos_shorts",
         "limpar_audio",
         "normalizar_volume",
         "lufs_shorts",
@@ -351,7 +416,8 @@ class RenderizarShorts(Etapa):
         if longos:
             lista = "; ".join(f"“{s.corte.titulo}” ({s.corte.duracao:.0f} s)" for s in longos)
             raise ErroFerramenta(
-                f"Com mais de 60 segundos o vídeo não pode ser um Short: {lista}. Encurte o corte "
+                f"Com mais de {DURACAO_MAXIMA_SHORT_S:g} segundos o vídeo não pode ser um Short: "
+                f"{lista}. Encurte o corte "
                 "no Studio Shorts ou desmarque-o."
             )
         video = Path(ctx.estado.entrada.caminho)
@@ -385,6 +451,7 @@ class RenderizarShorts(Etapa):
             ", com legenda dinâmica" if fontes is not None else ", sem legenda queimada",
         )
 
+        visual = assinatura_visual(ctx.opcoes)
         total = len(planejados)
         for i, curto in enumerate(planejados):
             ctx.ponto_seguro()
@@ -397,7 +464,7 @@ class RenderizarShorts(Etapa):
             pronto = registro.get(str(curto.corte.id))
             if destino.exists() and pronto and pronto["assinatura"] == assinatura:
                 ctx.log.info("Short %d de %d já está pronto: %s", i + 1, total, curto.video)
-                detalhes = detalhes_do_registro(curto.corte)
+                detalhes = detalhes_do_registro(curto.corte, visual)
                 if any(pronto.get(k) != v for k, v in detalhes.items()):  # registro antigo
                     pronto.update(detalhes)
                     escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
@@ -418,7 +485,7 @@ class RenderizarShorts(Etapa):
             registro[str(curto.corte.id)] = {
                 "arquivo": curto.video,
                 "assinatura": assinatura,
-                **detalhes_do_registro(curto.corte),
+                **detalhes_do_registro(curto.corte, visual),
             }
             escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
             ctx.progresso((i + 1) / total)
@@ -488,6 +555,9 @@ class RenderizarShorts(Etapa):
                 deslocamento_pct=ctx.opcoes.recorte_deslocamento_x_pct,
                 legenda=legenda,
                 marca=marca,
+                enquadramento=ctx.opcoes.enquadramento_nos_curtos,
+                tratamento=ctx.opcoes.tratamento_nos_curtos,
+                zoom_do_short=ctx.opcoes.enquadramento_do_short,
             )
             + ";\n[1:a]"
             + filtro_de_audio(

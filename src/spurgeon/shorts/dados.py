@@ -14,6 +14,16 @@ ROTULOS_CATEGORIA = {
     "outra": "Outra",
 }
 
+#: de onde veio um corte: a análise automática ou o "Shorts livre" do Studio
+ORIGEM_AUTOMATICA = "automatico"
+ORIGEM_MANUAL = "manual"
+ROTULOS_ORIGEM = {
+    ORIGEM_AUTOMATICA: "gerado automaticamente",
+    ORIGEM_MANUAL: "gerado manualmente",
+}
+#: os cortes manuais começam aqui, longe dos ids dos candidatos (numerados de 0 em diante)
+ID_BASE_DOS_MANUAIS = 1_000_000
+
 
 @dataclass(frozen=True)
 class Frase:
@@ -30,7 +40,7 @@ class Frase:
 
 @dataclass
 class Candidato:
-    """Uma janela de frases inteiras de 30 a 60 s que poderia virar um Short."""
+    """Uma janela de frases inteiras de 30 a 180 s que poderia virar um Short."""
 
     id: int
     primeira_frase: int
@@ -93,6 +103,8 @@ class Corte:
     editado: bool = False  # a pessoa mexeu no início ou no fim; a nota é a do corte original
     #: a legenda corrigida pela pessoa (todas as palavras do corte); vazia = a da transcrição
     legenda: str = ""
+    #: `automatico` (achado pela análise) ou `manual` (escolhido a dedo no Shorts livre)
+    origem: str = ORIGEM_AUTOMATICA
 
     @property
     def duracao(self) -> float:

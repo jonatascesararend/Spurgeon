@@ -62,6 +62,8 @@ def tela(janela, monkeypatch):
     janela._info_video = None  # a janela é compartilhada entre os testes
     janela.entrada.mostrar_estimativa("")
     janela.opcoes.aplicar_valores(ValoresFormulario())
+    janela.entrada.aplicar_valores(ValoresFormulario())
+    janela.fonte.definir_video(None, None)
     janela.entrada.var_nome.set("")
     janela.entrada.var_data.set("")
     janela._pastas = None
@@ -450,7 +452,7 @@ def test_renderizar_sem_nada_pendente_so_avisa(tela, projeto_pronto, monkeypatch
     assert any(t == "Nada para renderizar" for t, _ in tela.caixas.mostradas)
 
 
-def test_renderizar_do_studio_recusa_corte_marcado_com_mais_de_60_segundos(
+def test_renderizar_do_studio_recusa_corte_marcado_acima_do_limite(
     tela, projeto_pronto, monkeypatch
 ):
     tela._abrir_projeto(projeto_pronto.pastas.raiz)
@@ -459,13 +461,13 @@ def test_renderizar_do_studio_recusa_corte_marcado_com_mais_de_60_segundos(
     monkeypatch.setattr(tela, "_iniciar", lambda ajustes=None: chamadas.append(ajustes))
     editor = tela.studio.editor
     editor.selecionar(editor._ordem[0])
-    for _ in range(80):
+    for _ in range(500):
         editor.mover("fim", 1)
     # o botão da aba guarda o trabalho em andamento, mesmo com o corte ainda longo demais
-    assert tela.studio.salvar(exigir_ate_60s=False) is True
+    assert tela.studio.salvar(exigir_ate_o_limite=False) is True
     tela._renderizar_do_studio()
     assert chamadas == []
-    assert any(t == "Corte com mais de 60 segundos" for t, _ in tela.caixas.mostradas)
+    assert any(t == "Corte com mais de 180 segundos" for t, _ in tela.caixas.mostradas)
     editor.alternar_atual()  # desmarca o corte longo: o resto pode ser renderizado
     tela.caixas.mostradas.clear()
     tela._renderizar_do_studio()

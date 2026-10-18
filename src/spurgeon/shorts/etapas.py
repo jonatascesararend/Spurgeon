@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from spurgeon.audio.nivel import carregar_niveis
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
+from spurgeon.core.diagnostico import situacao_da_maquina
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, threads_para_uso
@@ -16,11 +18,18 @@ from spurgeon.core.ollama import garantir_servidor
 from spurgeon.core.pipeline import ContextoProjeto, Etapa, ResultadoEtapa
 from spurgeon.shorts.analise import (
     ParametrosJanela,
-    escolher_sem_sobreposicao,
+    escolher_para_ia,
     gerar_candidatos,
+    palavras_da_janela,
     separar_frases,
 )
-from spurgeon.shorts.dados import ROTULOS_CATEGORIA, Avaliacao, Candidato, Corte
+from spurgeon.shorts.dados import (
+    ORIGEM_MANUAL,
+    ROTULOS_CATEGORIA,
+    Avaliacao,
+    Candidato,
+    Corte,
+)
 from spurgeon.shorts.llm import ClienteLLM, ErroLLM
 from spurgeon.shorts.selecao import RESERVAS_PADRAO, montar_cortes, nome_de_arquivo
 from spurgeon.transcricao.formato import Transcricao, segundos_para_rotulo
@@ -47,9 +56,15 @@ def carregar_spacy():
 
 def criar_cliente_llm(ctx: ContextoProjeto) -> ClienteLLM:
     """O cliente do Ollama configurado para esta máquina; baixa o modelo se faltar."""
+    ctx.log.info("Conferindo se o Ollama está respondendo (abre o servidor se precisar)…")
     if not garantir_servidor():  # tenta abrir o servidor; se não der, o erro explica o que fazer
         ctx.log.warning("O Ollama não está respondendo e não foi possível abri-lo sozinho.")
     perfil = detectar_hardware(ctx.config.pastas.projetos)
+    ctx.log.info(
+        "IA: modelo %s do Ollama, %s.",
+        ctx.opcoes.ollama_modelo,
+        "com a GPU" if perfil.cuda_utilizavel else "só no processador (sem GPU utilizável)",
+    )
     cliente = ClienteLLM(
         ctx.opcoes.ollama_modelo,
         threads=threads_para_uso(perfil, ctx.opcoes.uso_cpu_percentual),
@@ -72,15 +87,26 @@ def criar_cliente_llm(ctx: ContextoProjeto) -> ClienteLLM:
     return cliente
 
 
+def nome_do_sermao(raiz: Path) -> str:
+    """O nome do sermão pela pasta do projeto (`2026-10-04_Miqueias_2` → `Miqueias 2`)."""
+    return re.sub(r"^\d{4}-\d{2}-\d{2}_", "", raiz.name).replace("_", " ")
+
+
 def _nome_do_sermao(ctx: ContextoProjeto) -> str:
-    return re.sub(r"^\d{4}-\d{2}-\d{2}_", "", ctx.pastas.raiz.name).replace("_", " ")
+    return nome_do_sermao(ctx.pastas.raiz)
 
 
 class AnalisarShorts(Etapa):
     id = "analisar_shorts"
     nome = "Procurando trechos para os Shorts"
     depende_de = ("transcrever", "revisar_transcricao")
-    opcoes_relevantes = ("shorts_duracao_min_s", "shorts_duracao_max_s", "shorts_candidatos_ia")
+    opcoes_relevantes = (
+        "shorts_duracao_min_s",
+        "shorts_duracao_max_s",
+        "shorts_candidatos_ia",
+        "video_inicio_s",
+        "video_fim_s",
+    )
     peso = 1.0
 
     def ativa(self, opcoes) -> bool:
@@ -91,12 +117,38 @@ class AnalisarShorts(Etapa):
 
     def executar(self, ctx: ContextoProjeto) -> None:
         palavras = Transcricao.carregar(ctx.pastas.transcricao).palavras
-        frases = separar_frases(palavras, carregar_spacy())
+        if ctx.opcoes.tem_janela:  # só o que está no trecho do vídeo que o projeto usa
+            fim = ctx.opcoes.video_fim_s or None
+            palavras = palavras_da_janela(palavras, ctx.opcoes.video_inicio_s, fim)
+            ctx.log.info(
+                "Só as %d palavras do trecho escolhido do vídeo entram nos Shorts.", len(palavras)
+            )
+        migrar_avaliacoes(ctx.pastas.avaliacoes, ctx.pastas.candidatos)
+        ctx.log.info("Carregando o modelo de português do spaCy…")
+        nlp = ctx.executar_vigiado(
+            "Carregando o modelo de português do spaCy", carregar_spacy, detalhe=situacao_da_maquina
+        )
+        ctx.log.info("Separando as %d palavras em frases…", len(palavras))
+        frases = ctx.executar_vigiado(
+            "Separando as frases",
+            lambda: separar_frases(palavras, nlp),
+            detalhe=situacao_da_maquina,
+        )
         parametros = ParametrosJanela(
             minimo_s=ctx.opcoes.shorts_duracao_min_s, maximo_s=ctx.opcoes.shorts_duracao_max_s
         )
-        todos = gerar_candidatos(palavras, frases, parametros)
-        escolhidos = escolher_sem_sobreposicao(
+        ctx.log.info(
+            "%d frases; montando as janelas de %g a %g s…",
+            len(frases),
+            parametros.minimo_s,
+            parametros.maximo_s,
+        )
+        todos = ctx.executar_vigiado(
+            "Montando as janelas candidatas",
+            lambda: gerar_candidatos(palavras, frases, parametros),
+            detalhe=situacao_da_maquina,
+        )
+        escolhidos = escolher_para_ia(
             todos, ctx.opcoes.shorts_candidatos_ia, SOBREPOSICAO_NA_PRE_SELECAO
         )
         escrever_json_atomico(
@@ -129,20 +181,73 @@ def carregar_candidatos(caminho: Path) -> tuple[list[dict[str, Any]], list[Candi
     return dados["frases"], [Candidato.de_dict(d) for d in dados["candidatos"]]
 
 
-def _ler_avaliacoes(caminho: Path, modelo: str) -> dict[int, Avaliacao]:
+def marca_do_candidato(c: Candidato) -> str:
+    """Identifica um candidato pelo trecho e pelo texto (o id muda quando a análise é refeita)."""
+    bruto = f"{c.inicio:.2f}|{c.fim:.2f}|{c.texto}"
+    return hashlib.sha1(bruto.encode("utf-8")).hexdigest()[:12]
+
+
+def migrar_avaliacoes(avaliacoes: Path, candidatos: Path) -> None:
+    """Passa as avaliações de um projeto antigo (guardadas por id) para a chave por trecho.
+
+    A análise refeita (outra duração máxima, outro começo do vídeo…) numera os candidatos de novo;
+    por isso as avaliações da IA, que levam ~1 min cada, passaram a valer por trecho e texto, e as
+    que continuam valendo são reaproveitadas. Precisa rodar ANTES de `candidatos.json` ser trocado.
+    """
+    if not avaliacoes.exists() or not candidatos.exists():
+        return
+    try:
+        dados = ler_json(avaliacoes)
+        if dados.get("versao", 1) >= 2:
+            return
+        antigos = {c.id: c for c in carregar_candidatos(candidatos)[1]}
+        convertidas = {
+            marca_do_candidato(antigos[int(k)]): v
+            for k, v in dados["avaliacoes"].items()
+            if int(k) in antigos
+        }
+    except (OSError, ValueError, KeyError):
+        return
+    escrever_json_atomico(
+        avaliacoes,
+        {"versao": 2, "modelo": dados.get("modelo"), "avaliacoes": convertidas},
+        indent=None,
+    )
+
+
+def _ler_avaliacoes(
+    caminho: Path, modelo: str, candidatos: Sequence[Candidato]
+) -> dict[int, Avaliacao]:
+    """As avaliações já feitas dos candidatos de agora (id de agora → avaliação)."""
     if not caminho.exists():
         return {}
     dados = ler_json(caminho)
     if dados.get("modelo") != modelo:  # outro modelo, outra opinião: recomeça
         return {}
-    return {int(k): Avaliacao.de_dict(v) for k, v in dados["avaliacoes"].items()}
+    guardadas = dados["avaliacoes"]
+    if dados.get("versao", 1) < 2:  # projeto antigo, por id: vale para os candidatos que há
+        return {int(k): Avaliacao.de_dict(v) for k, v in guardadas.items()}
+    return {
+        c.id: Avaliacao.de_dict(guardadas[marca])
+        for c in candidatos
+        if (marca := marca_do_candidato(c)) in guardadas
+    }
 
 
-def _gravar_avaliacoes(caminho: Path, modelo: str, avaliacoes: dict[int, Avaliacao]) -> None:
+def _gravar_avaliacoes(
+    caminho: Path, modelo: str, avaliacoes: dict[int, Avaliacao], candidatos: Sequence[Candidato]
+) -> None:
+    marcas = {c.id: marca_do_candidato(c) for c in candidatos}
+    guardadas: dict = {}
+    try:  # o que já estava guardado para outros trechos (de uma análise anterior) não se perde
+        antigo = ler_json(caminho) if caminho.exists() else {}
+        if antigo.get("versao", 1) >= 2 and antigo.get("modelo") == modelo:
+            guardadas = dict(antigo["avaliacoes"])
+    except (OSError, ValueError, KeyError, AttributeError):
+        guardadas = {}
+    guardadas.update({marcas[k]: v.para_dict() for k, v in avaliacoes.items() if k in marcas})
     escrever_json_atomico(
-        caminho,
-        {"modelo": modelo, "avaliacoes": {str(k): v.para_dict() for k, v in avaliacoes.items()}},
-        indent=None,
+        caminho, {"versao": 2, "modelo": modelo, "avaliacoes": guardadas}, indent=None
     )
 
 
@@ -162,7 +267,7 @@ class AvaliarShorts(Etapa):
     def executar(self, ctx: ContextoProjeto) -> None:
         frases, candidatos = carregar_candidatos(ctx.pastas.candidatos)
         cliente = criar_cliente_llm(ctx)
-        feitas = _ler_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo)
+        feitas = _ler_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo, candidatos)
         if feitas:
             ctx.log.info("Retomando: %d de %d trechos já avaliados.", len(feitas), len(candidatos))
         for numero, c in enumerate(candidatos, start=1):
@@ -174,14 +279,21 @@ class AvaliarShorts(Etapa):
             )
             depois = " ".join(f["texto"] for f in frases[c.ultima_frase + 1 : c.ultima_frase + 2])
             try:
-                avaliacao = cliente.avaliar(
-                    antes[-_CONTEXTO_ANTES:], c.texto, depois[:_CONTEXTO_DEPOIS], c.duracao
-                )
+                with ctx.batimento(
+                    f"Avaliando o trecho {numero} de {len(candidatos)} "
+                    f"({segundos_para_rotulo(c.inicio)}, {c.duracao:.0f} s) na IA",
+                    detalhe=situacao_da_maquina,
+                    intervalo_s=30.0,
+                    quando_pausa="quando a IA responder sobre este trecho (cerca de 1 min)",
+                ):
+                    avaliacao = cliente.avaliar(
+                        antes[-_CONTEXTO_ANTES:], c.texto, depois[:_CONTEXTO_DEPOIS], c.duracao
+                    )
             except ErroLLM as erro:  # um trecho que a IA não consegue avaliar não derruba os outros
                 ctx.log.warning("Trecho em %s ignorado: %s", segundos_para_rotulo(c.inicio), erro)
                 continue
             feitas[c.id] = avaliacao
-            _gravar_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo, feitas)
+            _gravar_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo, feitas, candidatos)
             ctx.progresso(numero / len(candidatos))
             ctx.log.info(
                 "Trecho %d de %d (%s): nota %d, %s%s.",
@@ -192,7 +304,7 @@ class AvaliarShorts(Etapa):
                 ROTULOS_CATEGORIA.get(avaliacao.categoria, avaliacao.categoria),
                 " (com alerta de contexto)" if avaliacao.alerta_contexto else "",
             )
-        _gravar_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo, feitas)
+        _gravar_avaliacoes(ctx.pastas.avaliacoes, cliente.modelo, feitas, candidatos)
         if not feitas:
             raise ErroLLM("A IA não conseguiu avaliar nenhum trecho.")
 
@@ -203,6 +315,20 @@ def carregar_cortes(caminho: Path) -> list[Corte]:
 
 def gravar_cortes(caminho: Path, cortes: list[Corte]) -> None:
     escrever_json_atomico(caminho, [c.para_dict() for c in cortes])
+
+
+def cortes_manuais_guardados(caminho: Path) -> list[Corte]:
+    """Os cortes criados à mão (Shorts livre) que já estão no arquivo, para não se perderem.
+
+    Quem refaz a seleção automática reescreve `cortes_shorts.json`; o que a pessoa escolheu a dedo
+    não vem da análise, então não pode sumir junto com ela.
+    """
+    if not caminho.exists():
+        return []
+    try:
+        return [c for c in carregar_cortes(caminho) if c.origem == ORIGEM_MANUAL]
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
 
 
 class SelecionarShorts(Etapa):
@@ -220,7 +346,7 @@ class SelecionarShorts(Etapa):
 
     def executar(self, ctx: ContextoProjeto) -> None:
         _, candidatos = carregar_candidatos(ctx.pastas.candidatos)
-        avaliacoes = _ler_avaliacoes(ctx.pastas.avaliacoes, ctx.opcoes.ollama_modelo)
+        avaliacoes = _ler_avaliacoes(ctx.pastas.avaliacoes, ctx.opcoes.ollama_modelo, candidatos)
         cortes = montar_cortes(
             candidatos,
             avaliacoes,
@@ -247,7 +373,12 @@ class SelecionarShorts(Etapa):
             self._criar_metadados(ctx, cortes, cliente)
         finally:
             cliente.descarregar()  # a renderização que vem a seguir precisa da memória
-        gravar_cortes(ctx.pastas.cortes_shorts, cortes)
+        manuais = cortes_manuais_guardados(ctx.pastas.cortes_shorts)
+        if manuais:
+            ctx.log.info(
+                "Mantendo os %d Short(s) criados à mão no Studio (Shorts livre).", len(manuais)
+            )
+        gravar_cortes(ctx.pastas.cortes_shorts, [*cortes, *manuais])
 
     def _niveis(self, ctx: ContextoProjeto):
         """As medidas de 50 ms do áudio e o limiar de silêncio, para ajustar início e fim."""
@@ -273,6 +404,8 @@ class SelecionarShorts(Etapa):
             ctx.ponto_seguro()
             marca = _marca_do_texto(corte.texto)
             antigo = anteriores.get(corte.id)
+            if antigo is not None and not _mesmo_trecho(antigo, corte):
+                antigo = None  # a análise foi refeita: o número é o mesmo, mas o trecho é outro
             guardado = cache.get(str(corte.id))
             if antigo is not None:
                 corte.titulo, corte.descricao = antigo.titulo, antigo.descricao
@@ -283,7 +416,13 @@ class SelecionarShorts(Etapa):
                 corte.hashtags = guardado["hashtags"]
                 corte.slug = nome_de_arquivo(guardado["slug"] or guardado["titulo"], usados)
             else:
-                meta = self._metadados_sem_repetir(cliente, sermao, corte, titulos)
+                with ctx.batimento(
+                    f"Criando título, descrição e hashtags do corte {numero} de {len(cortes)}",
+                    detalhe=situacao_da_maquina,
+                    intervalo_s=30.0,
+                    quando_pausa="quando a IA responder sobre este corte (cerca de 1 min)",
+                ):
+                    meta = self._metadados_sem_repetir(cliente, sermao, corte, titulos)
                 corte.titulo = meta.titulo.strip()
                 corte.descricao = meta.descricao.strip()
                 corte.hashtags = meta.hashtags
@@ -308,23 +447,40 @@ class SelecionarShorts(Etapa):
             ctx.progresso(numero / len(cortes))
 
     def _metadados_sem_repetir(self, cliente, sermao: str, corte: Corte, titulos: list[str]):
-        """Pede os metadados e, se o título repetir um já criado, tenta de novo mais solto."""
-        meta = cliente.metadados(
-            sermao, corte.texto, corte.categoria, corte.duracao, titulos_usados=titulos
+        return metadados_sem_repetir(
+            cliente, sermao, corte.texto, corte.categoria, corte.duracao, titulos
         )
-        conhecidos = {_chave_do_titulo(t) for t in titulos}
-        for temperatura in _TEMPERATURAS_DE_VARIACAO:
-            if _chave_do_titulo(meta.titulo) not in conhecidos:
-                break
-            meta = cliente.metadados(
-                sermao,
-                corte.texto,
-                corte.categoria,
-                corte.duracao,
-                titulos_usados=titulos,
-                temperatura=temperatura,
-            )
-        return meta
+
+
+def metadados_sem_repetir(
+    cliente: ClienteLLM,
+    sermao: str,
+    texto: str,
+    categoria: str,
+    duracao_s: float,
+    titulos: Sequence[str],
+):
+    """Pede os metadados e, se o título repetir um já criado, tenta de novo mais solto."""
+    meta = cliente.metadados(sermao, texto, categoria, duracao_s, titulos_usados=titulos)
+    conhecidos = {_chave_do_titulo(t) for t in titulos}
+    for temperatura in _TEMPERATURAS_DE_VARIACAO:
+        if _chave_do_titulo(meta.titulo) not in conhecidos:
+            break
+        meta = cliente.metadados(
+            sermao,
+            texto,
+            categoria,
+            duracao_s,
+            titulos_usados=titulos,
+            temperatura=temperatura,
+        )
+    return meta
+
+
+def _mesmo_trecho(a: Corte, b: Corte, minimo: float = 0.8) -> bool:
+    """Os dois cortes cobrem (quase) o mesmo trecho do sermão? Um corte editado ainda conta."""
+    comum = min(a.fim, b.fim) - max(a.inicio, b.inicio)
+    return comum > 0 and comum / max(min(a.duracao, b.duracao), 0.1) >= minimo
 
 
 def _chave_do_titulo(titulo: str) -> str:

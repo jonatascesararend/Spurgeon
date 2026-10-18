@@ -305,109 +305,141 @@ def test_sem_cortes_o_editor_abre_vazio_sem_erro(raiz, tmp_path):
 
 
 @pytest.mark.gui
-def test_tempo_que_passa_dos_60_segundos_e_aceito_com_aviso(editor):
+def test_tempo_que_passa_do_limite_e_aceito_com_aviso(editor):
     editor.selecionar(editor._ordem[0])
     i = editor._atual
     corte = editor._cortes[i]
-    editor._var_fim.set(f"{int((corte.fim + 30) // 60)}:{(corte.fim + 30) % 60:04.1f}")
+    editor._var_fim.set(f"{int((corte.fim + 200) // 60)}:{(corte.fim + 200) % 60:04.1f}")
     assert editor.aplicar_tempo("fim") is True
-    assert editor._cortes[i].fim > corte.fim and editor._cortes[i].duracao > 60.0
+    assert editor._cortes[i].fim > corte.fim and editor._cortes[i].duracao > 180.0
     assert "não pode ser um Short" in editor._rotulo_limite.cget("text")
     assert str(editor._rotulo_tempo.cget("text_color")) == "#e05555"
 
 
 @pytest.mark.gui
-def test_o_aviso_dos_60_segundos_some_ao_voltar_para_o_limite(editor):
+def test_o_aviso_do_limite_some_ao_voltar_para_ele(editor):
     editor.selecionar(editor._ordem[0])
-    for _ in range(80):
+    for _ in range(500):
         editor.mover("fim", 1)
     assert editor._rotulo_limite.cget("text")
-    while editor._cortes[editor._atual].duracao > 60.0:
+    while editor._cortes[editor._atual].duracao > 180.0:
         assert editor.mover("fim", -1)
     assert editor._rotulo_limite.cget("text") == ""
 
 
 @pytest.mark.gui
-def test_salvar_exige_ate_60s_mas_o_trabalho_em_andamento_pode_ser_salvo(editor, pastas):
+def test_salvar_exige_ate_o_limite_mas_o_trabalho_em_andamento_pode_ser_salvo(editor, pastas):
     editor.selecionar(editor._ordem[0])
-    for _ in range(80):
+    for _ in range(500):
         editor.mover("fim", 1)
     assert len(editor.cortes_acima_do_limite()) == 1
     assert editor.salvar() is False
-    assert editor.salvar(exigir_ate_60s=False) is True
+    assert editor.salvar(exigir_ate_o_limite=False) is True
     gravado = {c.id: c for c in carregar_cortes(pastas.cortes_shorts)}[editor._cortes[0].id]
-    assert gravado.duracao > 60.0
+    assert gravado.duracao > 180.0
 
 
 @pytest.mark.gui
-def test_a_janela_do_inicio_deixa_rolar_muito_texto_antes_e_depois_da_marca(editor):
+def test_uma_caixa_so_mostra_o_corte_inteiro_e_o_que_ha_antes_e_depois(editor):
     editor.selecionar(editor._ordem[0])
     corte = editor._cortes[editor._atual]
-    primeira, _ultima = indices_das_palavras(editor._palavras, corte)
-    texto = editor._janelas["inicio"].get("1.0", "end-1c")
-    assert "▶ COMEÇA AQUI ▶" in texto
-    antes, depois = texto.split("▶ COMEÇA AQUI ▶")
+    primeira, ultima = indices_das_palavras(editor._palavras, corte)
+    texto = editor._janela.get("1.0", "end-1c")
+    assert "▶ COMEÇA AQUI ▶" in texto and "◀ TERMINA AQUI ◀" in texto
+    antes, resto = texto.split("▶ COMEÇA AQUI ▶")
+    dentro, depois = resto.split("◀ TERMINA AQUI ◀")
     assert editor._palavras[primeira - 1].texto in antes
-    assert editor._palavras[primeira].texto in depois
-    assert len(antes.split()) > 100  # bastante contexto para rolar, além do que cabe na tela
-    caixa = editor._janelas["inicio"]._textbox
-    fora = caixa.tag_ranges("fora")
-    assert fora and caixa.tag_ranges("dentro")
+    assert editor._palavras[primeira].texto in dentro
+    assert editor._palavras[ultima].texto in dentro
+    assert editor._palavras[ultima + 1].texto in depois
+    assert len(antes.split()) > 100 and len(depois.split()) > 100
+    assert len(dentro.split()) == ultima - primeira + 1  # o corte inteiro, não só as pontas
+    caixa = editor._janela._textbox
+    assert caixa.tag_ranges("fora") and caixa.tag_ranges("dentro")
 
 
 @pytest.mark.gui
-def test_a_janela_do_fim_mostra_o_que_vem_depois(editor):
+def test_os_botoes_do_inicio_e_do_fim_seguem_a_mesma_ordem(editor):
+    def rotulos(ponta):
+        return [b.cget("text") for b in editor._botoes_das_pontas[ponta]]
+
+    assert rotulos("inicio") == ["−palavra ▶", "−frase ▶", "◀ +frase", "◀ +palavra"]
+    assert rotulos("fim") == ["◀ −palavra", "◀ −frase", "+frase ▶", "+palavra ▶"]
+
+
+@pytest.mark.gui
+def test_cada_botao_do_inicio_e_do_fim_move_para_o_lado_certo(editor):
     editor.selecionar(editor._ordem[0])
-    corte = editor._cortes[editor._atual]
-    _primeira, ultima = indices_das_palavras(editor._palavras, corte)
-    texto = editor._janelas["fim"].get("1.0", "end-1c")
-    assert "◀ TERMINA AQUI ◀" in texto
-    antes, depois = texto.split("◀ TERMINA AQUI ◀")
-    assert editor._palavras[ultima].texto in antes
-    assert editor._palavras[ultima + 1].texto in depois
-    assert len(depois.split()) > 100
+    i = editor._atual
+    palavras = editor._palavras
+    primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
+    inicio, fim = editor._botoes_das_pontas["inicio"], editor._botoes_das_pontas["fim"]
+    inicio[0].invoke()  # −palavra: o começo anda para a direita
+    assert indices_das_palavras(palavras, editor._cortes[i])[0] == primeira + 1
+    inicio[3].invoke()  # +palavra: volta
+    assert indices_das_palavras(palavras, editor._cortes[i])[0] == primeira
+    fim[0].invoke()  # −palavra: o fim anda para a esquerda
+    assert indices_das_palavras(palavras, editor._cortes[i])[1] == ultima - 1
+    fim[3].invoke()  # +palavra: volta
+    assert indices_das_palavras(palavras, editor._cortes[i])[1] == ultima
+    fim[2].invoke()  # +frase: o fim vai ao fim de uma frase mais adiante
+    assert indices_das_palavras(palavras, editor._cortes[i])[1] > ultima
+    inicio[2].invoke()  # +frase: o começo vai ao começo de uma frase mais atrás
+    assert indices_das_palavras(palavras, editor._cortes[i])[0] < primeira
 
 
 @pytest.mark.gui
 def test_as_frases_ficam_uma_por_linha_na_janela(editor):
     editor.selecionar(editor._ordem[0])
-    texto = editor._janelas["fim"].get("1.0", "end-1c")
+    texto = editor._janela.get("1.0", "end-1c")
     linhas = [linha for linha in texto.split("\n") if linha.strip()]
     assert len(linhas) > 10
     assert all(linha.rstrip().endswith((".", "?", "!")) or "AQUI" in linha for linha in linhas[:-1])
 
 
-def clique_na_palavra(editor, ponta, indice):
-    """Simula o duplo clique sobre a palavra `indice` da janela da ponta."""
-    caixa = editor._janelas[ponta]._textbox
+def clique_na_palavra(editor, indice):
+    """Simula o duplo clique sobre a palavra `indice` da caixa."""
+    caixa = editor._janela._textbox
     inicio = str(caixa.tag_ranges(f"pal_{indice}")[0])
     # a janela de teste está escondida (sem medidas de tela): o índice sob o clique é dado direto
     original = caixa.index
     caixa.index = lambda ref: inicio if str(ref).startswith("@") else original(ref)
     try:
-        return editor._duplo_clique(ponta, type("Evento", (), {"x": 1, "y": 1})())
+        return editor._duplo_clique(type("Evento", (), {"x": 1, "y": 1})())
     finally:
         del caixa.index
 
 
 @pytest.mark.gui
-def test_duplo_clique_numa_palavra_da_janela_move_o_inicio_para_ela(editor):
+def test_duplo_clique_no_cinza_antes_do_corte_move_o_inicio_para_ela(editor):
     editor.selecionar(editor._ordem[0])
     i = editor._atual
     palavras = editor._palavras
     primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
-    assert clique_na_palavra(editor, "inicio", primeira - 12) == "break"
+    assert clique_na_palavra(editor, primeira - 12) == "break"
     assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira - 12, ultima)
 
 
 @pytest.mark.gui
-def test_duplo_clique_numa_palavra_da_janela_do_fim_termina_o_corte_nela(editor):
+def test_duplo_clique_no_cinza_depois_do_corte_termina_o_corte_nela(editor):
     editor.selecionar(editor._ordem[0])
     i = editor._atual
     palavras = editor._palavras
     primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
-    clique_na_palavra(editor, "fim", ultima - 12)
-    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira, ultima - 12)
+    clique_na_palavra(editor, ultima + 12)
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira, ultima + 12)
+
+
+@pytest.mark.gui
+def test_duplo_clique_dentro_do_corte_vai_para_a_ponta_mais_perto(editor):
+    editor.selecionar(editor._ordem[0])
+    i = editor._atual
+    palavras = editor._palavras
+    primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
+    clique_na_palavra(editor, primeira + 5)  # perto do começo: tira 5 palavras de lá
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira + 5, ultima)
+    clique_na_palavra(editor, ultima - 5)  # perto do fim: tira 5 palavras de lá
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira + 5, ultima - 5)
 
 
 @pytest.mark.gui
@@ -477,3 +509,131 @@ def test_legenda_sem_mudar_palavras_nao_conta_como_editada_depois_de_reorganizar
     editor._guardar_detalhe()
     assert editor._cortes[editor._atual].legenda == ""
     assert editor._texto.get("1.0", "end-1c") == texto
+
+
+# --- prévia do Short -----------------------------------------------------------------------
+
+
+class TarefasNaHora:
+    """Roda a tarefa na hora, na mesma thread (sem fila): o teste vê o resultado em seguida."""
+
+    def __init__(self):
+        self.pedidos = []
+
+    def rodar(self, funcao, ao_terminar=None, ao_falhar=None, *, chave=None):
+        self.pedidos.append(chave)
+        try:
+            resultado = funcao()
+        except Exception as erro:
+            if ao_falhar:
+                ao_falhar(erro)
+            return
+        if ao_terminar:
+            ao_terminar(resultado)
+
+
+@pytest.fixture
+def editor_com_previa(raiz, pastas, tmp_path, monkeypatch):
+    import customtkinter as ctk
+
+    from spurgeon.core.config import OpcoesProcessamento
+    from spurgeon.core.ffmpeg import InfoMidia
+    from spurgeon.render import previa
+    from spurgeon.ui.studio_shorts import OrigemDaPrevia
+
+    chamadas = []
+
+    def falsa(video, info, corte, palavras, destino, **kwargs):
+        chamadas.append((corte.inicio, corte.fim, corte.legenda, kwargs))
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(b"x")
+        return previa.PreviaDoShort(destino, None, corte.duracao)
+
+    monkeypatch.setattr(previa, "previa_do_corte", falsa)
+    info = InfoMidia(caminho=tmp_path / "v.mp4", duracao_s=100.0, tem_video=True, tem_audio=True)
+    origem = OrigemDaPrevia(tmp_path / "v.mp4", info, OpcoesProcessamento())
+    estado = {"origem": origem}
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    carregados = []
+    ed = EditorDeCortes(
+        janela,
+        pastas,
+        legenda_queimada=lambda: True,
+        tarefas=TarefasNaHora(),
+        origem_da_previa=lambda: estado["origem"],
+    )
+    ed.pack(fill="both", expand=True)
+    ed._pasta_das_previas = tmp_path / "previas"
+    monkeypatch.setattr(ed._player, "carregar", lambda p: carregados.append(p))
+    ed.chamadas, ed.estado, ed.carregados = chamadas, estado, carregados
+    yield ed
+    janela.destroy()
+
+
+@pytest.mark.gui
+def test_gerar_previa_renderiza_o_corte_atual_com_as_opcoes_da_tela(editor_com_previa):
+    ed = editor_com_previa
+    ed.selecionar(ed._ordem[0])
+    corte = ed._cortes[ed._atual]
+    assert str(ed._botao_previa.cget("text")) == "Gerar prévia"
+    ed.gerar_previa()
+    assert len(ed.chamadas) == 1
+    inicio, fim, _legenda, extras = ed.chamadas[0]
+    assert (inicio, fim) == (corte.inicio, corte.fim)
+    assert extras["com_legenda"] is True and extras["posicao_legenda"] == 0.62
+    assert ed._gerando is None and len(ed.carregados) == 1
+    assert str(ed._botao_previa.cget("text")) == "Gerar de novo"
+    assert ed._player.winfo_manager() == "grid"
+
+
+@pytest.mark.gui
+def test_a_previa_deixa_de_valer_quando_o_corte_muda_e_volta_ao_voltar(editor_com_previa):
+    ed = editor_com_previa
+    ed.selecionar(ed._ordem[0])
+    ed.gerar_previa()
+    assert ed._player.winfo_manager() == "grid"
+    ed.mover("fim", -1)
+    assert ed._player.winfo_manager() == ""  # a prévia era do corte antigo
+    assert "versão anterior" in ed._situacao_previa.cget("text")
+    ed.mover("fim", 1)
+    assert ed._player.winfo_manager() == "grid"  # o corte voltou ao que a prévia mostra
+
+
+@pytest.mark.gui
+def test_a_previa_acompanha_a_legenda_corrigida_e_a_aparencia(editor_com_previa):
+    ed = editor_com_previa
+    ed.selecionar(ed._ordem[0])
+    ed.gerar_previa()
+    ed.estado["origem"].opcoes.shorts_zoom_pct = 130.0
+    ed.selecionar(ed._ordem[0])
+    assert ed._player.winfo_manager() == ""  # o zoom do Short mudou depois da prévia
+
+
+@pytest.mark.gui
+def test_cada_corte_guarda_a_sua_previa(editor_com_previa):
+    ed = editor_com_previa
+    primeiro, segundo = ed._ordem[0], ed._ordem[1]
+    ed.selecionar(primeiro)
+    ed.gerar_previa()
+    ed.selecionar(segundo)
+    assert ed._player.winfo_manager() == ""
+    assert str(ed._botao_previa.cget("text")) == "Gerar prévia"
+    ed.selecionar(primeiro)
+    assert ed._player.winfo_manager() == "grid"
+
+
+@pytest.mark.gui
+def test_sem_video_a_previa_avisa_em_vez_de_gerar(editor_com_previa, caixas):
+    ed = editor_com_previa
+    ed.estado["origem"] = None
+    ed.selecionar(ed._ordem[0])
+    ed.gerar_previa()
+    assert not ed.chamadas and caixas and caixas[-1][0] == "Prévia do Short"
+
+
+@pytest.mark.gui
+def test_sem_tarefas_o_botao_da_previa_fica_desligado(editor):
+    editor.selecionar(editor._ordem[0])
+    assert str(editor._botao_previa.cget("state")) == "disabled"
+    editor.gerar_previa()  # não faz nada, nem quebra

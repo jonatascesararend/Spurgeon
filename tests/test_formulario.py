@@ -66,12 +66,12 @@ def test_limiar_so_e_conferido_se_o_video_longo_esta_marcado():
 
 
 def test_campos_de_shorts_so_valem_com_shorts_marcado():
-    assert para_opcoes(ValoresFormulario(shorts_max="lixo")).shorts_duracao_max_s == 60.0
+    assert para_opcoes(ValoresFormulario(shorts_max="lixo")).shorts_duracao_max_s == 180.0
     assert erros_de(gerar_shorts=True, shorts_max="lixo")[0].startswith("Duração máxima")
 
 
-def test_short_maior_que_60_segundos_e_recusado():
-    assert "entre 10 e 60" in erros_de(gerar_shorts=True, shorts_max="61")[0]
+def test_short_maior_que_180_segundos_e_recusado():
+    assert "entre 10 e 180" in erros_de(gerar_shorts=True, shorts_max="181")[0]
 
 
 def test_duracao_minima_maior_que_a_maxima():
@@ -277,3 +277,150 @@ def test_marca_dagua_precisa_de_um_destino_entre_o_que_sera_gerado(tmp_path):
     # só o vídeo longo está sendo gerado, mas a marca só foi pedida nos Shorts
     mensagens = erros_de(marca_dagua=True, marca_imagem=str(logo), marca_no_video_longo=False)
     assert any("onde ela entra" in m for m in mensagens)
+
+
+# --- começo e fim do vídeo, zoom, tratamento, vinhetas e Ollama ------------------------------
+
+
+def test_comeco_e_fim_viram_segundos_do_original():
+    o = para_opcoes(ValoresFormulario(video_inicio="0:07", video_fim="1:04:56,5"))
+    assert (o.video_inicio_s, o.video_fim_s) == (7.0, 3896.5)
+    padrao = para_opcoes(ValoresFormulario())
+    assert (padrao.video_inicio_s, padrao.video_fim_s) == (0.0, 0.0)  # vazio: o vídeo todo
+
+
+def test_comeco_e_fim_voltam_para_o_formulario_do_jeito_que_o_usuario_escreve():
+    o = OpcoesProcessamento(video_inicio_s=7.0, video_fim_s=3896.5)
+    v = ValoresFormulario.de_opcoes(o)
+    assert (v.video_inicio, v.video_fim) == ("0:07,0", "1:04:56,5")
+    assert para_opcoes(v) == o
+    vazio = ValoresFormulario.de_opcoes(OpcoesProcessamento())
+    assert (vazio.video_inicio, vazio.video_fim) == ("", "")
+
+
+def test_comeco_e_fim_invalidos():
+    assert any("Começar em" in m for m in erros_de(video_inicio="abc"))
+    assert any("Terminar em" in m for m in erros_de(video_fim="1:xx"))
+    assert any("depois do ponto" in m for m in erros_de(video_inicio="2:00", video_fim="1:00"))
+    assert any("depois do ponto" in m for m in erros_de(video_inicio="1:00", video_fim="1:00"))
+
+
+def test_tempo_negativo_conta_a_partir_do_fim_do_video():
+    from spurgeon.ui.formulario import ler_tempo_do_video
+
+    assert ler_tempo_do_video("-2:04", duracao_s=3900.0) == 3776.0
+    assert ler_tempo_do_video("−2:04", duracao_s=3900.0) == 3776.0  # o sinal tipográfico também
+    assert ler_tempo_do_video("0:07") == 7.0
+    assert ler_tempo_do_video("-9:00", duracao_s=60.0) == 0.0  # nunca antes do começo
+    with pytest.raises(ValueError, match="duração"):
+        ler_tempo_do_video("-2:04")
+
+
+def test_comeco_e_fim_so_valem_fora_do_modo_so_vinhetas():
+    v = ValoresFormulario(modo="so_vinhetas", introducao=True, video_inicio="lixo")
+    assert para_opcoes(v).video_inicio_s == 0.0  # nem é lido
+
+
+@pytest.mark.parametrize("campo", ["zoom_pct", "zoom_centro_x_pct", "zoom_centro_y_pct"])
+def test_zoom_fora_da_faixa_e_recusado(campo):
+    assert erros_de(**{campo: 400.0 if campo == "zoom_pct" else 101.0})
+    assert erros_de(**{campo: 50.0 if campo == "zoom_pct" else -1.0})
+
+
+def test_zoom_e_tratamento_fazem_a_ida_e_volta():
+    o = OpcoesProcessamento(
+        zoom_pct=125.0, zoom_centro_x_pct=54.0, zoom_centro_y_pct=48.0, zoom_nos_shorts=False,
+        tratamento_ativo=True, tratamento_brilho=10, tratamento_contraste=-5,
+        tratamento_saturacao=20, tratamento_temperatura=-8, tratamento_matiz=3,
+        tratamento_brancos=-12, tratamento_sombras=25, tratamento_nos_shorts=False,
+    )  # fmt: skip
+    assert para_opcoes(ValoresFormulario.de_opcoes(o)) == o
+
+
+def test_ajuste_do_tratamento_fora_de_100_e_recusado():
+    assert any("Brilho" in m for m in erros_de(tratamento_brilho=120.0))
+
+
+def test_introducao_e_vinheta_escolhidas_precisam_existir(tmp_path):
+    arquivo = tmp_path / "abertura.mp4"
+    arquivo.write_bytes(b"x")
+    v = ValoresFormulario(introducao=True, introducao_arquivo=str(arquivo))
+    assert para_opcoes(v).introducao_arquivo == str(arquivo)
+    ruim = ValoresFormulario(introducao=True, introducao_arquivo=str(tmp_path / "sumiu.mp4"))
+    assert any("introdução não foi encontrado" in m for m in erros_de(**ruim.__dict__))
+    ruim = ValoresFormulario(vinheta_final=True, vinheta_arquivo=str(tmp_path / "sumiu.mp4"))
+    assert any("vinheta final não foi encontrado" in m for m in erros_de(**ruim.__dict__))
+    # desmarcada, a escolha antiga não atrapalha
+    assert para_opcoes(ValoresFormulario(introducao=False, introducao_arquivo="nada.mp4"))
+
+
+def test_fade_so_e_conferido_com_introducao_ou_vinheta_e_o_fade_ligado():
+    assert para_opcoes(ValoresFormulario(fade_vinhetas_s="lixo")).fade_vinhetas_s == 0.5
+    assert para_opcoes(ValoresFormulario(fade_vinhetas=True, fade_vinhetas_s="lixo"))
+    mensagens = erros_de(introducao=False, vinheta_final=True, fade_vinhetas=True,
+                         fade_vinhetas_s="9", vinheta_arquivo="")  # fmt: skip
+    assert any("Duração do fade" in m for m in mensagens)
+
+
+def test_habilitacoes_do_fade_e_dos_arquivos():
+    v = ValoresFormulario(introducao=False, vinheta_final=False)
+    h = calcular_habilitacoes(v, introducao_existe=True, vinheta_existe=True)
+    assert h.escolher_introducao and h.escolher_vinheta
+    assert not h.fade_vinhetas and not h.fade_vinhetas_s  # sem introdução nem vinheta marcadas
+    v = ValoresFormulario(introducao=True, fade_vinhetas=True)
+    h = calcular_habilitacoes(v, introducao_existe=True, vinheta_existe=False)
+    assert h.fade_vinhetas and h.fade_vinhetas_s
+    h = calcular_habilitacoes(
+        ValoresFormulario(modo="so_shorts", gerar_shorts=True),
+        introducao_existe=True, vinheta_existe=True,
+    )  # fmt: skip
+    assert not h.escolher_introducao and not h.fade_vinhetas
+
+
+def test_habilitacoes_de_corte_zoom_e_tratamento_no_modo_so_vinhetas():
+    completo = calcular_habilitacoes(
+        ValoresFormulario(), introducao_existe=True, vinheta_existe=True
+    )
+    assert completo.aparar and completo.zoom and completo.tratamento
+    assert not completo.zoom_nos_shorts and not completo.tratamento_nos_shorts  # sem Shorts
+    com_shorts = calcular_habilitacoes(
+        ValoresFormulario(gerar_shorts=True), introducao_existe=True, vinheta_existe=True
+    )
+    assert com_shorts.zoom_nos_shorts and com_shorts.tratamento_nos_shorts
+    vinhetas = calcular_habilitacoes(
+        ValoresFormulario(modo="so_vinhetas", introducao=True),
+        introducao_existe=True, vinheta_existe=True,
+    )  # fmt: skip
+    assert not vinhetas.aparar and not vinhetas.zoom and not vinhetas.tratamento
+
+
+def test_lista_do_ollama_junta_instalados_recomendados_e_o_escolhido():
+    from spurgeon.ui.formulario import rotulos_ollama
+
+    rotulos = rotulos_ollama(["llama3.1:8b", "qwen3:8b"], "qwen3:8b")
+    assert rotulos["llama3.1:8b"] == "llama3.1:8b" and rotulos["qwen3:8b"] == "qwen3:8b"
+    assert rotulos["qwen3:4b · não instalado (será baixado)"] == "qwen3:4b"
+    assert list(rotulos.values()).count("qwen3:8b") == 1  # o instalado não aparece de novo
+    sem_servidor = rotulos_ollama([], "meu-modelo:7b")
+    assert sem_servidor["meu-modelo:7b · não encontrado no Ollama"] == "meu-modelo:7b"
+    assert "qwen3:8b · não instalado (será baixado)" in sem_servidor
+
+
+def test_listar_modelos_instalados_lida_com_servidor_fora_do_ar(monkeypatch):
+    import io
+    import json
+
+    from spurgeon.core import ollama as ollama_mod
+
+    assert ollama_mod.listar_modelos_instalados("http://127.0.0.1:9", espera_s=0.2) == []
+
+    class Resposta(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    corpo = json.dumps({"models": [{"name": "b:1"}, {"name": "a:2"}, {"x": 1}]}).encode()
+    monkeypatch.setattr(ollama_mod.urllib.request, "urlopen", lambda *_a, **_k: Resposta(corpo))
+    assert ollama_mod.listar_modelos_instalados() == ["a:2", "b:1"]

@@ -1,12 +1,15 @@
-"""Seções "Processamento", "O que gerar", "Pontos de revisão" e "Avançado"."""
+"""Os cartões de opções: O que gerar, Corte e enquadramento, Revisão, Processamento e Avançado."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from tkinter import filedialog
 
 import customtkinter as ctk
 
 from spurgeon.core.config import INFO_MODELOS_WHISPER, PRESETS_X264, Pastas
+from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.formulario import (
     DICAS_MODO,
     ROTULO_USO_75,
@@ -16,13 +19,27 @@ from spurgeon.ui.formulario import (
     aviso_qualidade,
     aviso_whisper,
     calcular_habilitacoes,
+    rotulos_ollama,
     rotulos_qualidade,
     rotulos_whisper,
 )
 from spurgeon.ui.painel_marca import PainelMarca
+from spurgeon.ui.painel_tratamento import PainelTratamento
+from spurgeon.ui.presets import RepositorioDePresets
+from spurgeon.ui.quadros import FonteDeQuadros
 
 _COR_DICA = "gray60"
 _COR_AVISO = "#e0a030"
+
+#: os nomes dos botões que trocam de página, na ordem das páginas
+NOMES_DAS_PAGINAS = ("1 · Vídeo e geração", "2 · Corte e imagem", "3 · Revisão e opções")
+
+#: o que o "O que gerar" mostra em cada modo (na ordem em que aparece)
+_GRUPOS_POR_MODO = {
+    "completo": ("audio", "longo", "vinhetas", "shorts"),
+    "so_shorts": ("audio", "shorts"),
+    "so_vinhetas": ("vinhetas",),
+}
 
 
 class PainelOpcoes(ctk.CTkFrame):
@@ -33,10 +50,18 @@ class PainelOpcoes(ctk.CTkFrame):
         valores: ValoresFormulario,
         pastas: Pastas,
         ao_mudar: Callable[[], None],
+        fonte: FonteDeQuadros,
+        tarefas: Tarefas,
+        presets: RepositorioDePresets,
+        ao_listar_ollama: Callable[[], None] | None = None,
     ):
         super().__init__(master, fg_color="transparent")
         self._pastas = pastas
         self._ao_mudar = ao_mudar
+        self._ao_listar_ollama = ao_listar_ollama
+        self._ollama_instalados: list[str] = []
+        self._rotulos_ollama: dict[str, str] = {}
+        self._nomes_de_arquivo: dict[str, tuple[ctk.CTkLabel, str]] = {}
         self._recomendado: str | None = None
         self._cuda = False
         self._nvenc = False
@@ -65,6 +90,7 @@ class PainelOpcoes(ctk.CTkFrame):
                 "aprovar_cortes",
                 "manter_intermediarios",
                 "impedir_bloqueio",
+                "fade_vinhetas",
             )
         }
         self.textos = {
@@ -78,25 +104,55 @@ class PainelOpcoes(ctk.CTkFrame):
                 "nota_minima",
                 "ollama_modelo",
                 "deslocamento_x",
-                "posicao_legenda",
                 "x264_preset",
                 "crf",
+                "introducao_arquivo",
+                "vinheta_arquivo",
+                "fade_vinhetas_s",
             )
         }
+        self.ollama = ctk.StringVar()
 
-        self._montar_processamento()
+        # Três páginas, uma de cada vez na tela: menos widgets para rolar e uma tela mais curta.
+        self.paginas = [ctk.CTkFrame(self, fg_color="transparent") for _ in NOMES_DAS_PAGINAS]
+        self._montando = 0
+        self.espaco_do_video = ctk.CTkFrame(self.paginas[0], fg_color="transparent")
+        self.espaco_do_video.pack(fill="x")  # a janela põe aqui o cartão "1. Vídeo"
         self._montar_gerar()
-        self.marca = PainelMarca(self, valores, pasta_inicial=pastas.recursos, ao_mudar=self._mudou)
+        self._montando = 1
+        self._montar_ajustes_do_video()
+        self.tratamento = PainelTratamento(
+            self.paginas[1], valores, fonte=fonte, tarefas=tarefas, presets=presets,
+            ao_mudar=self._ao_mudar,
+        )  # fmt: skip
+        self.tratamento.pack(fill="x", pady=(0, 10))
+        self.marca = PainelMarca(
+            self.paginas[1], valores, pasta_inicial=pastas.recursos, ao_mudar=self._mudou
+        )
         self.marca.pack(fill="x", pady=(0, 10))
+        self._montando = 2
         self._montar_revisao()
+        self._montar_processamento()
         self._montar_avancado()
+        self.pagina_atual = -1
+        self.mostrar_pagina(0)
         self.selecionar_whisper(valores.whisper_modelo)
         self.selecionar_qualidade(valores.qualidade)
+        self.definir_modelos_ollama(self._ollama_instalados)
         self.atualizar_habilitacoes()
 
     # --- montagem -----------------------------------------------------------------------------
+    def mostrar_pagina(self, indice: int) -> None:
+        """Mostra só a página `indice` (0 = vídeo e geração, 1 = corte e imagem, 2 = revisão)."""
+        if indice == self.pagina_atual:
+            return
+        self.pagina_atual = indice
+        for pagina in self.paginas:
+            pagina.pack_forget()
+        self.paginas[indice].pack(fill="x")
+
     def _cartao(self, titulo: str) -> ctk.CTkFrame:
-        cartao = ctk.CTkFrame(self)
+        cartao = ctk.CTkFrame(self.paginas[self._montando])
         cartao.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(cartao, text=titulo, font=ctk.CTkFont(size=15, weight="bold")).pack(
             anchor="w", padx=12, pady=(10, 4)
@@ -132,12 +188,31 @@ class PainelOpcoes(ctk.CTkFrame):
         else:
             rotulo.pack_forget()
 
-    def _check(self, pai, texto: str, nome: str, recuo: int = 0):
+    def _ajuda(self, pai, texto: str, recuo: int = 0) -> ctk.CTkLabel:
+        """A legendinha cinza que explica a opção logo acima dela."""
+        rotulo = ctk.CTkLabel(
+            pai,
+            text=texto,
+            text_color=_COR_DICA,
+            anchor="w",
+            justify="left",
+            wraplength=430 - recuo,
+            font=ctk.CTkFont(size=12),
+        )
+        rotulo.pack(anchor="w", padx=(12 + recuo, 12), pady=(0, 6))
+        return rotulo
+
+    def _check(self, pai, texto: str, nome: str, recuo: int = 0, ajuda: str = ""):
         caixa = ctk.CTkCheckBox(pai, text=texto, variable=self.bools[nome], command=self._mudou)
         caixa.pack(anchor="w", padx=(12 + recuo, 12), pady=3)
+        if ajuda:
+            self._ajuda(pai, ajuda, recuo + 28)
         return self._registrar(caixa, nome)
 
-    def _campo(self, pai, rotulo: str, nome: str, *, largura: int = 80, dica: str = "", recuo=0):
+    def _campo(
+        self, pai, rotulo: str, nome: str, *, largura: int = 80, dica: str = "", recuo=0,
+        ajuda: str = "",
+    ):  # fmt: skip
         linha = ctk.CTkFrame(pai, fg_color="transparent")
         linha.pack(anchor="w", padx=(12 + recuo, 12), pady=3, fill="x")
         ctk.CTkLabel(linha, text=rotulo, anchor="w").pack(side="left")
@@ -148,10 +223,80 @@ class PainelOpcoes(ctk.CTkFrame):
             ctk.CTkLabel(linha, text=dica, text_color=_COR_DICA, font=ctk.CTkFont(size=12)).pack(
                 side="left"
             )
+        if ajuda:
+            self._ajuda(pai, ajuda, recuo)
         return self._registrar(entrada, nome)
 
+    def _linha_de_arquivo(self, pai, rotulo: str, nome_check: str, nome_arquivo: str, padrao: str):
+        """Caixa de marcar + o arquivo usado (o padrão de `recursos/` ou o escolhido)."""
+        self._check(pai, rotulo, nome_check, recuo=28)
+        linha = ctk.CTkFrame(pai, fg_color="transparent")
+        linha.pack(anchor="w", padx=(12 + 56, 12), pady=(0, 4), fill="x")
+        botao = ctk.CTkButton(
+            linha,
+            text="Escolher arquivo…",
+            width=130,
+            height=24,
+            fg_color=("gray70", "gray30"),
+            command=lambda: self._escolher_arquivo(nome_arquivo, rotulo),
+        )
+        botao.pack(side="left")
+        padrao_btn = ctk.CTkButton(
+            linha,
+            text="Usar o padrão",
+            width=100,
+            height=24,
+            fg_color=("gray70", "gray30"),
+            command=lambda: self._definir_arquivo(nome_arquivo, ""),
+        )
+        padrao_btn.pack(side="left", padx=6)
+        nome = ctk.CTkLabel(linha, text="", anchor="w", text_color=_COR_DICA)
+        nome.pack(side="left", padx=4)
+        self._registrar(botao, f"escolher_{nome_check}")
+        self._registrar(padrao_btn, f"padrao_{nome_check}")
+        self._nomes_de_arquivo[nome_arquivo] = (nome, padrao)
+
+    def _escolher_arquivo(self, nome_arquivo: str, titulo: str) -> None:
+        atual = self.textos[nome_arquivo].get().strip()
+        inicial = Path(atual).parent if atual else self._pastas.recursos
+        caminho = filedialog.askopenfilename(
+            title=f"Escolha o arquivo: {titulo}",
+            initialdir=str(inicial if inicial.exists() else Path.home()),
+            filetypes=[("Vídeos", "*.mp4 *.mov *.mkv *.m4v *.avi *.webm"), ("Todos", "*.*")],
+        )
+        if caminho:
+            self._definir_arquivo(nome_arquivo, caminho)
+
+    def _definir_arquivo(self, nome_arquivo: str, caminho: str) -> None:
+        self.textos[nome_arquivo].set(str(caminho))
+        self._mudou()
+
+    def _mostrar_arquivos(self) -> None:
+        for nome_arquivo, (rotulo, padrao) in self._nomes_de_arquivo.items():
+            escolhido = self.textos[nome_arquivo].get().strip()
+            rotulo.configure(text=f"{Path(escolhido).name}" if escolhido else f"{padrao} (padrão)")
+
+    # --- modelos do Ollama --------------------------------------------------------------------
+    def definir_modelos_ollama(self, instalados: Sequence[str]) -> None:
+        """Preenche a lista de modelos (quando o Ollama responde com o que tem instalado)."""
+        self._ollama_instalados = list(instalados)
+        atual = self.textos["ollama_modelo"].get().strip() or "qwen3:8b"
+        self._rotulos_ollama = rotulos_ollama(self._ollama_instalados, atual)
+        self._menu_ollama.configure(values=list(self._rotulos_ollama))
+        self.selecionar_ollama(atual)
+
+    def selecionar_ollama(self, modelo: str) -> None:
+        for rotulo, nome in self._rotulos_ollama.items():
+            if nome == modelo:
+                self.ollama.set(rotulo)
+                return
+
+    def _mudou_ollama(self, rotulo: str) -> None:
+        self.textos["ollama_modelo"].set(self._rotulos_ollama.get(rotulo, rotulo))
+        self._mudou()
+
     def _montar_processamento(self) -> None:
-        c = self._cartao("2. Processamento")
+        c = self._cartao("7. Processamento")
         ctk.CTkLabel(c, text="Uso do processador", anchor="w").pack(anchor="w", padx=12)
         for rotulo, valor in ((ROTULO_USO_75, 75), (ROTULO_USO_100, 100)):
             r = ctk.CTkRadioButton(c, text=rotulo, variable=self.uso, value=valor)
@@ -187,34 +332,131 @@ class PainelOpcoes(ctk.CTkFrame):
         self._registrar(self._menu_qualidade)
         self._dica_qualidade = self._dica(c, empacotar=False)
 
+    def _grupo(self, pai, titulo: str) -> ctk.CTkFrame:
+        """Um bloco do "O que gerar": um título pequeno com fio e as opções dele logo abaixo."""
+        quadro = ctk.CTkFrame(pai, fg_color="transparent")
+        ctk.CTkLabel(
+            quadro,
+            text=titulo.upper(),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=_COR_DICA,
+            anchor="w",
+        ).pack(anchor="w", padx=12, pady=(8, 0))
+        ctk.CTkFrame(quadro, height=1, fg_color=("gray75", "gray30")).pack(
+            fill="x", padx=12, pady=(2, 4)
+        )
+        return quadro
+
     def _montar_gerar(self) -> None:
-        c = self._cartao("3. O que gerar")
+        c = self._cartao("2. O que gerar")
         self._seletor_modo = ctk.CTkSegmentedButton(
             c, values=list(ROTULOS_MODO.values()), variable=self.modo, command=self._mudou_modo
         )
         self._seletor_modo.pack(fill="x", padx=12, pady=(0, 2))
         self._dica_modo = self._dica(c)
-        self._check(c, "Limpar áudio (DeepFilterNet)", "limpar_audio")
-        self._check(c, "Normalizar volume", "normalizar_volume")
-        self._check(c, "Gerar vídeo completo sem silêncios + arquivo .srt", "gerar_video_longo")
+
+        audio = self._grupo(c, "Áudio")
+        self._check(
+            audio,
+            "Limpar áudio (DeepFilterNet)",
+            "limpar_audio",
+            ajuda="Tira ruído de fundo com IA. Deixa o som e a transcrição melhores, mas é lento.",
+        )
+        self._check(
+            audio,
+            "Normalizar volume",
+            "normalizar_volume",
+            ajuda="Deixa o volume parecido do começo ao fim (−16 LUFS no vídeo longo e −14 nos "
+            "Shorts).",
+        )
+
+        longo = self._grupo(c, "Vídeo completo")
+        self._check(
+            longo,
+            "Gerar vídeo completo sem silêncios + arquivo .srt",
+            "gerar_video_longo",
+            ajuda="Corta as pausas longas, renderiza o sermão limpo e escreve as legendas (.srt).",
+        )
         self._campo(
-            c,
+            longo,
             "Tamanho mínimo da pausa a cortar (s)",
             "limiar_pausa",
             largura=64,
             dica="de 0,5 a 30",
             recuo=28,
         )
-        self._check(c, "Introdução", "introducao", recuo=28)
-        self._w_vinheta = self._check(c, "Vinheta final", "vinheta_final", recuo=28)
-        self._dica_recursos = self._dica(c, empacotar=False)
-        self._check(c, "Gerar Shorts automáticos (vertical 9:16)", "gerar_shorts")
-        self._check(
-            c, "Legendas dinâmicas (palavra falada em amarelo)", "legendas_dinamicas", recuo=28
+
+        vinhetas = self._grupo(c, "Introdução e vinheta final")
+        self._linha_de_arquivo(
+            vinhetas, "Introdução", "introducao", "introducao_arquivo", "introducao.mp4"
         )
+        self._linha_de_arquivo(
+            vinhetas, "Vinheta final", "vinheta_final", "vinheta_arquivo", "vinheta_final.mp4"
+        )
+        self._check(
+            vinhetas,
+            "Suavizar com fade (imagem e som) entre a introdução/vinheta e o vídeo",
+            "fade_vinhetas",
+            recuo=28,
+        )
+        self._campo(
+            vinhetas,
+            "Duração do fade (s)",
+            "fade_vinhetas_s",
+            largura=56,
+            dica="de 0,1 a 3",
+            recuo=56,
+        )
+        self._w_vinheta = self._ajuda(  # a dica de arquivo ausente vem logo depois deste texto
+            vinhetas,
+            "A introdução escurece até o preto e o vídeo surge dele (e o mesmo, ao contrário, na "
+            "vinheta final), com o som acompanhando. No modo Só vinhetas o fade vale só do lado "
+            "da introdução e da vinheta, porque o vídeo pronto não é recodificado.",
+            56,
+        )
+        self._dica_recursos = self._dica(vinhetas, empacotar=False)
+
+        shorts = self._grupo(c, "Shorts (vertical 9:16)")
+        self._quadro_gerar_shorts = ctk.CTkFrame(shorts, fg_color="transparent")
+        self._check(
+            self._quadro_gerar_shorts,
+            "Gerar Shorts automáticos (vertical 9:16)",
+            "gerar_shorts",
+            ajuda="A IA procura os melhores trechos, escreve título e hashtags, e você aprova "
+            "antes de renderizar.",
+        )
+        self._quadro_legendas = ctk.CTkFrame(shorts, fg_color="transparent")
+        self._check(
+            self._quadro_legendas,
+            "Legendas dinâmicas (palavra falada em amarelo)",
+            "legendas_dinamicas",
+            recuo=28,
+            ajuda="Queima a legenda no vídeo dos Shorts. Sem isto o Short sai sem texto na tela.",
+        )
+        self._grupos = {"audio": audio, "longo": longo, "vinhetas": vinhetas, "shorts": shorts}
+        self._modo_mostrado: str | None = None
+
+    def _mostrar_grupos(self, modo: str) -> None:
+        """Mostra só o que vale para o modo: Tudo mostra tudo; Só Shorts, o áudio e os Shorts;
+        Só vinhetas, apenas a introdução e a vinheta final."""
+        if modo == self._modo_mostrado:
+            return
+        self._modo_mostrado = modo
+        for quadro in (*self._grupos.values(), self._quadro_gerar_shorts, self._quadro_legendas):
+            quadro.pack_forget()
+        for nome in _GRUPOS_POR_MODO[modo]:
+            self._grupos[nome].pack(fill="x")
+        if "shorts" in _GRUPOS_POR_MODO[modo]:
+            if modo == "completo":  # no Só Shorts os Shorts são o produto: a caixa não faz sentido
+                self._quadro_gerar_shorts.pack(fill="x")
+            self._quadro_legendas.pack(fill="x")
+
+    def _montar_ajustes_do_video(self) -> None:
+        """O cartão onde a janela põe o corte do começo e do fim, o zoom e a legenda dos Shorts."""
+        self.cartao_ajustes = self._cartao("3. Corte e enquadramento")
 
     def _montar_revisao(self) -> None:
-        c = self._cartao("5. Pontos de revisão")
+        c = self._cartao("6. Pontos de revisão")
         self._check(
             c, "Pausar para revisar a transcrição (.srt) antes de continuar", "revisar_transcricao"
         )
@@ -225,7 +467,7 @@ class PainelOpcoes(ctk.CTkFrame):
 
     def _montar_avancado(self) -> None:
         self._botao_avancado = ctk.CTkButton(
-            self,
+            self.paginas[2],
             text="▸ Opções avançadas",
             anchor="w",
             fg_color="transparent",
@@ -234,34 +476,86 @@ class PainelOpcoes(ctk.CTkFrame):
             command=self._alternar_avancado,
         )
         self._botao_avancado.pack(fill="x", pady=(0, 4))
-        self._avancado = ctk.CTkFrame(self)
+        self._avancado = ctk.CTkFrame(self.paginas[2])
         self._avancado_visivel = False
         a = self._avancado
-        self._campo(a, "Pausa residual mantida ao cortar (s)", "pausa_residual", largura=64)
-        self._campo(a, "Duração mínima do Short (s)", "shorts_min", largura=64)
-        self._campo(a, "Duração máxima do Short (s)", "shorts_max", largura=64, dica="até 60")
-        self._campo(a, "Limite de segurança de Shorts", "limite_shorts", largura=64)
+        self._campo(
+            a,
+            "Pausa residual mantida ao cortar (s)",
+            "pausa_residual",
+            largura=64,
+            ajuda="Quanto silêncio sobra em cada pausa cortada (metade em cada ponta), para a "
+            "emenda não soar seca.",
+        )
+        self._campo(
+            a,
+            "Duração mínima do Short (s)",
+            "shorts_min",
+            largura=64,
+            ajuda="Trechos mais curtos que isto não viram Short. O padrão é 30 s.",
+        )
+        self._campo(
+            a,
+            "Duração máxima do Short (s)",
+            "shorts_max",
+            largura=64,
+            dica="até 180",
+            ajuda="Trechos mais longos que isto nem são avaliados. 180 s (3 min) é o limite do "
+            "YouTube. A nota favorece os de cerca de 60 s, mas os longos ainda concorrem.",
+        )
+        self._campo(
+            a,
+            "Limite de segurança de Shorts",
+            "limite_shorts",
+            largura=64,
+            ajuda="O máximo de cortes que vêm marcados; os demais bons viram reservas desmarcadas.",
+        )
         self._campo(
             a,
             "Nota mínima para um corte vir marcado",
             "nota_minima",
             largura=64,
             dica="0 a 100",
+            ajuda="Cortes abaixo desta nota aparecem na aprovação, mas desmarcados.",
         )
-        self._campo(a, "Modelo do Ollama", "ollama_modelo", largura=160)
+        linha_ollama = ctk.CTkFrame(a, fg_color="transparent")
+        linha_ollama.pack(anchor="w", padx=12, pady=3, fill="x")
+        ctk.CTkLabel(linha_ollama, text="Modelo do Ollama", anchor="w").pack(side="left")
+        self._menu_ollama = ctk.CTkOptionMenu(
+            linha_ollama,
+            variable=self.ollama,
+            values=[""],
+            command=self._mudou_ollama,
+            dynamic_resizing=False,
+            width=230,
+        )
+        self._menu_ollama.pack(side="left", padx=8)
+        self._registrar(self._menu_ollama, "ollama_menu")
+        atualizar = ctk.CTkButton(
+            linha_ollama,
+            text="↻",
+            width=28,
+            height=28,
+            fg_color=("gray70", "gray30"),
+            command=lambda: self._ao_listar_ollama() if self._ao_listar_ollama else None,
+        )
+        atualizar.pack(side="left")
+        self._registrar(atualizar, "ollama_atualizar")
+        self._ajuda(
+            a,
+            "A IA local que avalia os trechos e escreve os títulos. A lista mostra o que o Ollama "
+            "já tem; os marcados “não instalado” são baixados na primeira vez. Modelos maiores "
+            "entendem melhor o português e são mais lentos. ↻ atualiza a lista.",
+        )
         self._campo(
             a,
             "Deslocamento do recorte 9:16 (%)",
             "deslocamento_x",
             largura=64,
             dica="− esquerda / + direita",
-        )
-        self._campo(
-            a,
-            "Posição vertical da legenda (%)",
-            "posicao_legenda",
-            largura=64,
-            dica="da altura, de cima",
+            ajuda="Move o enquadramento vertical dos Shorts para o lado. +4 põe o pregador no meio "
+            "com a câmera fixa do púlpito. O zoom e a altura da legenda dos Shorts ficam em "
+            "“Ajustar o zoom e a legenda dos Shorts”, no começo da tela.",
         )
         linha = ctk.CTkFrame(a, fg_color="transparent")
         linha.pack(anchor="w", padx=12, pady=3)
@@ -279,11 +573,24 @@ class PainelOpcoes(ctk.CTkFrame):
         crf = ctk.CTkEntry(linha, textvariable=self.textos["crf"], width=50)
         crf.pack(side="left", padx=8)
         self._registrar(crf, "crf")
-        self._check(a, "Manter arquivos intermediários ao terminar", "manter_intermediarios")
+        self._ajuda(
+            a,
+            "Só vale com “Personalizado” em Qualidade. Preset mais lento gera arquivo menor com a "
+            "mesma qualidade; CRF menor dá mais qualidade e arquivo maior (16 a 23 é o usual).",
+        )
+        self._check(
+            a,
+            "Manter arquivos intermediários ao terminar",
+            "manter_intermediarios",
+            ajuda="Não apaga os áudios e partes pesadas de _work/ ao concluir. Ocupam vários GB; "
+            "só vale a pena para investigar um problema.",
+        )
         self._check(
             a,
             "Impedir que o PC bloqueie ou apague a tela durante o processamento",
             "impedir_bloqueio",
+            ajuda="As renderizações levam horas. Com isto ligado o Windows não suspende nem "
+            "bloqueia o PC enquanto o aplicativo trabalha (volta ao normal ao terminar).",
         )
         ctk.CTkLabel(a, text="").pack(pady=1)
 
@@ -306,6 +613,7 @@ class PainelOpcoes(ctk.CTkFrame):
             **{nome: var.get() for nome, var in self.bools.items()},
             **{nome: var.get() for nome, var in self.textos.items()},
             **self.marca.valores(),
+            **self.tratamento.valores(),
         )
 
     def aplicar_valores(self, v: ValoresFormulario) -> None:
@@ -318,7 +626,9 @@ class PainelOpcoes(ctk.CTkFrame):
             var.set(getattr(v, nome))
         self.selecionar_whisper(v.whisper_modelo)
         self.selecionar_qualidade(v.qualidade)
+        self.definir_modelos_ollama(self._ollama_instalados)
         self.marca.aplicar(v)
+        self.tratamento.aplicar(v)
         self.atualizar_habilitacoes()
         self._ao_mudar()
 
@@ -363,16 +673,20 @@ class PainelOpcoes(ctk.CTkFrame):
 
     def atualizar_habilitacoes(self) -> None:
         v = self.valores()
-        intro = self._pastas.introducao.exists()
-        vinheta = self._pastas.vinheta_final.exists()
+        arquivo_intro = self._pastas.arquivo_introducao(v.introducao_arquivo)
+        arquivo_vinheta = self._pastas.arquivo_vinheta(v.vinheta_arquivo)
+        intro, vinheta = arquivo_intro.exists(), arquivo_vinheta.exists()
+        self._mostrar_arquivos()
         h = calcular_habilitacoes(v, introducao_existe=intro, vinheta_existe=vinheta)
         livre = not self._bloqueado
 
         for widget in self._todos:
             widget.configure(state="normal" if livre else "disabled")
         self._seletor_modo.configure(state="normal" if livre else "disabled")
+        self._mostrar_grupos(v.modo)
         self._dica_modo.configure(text=DICAS_MODO[v.modo])
         self.marca.aplicar_habilitacoes(h, livre=livre)
+        self.tratamento.aplicar_habilitacoes(h, livre=livre)
         regras = {
             "limpar_audio": h.limpar_audio,
             "gerar_video_longo": h.gerar_video_longo,
@@ -381,6 +695,14 @@ class PainelOpcoes(ctk.CTkFrame):
             "limiar_pausa": h.limiar_pausa,
             "introducao": h.introducao,
             "vinheta_final": h.vinheta_final,
+            "escolher_introducao": h.escolher_introducao,
+            "padrao_introducao": h.escolher_introducao,
+            "escolher_vinheta_final": h.escolher_vinheta,
+            "padrao_vinheta_final": h.escolher_vinheta,
+            "fade_vinhetas": h.fade_vinhetas,
+            "fade_vinhetas_s": h.fade_vinhetas_s,
+            "ollama_menu": h.campos_shorts,
+            "ollama_atualizar": h.campos_shorts,
             "legendas_dinamicas": h.legendas_dinamicas,
             "aprovar_cortes": h.aprovar_cortes,
             "shorts_min": h.campos_shorts,
@@ -393,11 +715,11 @@ class PainelOpcoes(ctk.CTkFrame):
             self._por_nome[nome].configure(state="normal" if livre and ativo else "disabled")
 
         faltam = [
-            nome
-            for nome, existe in (("introducao.mp4", intro), ("vinheta_final.mp4", vinheta))
+            caminho.name
+            for caminho, existe in ((arquivo_intro, intro), (arquivo_vinheta, vinheta))
             if not existe
         ]
-        ausentes = f"Arquivo ausente em recursos/: {', '.join(faltam)}" if faltam else ""
+        ausentes = f"Arquivo não encontrado: {', '.join(faltam)}" if faltam else ""
         self._definir_dica(
             self._dica_recursos,
             ausentes

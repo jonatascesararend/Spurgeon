@@ -580,7 +580,7 @@ def test_selecionar_cria_cortes_com_titulo_slug_e_nota(ctx_shorts, ollama):
     for c in cortes:
         assert c.titulo and c.descricao and c.hashtags[0] == "#shorts"
         assert 0 <= c.nota <= 100 and c.detalhe
-        assert 30 <= c.duracao <= 60
+        assert 30 <= c.duracao <= 180
     slugs = [c.slug for c in cortes]
     assert len(set(slugs)) == len(slugs)  # nunca dois arquivos com o mesmo nome
     assert slugs[0] == "povo_rejeita_verdade"
@@ -642,16 +642,16 @@ def test_mover_o_fim_para_dentro_encurta_o_corte_numa_palavra_inteira():
     assert novo.texto.endswith(palavras[ultima - 3].texto)
 
 
-def test_deixa_passar_de_60_segundos_mas_o_corte_deixa_de_poder_ser_short():
-    palavras = sermao_falso()
+def test_deixa_passar_do_limite_mas_o_corte_deixa_de_poder_ser_short():
+    palavras = sermao_falso(frases=100)
     corte = cortes_do_sermao(palavras)[0]
     assert not passa_do_limite(corte)
     atual = corte
-    for _ in range(80):  # o corte cresce palavra a palavra, sem erro, e passa dos 60 s
+    for _ in range(500):  # o corte cresce palavra a palavra, sem erro, e passa dos 180 s
         atual = mover_limite(palavras, atual, "fim", 1)
-    assert atual.duracao > 60.0
+    assert atual.duracao > 180.0
     assert passa_do_limite(atual)
-    assert "60" in AVISO_ACIMA_DO_LIMITE
+    assert "180" in AVISO_ACIMA_DO_LIMITE
 
 
 def test_nao_deixa_ficar_curto_demais_nem_sair_da_transcricao():
@@ -823,7 +823,7 @@ def test_selecao_com_niveis_do_audio_comeca_e_termina_em_silencio(ctx_shorts, ol
     for c in cortes:
         assert nivel_em(c.inicio) < -55.0, f"o corte {c.id} começa dentro da voz"
         assert nivel_em(c.fim - 0.05) < -55.0, f"o corte {c.id} termina dentro da voz"
-        assert c.duracao <= 60.0
+        assert c.duracao <= 180.0
 
 
 def test_sem_a_medicao_de_nivel_a_selecao_avisa_e_usa_o_respiro_fixo(ctx_shorts, ollama, caplog):
@@ -873,9 +873,9 @@ def test_no_meio_da_frase_o_ajuste_vai_ao_comeco_ou_ao_fim_dela():
 
 
 def test_ajuste_por_frase_respeita_os_limites_do_corte_e_da_transcricao():
-    palavras = sermao_falso()
+    palavras = sermao_falso(frases=100)
     corte = cortes_do_sermao(palavras)[0]
-    for _ in range(8):  # empurra o fim: passa dos 60 s sem erro
+    for _ in range(40):  # empurra o fim: passa dos 180 s sem erro
         corte = mover_por_frase(palavras, corte, "fim", +1)
     assert passa_do_limite(corte)
     with pytest.raises(LimiteInvalido, match="Não há mais fala"):
@@ -918,3 +918,142 @@ def test_corte_bem_fechado_nao_recebe_avisos():
     palavras = sermao_falso()
     contexto = contexto_das_pontas(palavras, corte_entre(palavras, 24, 59))
     assert contexto.avisos == ()
+
+
+# --- Shorts de até 180 s, com preferência por ~60 s ------------------------------------------
+
+
+def test_pontos_de_duracao_favorecem_60s_mas_nao_zeram_os_longos():
+    assert pontos_de_duracao(60) == pontos_de_duracao(50) == pontos_de_duracao(75) == 10.0
+    assert (
+        pontos_de_duracao(30) == 5.0 and pontos_de_duracao(45) == 8.0 and pontos_de_duracao(20) == 0
+    )
+    assert 5 < pontos_de_duracao(120) < pontos_de_duracao(90) < 10
+    assert pontos_de_duracao(180) == pontos_de_duracao(200) == 2.0  # ainda vale alguma coisa
+    sequencia = [pontos_de_duracao(d) for d in range(75, 181, 5)]
+    assert sequencia == sorted(sequencia, reverse=True)  # só cai, sem degraus para cima
+
+
+def test_o_limite_padrao_dos_candidatos_e_180s():
+    assert ParametrosJanela().maximo_s == 180.0
+    palavras = sermao_falso(frases=100)
+    frases = separar_frases(palavras)
+    candidatos = gerar_candidatos(palavras, frases)
+    maior = max(c.duracao for c in candidatos)
+    assert 100 < maior <= 180.0
+    ate_60 = gerar_candidatos(palavras, frases, ParametrosJanela(maximo_s=60.0))
+    assert max(c.duracao for c in ate_60) <= 60.0
+    assert len(candidatos) > len(ate_60)
+
+
+def test_cota_de_longos_leva_alguns_a_avaliacao_da_ia():
+    from spurgeon.shorts.analise import DURACAO_LONGA_S, escolher_para_ia
+
+    palavras = sermao_falso(frases=200)
+    candidatos = gerar_candidatos(palavras, separar_frases(palavras))
+    sem_cota = escolher_sem_sobreposicao(candidatos, 20, 0.6)
+    assert not any(c.duracao >= DURACAO_LONGA_S for c in sem_cota)  # os longos ficariam de fora
+    com_cota = escolher_para_ia(candidatos, 20, 0.6)
+    longos = [c for c in com_cota if c.duracao >= DURACAO_LONGA_S]
+    assert len(com_cota) == 20 and 4 <= len(longos) <= 6  # 25% das vagas
+    # e os de ~60 s continuam sendo a maioria
+    assert sum(1 for c in com_cota if 45 <= c.duracao <= 75) >= 8
+    assert all(sobreposicao(a, b) <= 0.6 for i, a in enumerate(com_cota) for b in com_cota[i + 1 :])
+
+
+def test_cota_de_longos_nao_trava_se_nao_ha_longos():
+    from spurgeon.shorts.analise import escolher_para_ia
+
+    palavras = sermao_falso(frases=100)
+    candidatos = gerar_candidatos(palavras, separar_frases(palavras), ParametrosJanela(maximo_s=60))
+    assert len(escolher_para_ia(candidatos, 10, 0.6)) == 10  # as vagas voltam para os demais
+
+
+def test_analisar_inclui_candidatos_longos_e_o_limite_de_180s(ctx_shorts, ollama):
+    rodar(AnalisarShorts(), ctx_shorts)
+    dados = ler_json(ctx_shorts.pastas.candidatos)
+    duracoes = [c["fim"] - c["inicio"] for c in dados["candidatos"]]
+    assert max(duracoes) > 90 and max(duracoes) <= 180
+    assert min(duracoes) >= 30
+
+
+def test_analisar_so_usa_a_fala_do_trecho_escolhido_do_video(ctx_shorts, ollama):
+    ctx_shorts.opcoes.video_inicio_s = 100.0
+    ctx_shorts.opcoes.video_fim_s = 400.0
+    rodar(AnalisarShorts(), ctx_shorts)
+    dados = ler_json(ctx_shorts.pastas.candidatos)
+    assert dados["candidatos"]
+    assert all(c["inicio"] >= 100.0 and c["fim"] <= 400.0 for c in dados["candidatos"])
+    assert all(f["inicio"] >= 100.0 and f["fim"] <= 400.0 for f in dados["frases"])
+    assert "video_inicio_s" in AnalisarShorts.opcoes_relevantes
+
+
+def test_palavras_da_janela_corta_as_pontas():
+    from spurgeon.shorts.analise import palavras_da_janela
+
+    palavras = sermao_falso(frases=10)
+    meio = palavras_da_janela(palavras, 10.0, 30.0)
+    assert meio and meio[0].inicio >= 10.0 and meio[-1].fim <= 30.0
+    assert palavras_da_janela(palavras, 0.0, None) == palavras
+
+
+# --- as avaliações da IA valem por trecho, não por número -----------------------------------
+
+
+def test_refazer_a_analise_aproveita_as_avaliacoes_dos_mesmos_trechos(ctx_shorts, ollama):
+    rodar(AnalisarShorts(), ctx_shorts)
+    rodar(AvaliarShorts(), ctx_shorts)
+    assert len(ollama.chamadas) == 6
+    ollama.chamadas.clear()
+    rodar(AnalisarShorts(), ctx_shorts)  # a mesma análise: os candidatos são os mesmos
+    rodar(AvaliarShorts(), ctx_shorts)
+    assert ollama.chamadas == []  # nada foi pedido de novo
+
+
+def test_avaliacao_nao_vai_para_outro_candidato_quando_os_numeros_mudam(ctx_shorts, ollama):
+    rodar(AnalisarShorts(), ctx_shorts)
+    rodar(AvaliarShorts(), ctx_shorts)
+    # outra duração máxima: os candidatos são outros (e numerados de novo)
+    ctx_shorts.opcoes.shorts_duracao_max_s = 90.0
+    ollama.chamadas.clear()
+    rodar(AnalisarShorts(), ctx_shorts)
+    _, candidatos = etapas_mod.carregar_candidatos(ctx_shorts.pastas.candidatos)
+    feitas = etapas_mod._ler_avaliacoes(ctx_shorts.pastas.avaliacoes, "qwen3:8b", candidatos)
+    guardadas = {etapas_mod.marca_do_candidato(c) for c in candidatos}
+    for id_, _avaliacao in feitas.items():  # só vale para quem tem o mesmo trecho e texto
+        assert (
+            etapas_mod.marca_do_candidato(next(c for c in candidatos if c.id == id_)) in guardadas
+        )
+    rodar(AvaliarShorts(), ctx_shorts)
+    assert len(ollama.chamadas) == len(candidatos) - len(feitas)
+
+
+def test_projeto_antigo_com_avaliacoes_por_id_e_migrado_sem_perder_nada(ctx_shorts, ollama):
+    rodar(AnalisarShorts(), ctx_shorts)
+    rodar(AvaliarShorts(), ctx_shorts)
+    _, candidatos = etapas_mod.carregar_candidatos(ctx_shorts.pastas.candidatos)
+    novo = ler_json(ctx_shorts.pastas.avaliacoes)
+    antigo = {  # o formato de antes da 1.2: chaves por id, sem "versao"
+        "modelo": novo["modelo"],
+        "avaliacoes": {
+            str(c.id): novo["avaliacoes"][etapas_mod.marca_do_candidato(c)] for c in candidatos
+        },
+    }
+    escrever_json_atomico(ctx_shorts.pastas.avaliacoes, antigo)
+    # ler direto: o arquivo antigo ainda vale para os candidatos que existem
+    lidas = etapas_mod._ler_avaliacoes(ctx_shorts.pastas.avaliacoes, "qwen3:8b", candidatos)
+    assert set(lidas) == {c.id for c in candidatos}
+    # refazer a análise migra o arquivo (por trecho) antes de trocar os candidatos
+    ollama.chamadas.clear()
+    rodar(AnalisarShorts(), ctx_shorts)
+    migrado = ler_json(ctx_shorts.pastas.avaliacoes)
+    assert migrado["versao"] == 2 and len(migrado["avaliacoes"]) == len(candidatos)
+    rodar(AvaliarShorts(), ctx_shorts)
+    assert ollama.chamadas == []
+
+
+def test_avaliacao_de_outro_modelo_continua_sendo_descartada(ctx_shorts, ollama):
+    rodar(AnalisarShorts(), ctx_shorts)
+    rodar(AvaliarShorts(), ctx_shorts)
+    _, candidatos = etapas_mod.carregar_candidatos(ctx_shorts.pastas.candidatos)
+    assert etapas_mod._ler_avaliacoes(ctx_shorts.pastas.avaliacoes, "outro", candidatos) == {}

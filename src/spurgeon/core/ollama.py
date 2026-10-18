@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -65,3 +66,18 @@ def _abrir_servidor(executavel: Path) -> None:
         stderr=subprocess.DEVNULL,
         creationflags=_SEM_JANELA | _FORA_DO_PROCESSO,
     )
+
+
+#: modelos que o aplicativo recomenda, do preferido ao mais leve (o pipeline baixa o que faltar)
+MODELOS_SUGERIDOS = ("qwen3:8b", "qwen3:4b", "llama3.1:8b", "gemma3:12b")
+
+
+def listar_modelos_instalados(url: str = URL_OLLAMA, *, espera_s: float = 2.0) -> list[str]:
+    """Os modelos que o Ollama já tem baixados (vazio se o servidor não responde)."""
+    try:
+        with urllib.request.urlopen(f"{url}/api/tags", timeout=espera_s) as resposta:
+            dados = json.loads(resposta.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return []
+    modelos = dados.get("models", []) if isinstance(dados, dict) else []
+    return sorted(m["name"] for m in modelos if isinstance(m, dict) and m.get("name"))

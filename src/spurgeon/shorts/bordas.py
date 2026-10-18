@@ -12,10 +12,11 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Sequence
 
+from spurgeon.core.config import DURACAO_MAXIMA_SHORT_S
 from spurgeon.shorts.dados import Candidato
 
 JANELA_S = 0.05
-DURACAO_MAXIMA_S = 60.0
+DURACAO_MAXIMA_S = DURACAO_MAXIMA_SHORT_S
 RECUO_MAXIMO_NO_INICIO_S = 0.5  # quanto antes da 1ª palavra se aceita procurar silêncio
 AVANCO_MAXIMO_NO_FIM_S = 0.8  # quanto depois da última palavra se espera a voz morrer
 SILENCIO_ANTES_DA_VOZ_S = 0.10  # o fade de entrada (100 ms) cabe todo no silêncio

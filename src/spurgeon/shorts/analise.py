@@ -11,8 +11,10 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
+from spurgeon.core.config import DURACAO_IDEAL_SHORT_S, DURACAO_MAXIMA_SHORT_S
 from spurgeon.shorts.dados import Candidato, Frase
 from spurgeon.transcricao.edicao import separar_pontuacao
 from spurgeon.transcricao.formato import Palavra
@@ -23,7 +25,7 @@ PAUSA_DE_FRASE_S = 0.35
 PAUSA_INTERNA_MAXIMA_S = 3.0
 FOLGA_INICIO_S = 0.20
 FOLGA_FIM_S = 0.35
-#: respiro máximo somado às pontas, para o Short caber nos 60 s mesmo com a folga
+#: respiro máximo somado às pontas, para o Short caber no limite de duração mesmo com a folga
 RESERVA_DE_FOLGA_S = FOLGA_INICIO_S + FOLGA_FIM_S
 
 # Palavras que ligam a frase ao que veio antes: um corte que começa com elas perde o sentido.
@@ -160,6 +162,7 @@ CITACAO = re.compile(
 )
 
 
+@lru_cache(maxsize=8192)
 def _sem_acento(texto: str) -> str:
     decomposto = unicodedata.normalize("NFD", texto.casefold())
     return "".join(c for c in decomposto if unicodedata.category(c) != "Mn")
@@ -227,7 +230,7 @@ def _abre_dependente(primeira_palavra: str, classe: str | None) -> bool:
 @dataclass(frozen=True)
 class ParametrosJanela:
     minimo_s: float = 30.0
-    maximo_s: float = 60.0
+    maximo_s: float = DURACAO_MAXIMA_SHORT_S
 
 
 def gerar_candidatos(
@@ -283,15 +286,49 @@ def _montar(
     j: int,
     pausa_interna: float,
 ) -> Candidato:
+    """Um candidato que começa na frase `i` e termina na frase `j` (frases inteiras)."""
     primeira, ultima = frases[i], frases[j]
-    trecho = palavras[primeira.primeira : ultima.ultima + 1]
+    return _montar_de_palavras(
+        id_,
+        palavras,
+        frases,
+        i,
+        j,
+        primeira.primeira,
+        ultima.ultima,
+        pausa_interna,
+        abre_dependente=primeira.abre_dependente,
+        texto_da_ultima=ultima.texto,
+    )
+
+
+def _montar_de_palavras(
+    id_: int,
+    palavras: Sequence[Palavra],
+    frases: Sequence[Frase],
+    i: int,
+    j: int,
+    p0: int,
+    p1: int,
+    pausa_interna: float,
+    *,
+    abre_dependente: bool,
+    texto_da_ultima: str,
+) -> Candidato:
+    """O candidato das palavras `p0` a `p1`, que caem nas frases `i` a `j` (todas inclusive).
+
+    Quando as pontas são as de frases inteiras (a análise automática), `p0` e `p1` são a primeira
+    palavra da frase `i` e a última da frase `j`; o "Shorts livre" pode começar e terminar no meio.
+    """
+    trecho = palavras[p0 : p1 + 1]
     texto = " ".join(x.texto for x in trecho)
-    antes = (primeira.inicio - frases[i - 1].fim) if i > 0 else 5.0
-    depois = (frases[j + 1].inicio - ultima.fim) if j + 1 < len(frases) else 5.0
-    duracao = ultima.fim - primeira.inicio
+    inicio, fim = palavras[p0].inicio, palavras[p1].fim
+    antes = (inicio - palavras[p0 - 1].fim) if p0 > 0 else 5.0
+    depois = (palavras[p1 + 1].inicio - fim) if p1 + 1 < len(palavras) else 5.0
+    duracao = fim - inicio
     sinais = {
-        "abertura_dependente": primeira.abre_dependente,
-        "fecho_completo": ultima.texto.rstrip().endswith(FIM_DE_FRASE),
+        "abertura_dependente": abre_dependente,
+        "fecho_completo": texto_da_ultima.rstrip().endswith(FIM_DE_FRASE),
         "pausa_antes_s": round(antes, 2),
         "pausa_depois_s": round(depois, 2),
         "pergunta_no_inicio": any(f.pergunta for f in frases[i : min(i + 2, j + 1)]),
@@ -301,7 +338,7 @@ def _montar(
             e in _sem_acento(texto[:80]) for e in map(_sem_acento, EXPRESSOES_DE_RETOMADA)
         ),
         "fecho_conclusivo": any(
-            e in _sem_acento(ultima.texto) for e in map(_sem_acento, EXPRESSOES_DE_FECHO)
+            e in _sem_acento(texto_da_ultima) for e in map(_sem_acento, EXPRESSOES_DE_FECHO)
         ),
         "palavras_por_segundo": round(len(trecho) / max(duracao, 0.1), 2),
         "pausa_interna_max_s": round(pausa_interna, 2),
@@ -310,8 +347,8 @@ def _montar(
         id=id_,
         primeira_frase=i,
         ultima_frase=j,
-        inicio=primeira.inicio,
-        fim=ultima.fim,
+        inicio=inicio,
+        fim=fim,
         texto=texto,
         pre_nota=0.0,
         sinais=sinais,
@@ -320,11 +357,70 @@ def _montar(
     return candidato
 
 
+def candidato_do_trecho(
+    id_: int,
+    palavras: Sequence[Palavra],
+    frases: Sequence[Frase],
+    primeira_palavra: int,
+    ultima_palavra: int,
+) -> Candidato:
+    """Um candidato de um trecho qualquer: da palavra `primeira_palavra` à `ultima_palavra`.
+
+    Vale para trechos escolhidos a dedo, que podem começar e terminar no meio de uma frase: os
+    sinais (pausas nas pontas, pergunta, citação, ritmo…) saem das palavras escolhidas, do mesmo
+    jeito que na análise automática, então a nota é comparável.
+    """
+    if not 0 <= primeira_palavra <= ultima_palavra < len(palavras):
+        raise ValueError("O trecho precisa ter ao menos uma palavra e ficar dentro do sermão.")
+    i = _frase_da_palavra(frases, primeira_palavra)
+    j = _frase_da_palavra(frases, ultima_palavra)
+    pausas = [
+        max(0.0, palavras[k + 1].inicio - palavras[k].fim)
+        for k in range(primeira_palavra, ultima_palavra)
+    ]
+    comeco_da_ultima = max(frases[j].primeira, primeira_palavra)
+    return _montar_de_palavras(
+        id_,
+        palavras,
+        frases,
+        i,
+        j,
+        primeira_palavra,
+        ultima_palavra,
+        max(pausas, default=0.0),
+        abre_dependente=_abre_dependente(palavras[primeira_palavra].texto, None),
+        texto_da_ultima=" ".join(p.texto for p in palavras[comeco_da_ultima : ultima_palavra + 1]),
+    )
+
+
+def _frase_da_palavra(frases: Sequence[Frase], indice: int) -> int:
+    """A posição, em `frases`, da frase que contém a palavra de número `indice`."""
+    for posicao, frase in enumerate(frases):
+        if frase.primeira <= indice <= frase.ultima:
+            return posicao
+    raise ValueError(f"Nenhuma frase contém a palavra {indice}.")
+
+
 # --- pontuação objetiva --------------------------------------------------------------------
 
 
+PONTOS_NO_LIMITE = 2.0  # um Short de 180 s ainda vale alguma coisa: só perde para os de ~60 s
+
+
 def pontos_de_duracao(duracao_s: float) -> float:
-    """0 a 10: o melhor é perto do limite de 60 s; abaixo de 30 s já não serve."""
+    """0 a 10: o melhor é por volta de 60 s (de 50 a 75 s); abaixo de 30 s já não serve.
+
+    Acima de 75 s a nota cai em linha reta até `PONTOS_NO_LIMITE` nos 180 s: os trechos longos
+    não são descartados (uma ideia que precisa de 2 minutos merece ser um Short), mas só passam
+    na frente de um de 60 s se forem bem melhores.
+    """
+    if duracao_s > DURACAO_IDEAL_SHORT_S + 15:
+        if duracao_s >= DURACAO_MAXIMA_SHORT_S:
+            return PONTOS_NO_LIMITE
+        descida = (duracao_s - (DURACAO_IDEAL_SHORT_S + 15)) / (
+            DURACAO_MAXIMA_SHORT_S - (DURACAO_IDEAL_SHORT_S + 15)
+        )
+        return round(10.0 - (10.0 - PONTOS_NO_LIMITE) * descida, 1)
     if duracao_s >= 50:
         return 10.0
     if duracao_s >= 40:
@@ -400,3 +496,54 @@ def sobreposicao(a: Candidato, b: Candidato) -> float:
     """Fração do menor dos dois que está dentro do outro."""
     comum = min(a.fim, b.fim) - max(a.inicio, b.inicio)
     return max(0.0, comum) / max(min(a.duracao, b.duracao), 0.1)
+
+
+#: a partir daqui um candidato é "longo": a pré-nota o põe atrás dos de ~60 s, então sem uma cota
+#: ele nunca chegaria à avaliação da IA
+DURACAO_LONGA_S = 90.0
+COTA_DE_LONGOS = 0.25
+
+
+def escolher_para_ia(
+    candidatos: Sequence[Candidato],
+    quantos: int,
+    sobreposicao_maxima: float = 0.2,
+    *,
+    cota_de_longos: float = COTA_DE_LONGOS,
+) -> list[Candidato]:
+    """Os candidatos que a IA vai avaliar: os melhores pela pré-nota, com uma cota para os longos.
+
+    Os trechos de mais de 90 s perdem pontos de duração e ficariam todos de fora; reservar uma
+    parte das vagas (25%) para os melhores deles dá chance a ideias que precisam de 2 ou 3 minutos.
+    Se não houver longos suficientes, as vagas voltam para os demais.
+    """
+    ordenados = sorted(candidatos, key=lambda x: (-x.pre_nota, x.inicio))
+    reservadas = round(quantos * cota_de_longos)
+    escolhidos: list[Candidato] = []
+
+    def tentar(c: Candidato) -> None:
+        if all(sobreposicao(c, e) <= sobreposicao_maxima for e in escolhidos):
+            escolhidos.append(c)
+
+    for c in ordenados:
+        if len(escolhidos) >= reservadas:
+            break
+        if c.duracao >= DURACAO_LONGA_S:
+            tentar(c)
+    for c in ordenados:
+        if len(escolhidos) >= quantos:
+            break
+        if c not in escolhidos:
+            tentar(c)
+    return sorted(escolhidos, key=lambda x: x.inicio)
+
+
+def palavras_da_janela(
+    palavras: Sequence[Palavra], inicio_s: float, fim_s: float | None
+) -> list[Palavra]:
+    """As palavras que cabem no trecho do vídeo que o projeto usa (`fim_s` None = até o fim)."""
+    return [
+        p
+        for p in palavras
+        if p.inicio >= inicio_s - 1e-6 and (fim_s is None or p.fim <= fim_s + 1e-6)
+    ]

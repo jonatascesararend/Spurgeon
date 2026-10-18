@@ -14,9 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import threading
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -136,8 +138,89 @@ def _evento_fim(pipeline: Pipeline, ctx: ContextoProjeto, resultado: ResultadoPi
     return evento
 
 
-def _ouvir_comandos(cancelar: threading.Event, pausar: threading.Event) -> None:
-    for linha in sys.stdin:
+_INTERVALO_DE_LEITURA_S = 0.15
+
+
+def linhas_do_stdin() -> Iterator[str]:
+    """As linhas que chegam pelo stdin, sem nunca deixar uma leitura bloqueante pendente.
+
+    **Por que não `for linha in sys.stdin`:** no Windows, uma leitura síncrona parada num handle
+    bloqueia qualquer outra operação nele, e as bibliotecas nativas (spaCy, faster-whisper, ONNX…)
+    consultam os handles padrão ao serem carregadas. Com uma thread esperando um comando, o primeiro
+    `import` pesado ficava parado, sem gastar processador nem disco, até chegar um comando: foi o
+    "só anda se eu pausar e retomar" (medido: `import spacy` em 62 s em vez de 2 s). Aqui o pipe é
+    apenas consultado (`PeekNamedPipe`) e só se lê quando já há bytes, o que volta na hora.
+    Se o stdin não é um pipe (ou fora do Windows), cai na leitura comum.
+    """
+    leitor = _leitor_sem_bloqueio() if sys.platform == "win32" else None
+    if leitor is None:
+        yield from sys.stdin
+        return
+    resto = b""
+    while True:
+        dados = leitor()
+        if dados is None:  # o pipe fechou: a interface sumiu
+            return
+        if not dados:
+            time.sleep(_INTERVALO_DE_LEITURA_S)
+            continue
+        resto += dados
+        while b"\n" in resto:
+            linha, resto = resto.split(b"\n", 1)
+            yield linha.decode("utf-8", errors="replace")
+
+
+def _leitor_sem_bloqueio() -> Callable[[], bytes | None] | None:
+    """Uma função que devolve os bytes já disponíveis no stdin (`b""` se nenhum, None se fechou)."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    try:
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+    except (OSError, ValueError, AttributeError):
+        return None
+    peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+    peek.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    ]  # fmt: skip
+    peek.restype = wintypes.BOOL
+    disponiveis = wintypes.DWORD()
+    if not peek(handle, None, 0, None, ctypes.byref(disponiveis), None):
+        if ctypes.get_last_error() == _ERRO_PIPE_QUEBRADO:
+            return lambda: None
+        return None  # não é um pipe (console, arquivo): a leitura comum serve
+
+    def ler() -> bytes | None:
+        if not peek(handle, None, 0, None, ctypes.byref(disponiveis), None):
+            return None
+        if not disponiveis.value:
+            return b""
+        try:
+            dados = os.read(sys.stdin.fileno(), disponiveis.value)
+        except OSError:
+            return None
+        return dados or None
+
+    return ler
+
+
+_ERRO_PIPE_QUEBRADO = 109
+_AVISO_DO_COMANDO = {
+    "pausar": "Pausa pedida: ela vale no próximo ponto seguro da etapa (o log avisa quando parar).",
+    "retomar": "Retomada pedida.",
+    "cancelar": "Cancelamento pedido: a etapa atual encerra no próximo ponto seguro.",
+}
+
+
+def _ouvir_comandos(
+    cancelar: threading.Event,
+    pausar: threading.Event,
+    avisar: Callable[[str], None] | None = None,
+) -> None:
+    """Lê os comandos da interface; `avisar` confirma cada um no log na hora em que chega."""
+    for linha in linhas_do_stdin():
         comando = linha.strip()
         if comando == "pausar":
             pausar.set()
@@ -145,6 +228,8 @@ def _ouvir_comandos(cancelar: threading.Event, pausar: threading.Event) -> None:
             pausar.clear()
         elif comando == "cancelar":
             cancelar.set()
+        if avisar is not None and comando in _AVISO_DO_COMANDO:
+            avisar(_AVISO_DO_COMANDO[comando])
     cancelar.set()  # o stdin fechou: a interface sumiu
 
 
@@ -164,8 +249,12 @@ def main(argv: list[str] | None = None) -> int:
         protocolo.write(json.dumps(evento, ensure_ascii=False) + "\n")
         protocolo.flush()
 
+    def avisar(texto: str) -> None:
+        linha = f"{time.strftime('%Y-%m-%d %H:%M:%S')} | INFO    | comando | {texto}"
+        emitir({"tipo": "log", "texto": linha, "nivel": logging.INFO})
+
     cancelar, pausar = threading.Event(), threading.Event()
-    threading.Thread(target=_ouvir_comandos, args=(cancelar, pausar), daemon=True).start()
+    threading.Thread(target=_ouvir_comandos, args=(cancelar, pausar, avisar), daemon=True).start()
     config = ConfigApp.model_validate_json(args.config.read_text(encoding="utf-8"))
     resultado = executar(
         args.projeto,

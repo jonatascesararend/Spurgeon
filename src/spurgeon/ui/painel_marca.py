@@ -120,7 +120,7 @@ class PainelMarca(ctk.CTkFrame):
         self.nos_shorts = ctk.BooleanVar(value=valores.marca_nos_shorts)
         self._filhos: list[ctk.CTkBaseClass] = []
 
-        ctk.CTkLabel(self, text="4. Marca d'água", font=ctk.CTkFont(size=15, weight="bold")).pack(
+        ctk.CTkLabel(self, text="5. Marca d'água", font=ctk.CTkFont(size=15, weight="bold")).pack(
             anchor="w", padx=12, pady=(10, 4)
         )
         self._check_ativa = ctk.CTkCheckBox(

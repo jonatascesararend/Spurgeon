@@ -67,9 +67,9 @@ def test_frases_coladas_usam_o_respiro_curto():
     assert fim == pytest.approx(20.0 + 0.02)
 
 
-def test_nunca_passa_de_60_segundos():
+def test_nunca_passa_do_maximo_pedido():
     medidas = niveis([(10.0, 70.0)], total=80.0)
-    inicio, fim = refinar_bordas(candidato(10.05, 69.4, 2.0, 2.0), medidas, LIMIAR)
+    inicio, fim = refinar_bordas(candidato(10.05, 69.4, 2.0, 2.0), medidas, LIMIAR, maximo_s=60.0)
     assert fim - inicio <= 60.0 + 1e-9
     assert inicio <= 10.05  # a primeira palavra continua dentro do corte
     assert fim >= 69.4  # e a última também

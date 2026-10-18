@@ -1,6 +1,6 @@
 # Guia de Projeto: Studio Spurgeon de Cortes e Otimização de Vídeos (Sermões, Aulas e Shorts)
 
-> **Versão 4 — 2026-10-13: versão 1.1 do aplicativo.** A 1.0 (Fases 0 a 6) foi testada com o sermão real de 65 min; a 1.1 (Fase 7) acrescenta a marca d'água, os modos "só Shorts" e "só vinhetas", a abertura de projetos, a aba **Studio Shorts** e o verificador de português.
+> **Versão 5 — 2026-10-15: versão 1.2 do aplicativo.** A 1.0 (Fases 0 a 6) foi testada com o sermão real de 65 min; a 1.1 (Fase 7) acrescentou a marca d'água, os modos "só Shorts" e "só vinhetas", a abertura de projetos, a aba **Studio Shorts** e o verificador de português; a 1.2 (Fase 8) traz o corte do começo e do fim do vídeo com prévia, o zoom, o tratamento de imagem, o fade e a escolha do arquivo das vinhetas, o modelo do Ollama em lista, Shorts de até 180 s e a legenda do Studio que acompanha os ajustes.
 > As decisões da pré-entrevista estão confirmadas pelo autor; a seção 6 registra as decisões, as escolhas feitas sem consulta e as pendências.
 
 ---
@@ -15,7 +15,7 @@ A aplicação é um aplicativo desktop nativo para Windows (Python + CustomTkint
 * **Material de entrada:** vídeos de 45 min a 1h30, somente fala (sem música), câmera fixa em 16:9, pastor sempre no centro do quadro e sem se mover.
 * **Um vídeo por vez** (sem fila na v1).
 * **100% offline** depois de instalar as dependências e baixar os modelos.
-* **Sem preview de vídeo** na interface. A revisão é feita sobre texto e tempos.
+* **Sem player de vídeo embutido** na interface. A revisão é feita sobre texto e tempos; as únicas imagens são quadros de exemplo (corte, zoom e tratamento de cor) e uma prévia de 15 s que abre no player do Windows (Fase 8).
 * **Idioma:** somente pt-BR (Whisper `language="pt"`, spaCy em português, prompts do LLM em português).
 * **Teologia:** o conteúdo é de teologia reformada calvinista; isso orienta o vocabulário do Whisper e as regras de contexto dos cortes.
 
@@ -32,7 +32,7 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 
 1. Selecionar o vídeo longo (a janela abre em `Downloads/`) ou colar o caminho — **ou** clicar em **Abrir projeto…** e escolher a pasta de um projeto já criado, para aproveitar tudo o que ele já tem (a tela volta com o nome, a data, o vídeo e as opções do projeto).
 2. Conferir nome do sermão e data da gravação (preenchidos automaticamente, editáveis).
-3. Escolher o **modo** (Tudo, Só Shorts ou Só vinhetas), as opções de processamento e a marca d'água, e clicar em **Iniciar Processamento**.
+3. Escolher o **modo** (Tudo, Só Shorts ou Só vinhetas; a janela mostra só o que vale para ele), cortar o começo e o fim e ajustar o zoom, o tratamento, a marca d'água, os pontos de revisão e o processamento, e clicar em **Iniciar Processamento**.
 4. O app cria a pasta do projeto, **abre-a no Explorer** e inicia o log `processamento.log`.
 5. O pipeline roda em segundo plano (subprocesso) com barra de progresso, tempo restante estimado e painel de logs em tempo real.
 6. Em dois pontos o processo **pausa para revisão humana** (transcrição e cortes dos Shorts). Esses pontos podem ser desligados.
@@ -104,7 +104,7 @@ Spurgeon/
 │   ├── core/                   ← config, log, estado, hardware, pipeline, ffmpeg, mapa de tempo
 │   ├── audio/                  ← extrair, limpar, normalizar
 │   ├── transcricao/            ← whisper, vocabulário, srt, dicionário e verificador de português
-│   ├── shorts/                 ← nlp, llm, candidatos, metadados, edição dos cortes
+│   ├── shorts/                 ← nlp, llm, candidatos, metadados, edição dos cortes, busca e Shorts livre
 │   ├── render/                 ← video_longo, shorts, ass, marca d'água, vinhetas
 │   └── ui/                     ← janela principal, abas, painéis de revisão, Studio Shorts
 ├── tests/
@@ -177,7 +177,7 @@ Tema escuro, sem preview de vídeo, um vídeo por vez. Abre com `iniciar.bat` ou
 * **Pontos de revisão (padrão ligado):**
   * [x] Pausar para revisar a transcrição (.srt) antes de continuar
   * [x] Pausar para aprovar os cortes dos Shorts antes de renderizar
-* **Avançado:** pausa residual mantida ao cortar, duração mínima e máxima dos Shorts, modelo do Ollama, vocabulário teológico, deslocamento horizontal do recorte, posição vertical da legenda, limite de segurança de Shorts, manter intermediários.
+* **Avançado:** pausa residual mantida ao cortar, duração mínima e máxima dos Shorts, modelo do Ollama, vocabulário teológico, deslocamento horizontal do recorte, limite de segurança de Shorts, manter intermediários.
 * **Execução:** botões **Iniciar**, **Pausar** e **Cancelar**; barra de progresso com tempo restante estimado; painel de logs em tempo real com a etapa atual ("Limpando áudio...", "Transcrevendo...", "Renderizando Shorts...").
   * *Pausar* age em pontos seguros (fim do bloco, segmento ou Short em andamento).
   * *Cancelar* encerra o subprocesso e deixa o projeto retomável.
@@ -267,7 +267,9 @@ Etapas em `src/spurgeon/transcricao/`: `transcrever` → `revisar_transcricao` (
 
 **Energia:** `spurgeon acordado --horas 12` (e a opção "Não deixar o PC bloquear nem apagar a tela ao processar", ligada por padrão) pede ao Windows para não suspender, não apagar a tela e não bloquear por inatividade, registrando atividade sem mexer no mouse a cada 45 s. Nada permanente é alterado; tudo volta ao normal quando o programa termina.
 
-### Fase 4: Inteligência de Detecção de Cortes para Shorts (até 60 s) — concluída em 2026-10-13
+### Fase 4: Inteligência de Detecção de Cortes para Shorts (até 60 s; desde a 1.2, até 180 s) — concluída em 2026-10-13
+
+> **Desde a 1.2 (Fase 8) o limite é de 180 s**, com preferência por trechos de ~60 s; onde esta seção diz "60 s", leia o limite de 180 s e a regra de peso por duração da Fase 8.
 
 * **Limite:** Shorts de **no máximo 60 s** (mínimo padrão de 30 s). **Não há número fixo de Shorts**: vale o que passar no critério de qualidade, com um **limite de segurança** (padrão 20) e checagem de espaço em disco antes de cada renderização.
 * **Tabela de palavras (`pandas`):** uma linha por palavra (`palavra`, `início`, `fim`, `frase`, `pausa_após`). Substitui o DuckDB do plano original: a lógica de janelas e pausas é simples em DataFrame, sem uma segunda base de dados.
@@ -420,7 +422,7 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 
 * A aba fica **desativada** até os cortes existirem (áudio normalizado, legenda extraída e Shorts calculados) e **travada** com o motivo enquanto um processamento roda ou espera revisão.
 * Cada Short sugerido aparece com **categoria, início–fim, duração, título, trecho da legenda, nota calculada** e o estado: *✔ renderizado*, *⟳ alterado: renderizar de novo* ou nada (novo). O botão **Renderizar N Shorts** grava as alterações e roda o modo "só Shorts" (sem pausas de revisão); o que já está pronto e não mudou não é refeito, os desmarcados vão para `shorts_gerados/desmarcados/` (nada é apagado) e a tela estima o tempo e avisa se o áudio precisar ser refeito.
-* **Início e fim:** campos de tempo editáveis (`8:21,3`, caem na palavra mais próxima) e botões para **acrescentar ou tirar uma palavra ou uma frase** em cada ponta. **Passar de 60 s é permitido**: a tela mostra a duração em vermelho com o aviso de que acima de 60 s o vídeo não pode ser Short, deixa salvar o trabalho em andamento, mas recusa renderizar (e a etapa de render também recusa, antes de começar) enquanto o corte marcado estiver longo; o mínimo continua sendo 10 s. Cada ponta tem uma **janela de contexto que rola**: ~220 palavras além da ponta (cinza, o que fica de fora) e ~60 do corte (em destaque), uma frase por linha e uma marca "COMEÇA AQUI" ou "TERMINA AQUI"; **duplo clique numa palavra** começa (ou termina) o corte nela. Avisos apontam o que costuma dar errado: começar no meio de uma frase ou com "mas/então/isso…", terminar no meio de uma frase ou numa pergunta (a resposta pode ter ficado de fora). Serve para não cortar uma pergunta retórica ao meio nem abrir com um pedaço de outro argumento.
+* **Início e fim:** campos de tempo editáveis (`8:21,3`, caem na palavra mais próxima) e botões para **acrescentar ou tirar uma palavra ou uma frase** em cada ponta. **Passar de 60 s é permitido**: a tela mostra a duração em vermelho com o aviso de que acima de 60 s o vídeo não pode ser Short, deixa salvar o trabalho em andamento, mas recusa renderizar (e a etapa de render também recusa, antes de começar) enquanto o corte marcado estiver longo; o mínimo continua sendo 10 s. Há **uma caixa só que rola**, com o corte inteiro (em destaque) e ~220 palavras antes e depois (cinza, o que fica de fora), uma frase por linha e as marcas "COMEÇA AQUI" e "TERMINA AQUI"; **duplo clique numa palavra** leva até ela o começo ou o fim, o que estiver mais perto. Os botões do começo (acima da caixa) e do fim (abaixo) seguem a mesma ordem: −palavra, −frase, +frase, +palavra. Avisos apontam o que costuma dar errado: começar no meio de uma frase ou com "mas/então/isso…", terminar no meio de uma frase ou numa pergunta (a resposta pode ter ficado de fora). Serve para não cortar uma pergunta retórica ao meio nem abrir com um pedaço de outro argumento.
 * **Legenda:** editável por Short (`Corte.legenda`), mostrada **dividida como vai aparecer no vídeo** (blocos de até 2 linhas separadas por Enter, com uma linha em branco entre os blocos: a mesma divisão da legenda queimada, em `render/legenda.py`); as quebras se refazem sozinhas ao sair do campo, sem mexer nas palavras. Os tempos da fala são preservados; "Desfazer correções" volta ao texto da transcrição. A correção entra na assinatura do Short quando a legenda é queimada (opção "Legendas dinâmicas"), então corrigir e renderizar de novo refaz só aquele Short. Mudar o início ou o fim descarta as correções daquele corte (o texto-base mudou) e a tela avisa.
 
 **Verificador de português** (`transcricao/verificador.py`, `transcricao/dicionario.py`, `ui/verificacao.py`).
@@ -429,6 +431,112 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 * Acha: palavra fora do dicionário (nomes do `vocabulario_teologico.txt` e palavras que se repetem 3 vezes ou mais no texto não contam), **palavra repetida** ("nós nós"), **frase começando em minúscula** e nomes sagrados em minúscula, **pontuação solta** (`palavra ,`), **hífen solto** do Whisper (`chamá -las`) e parênteses sem par. No sermão real: ~60 avisos em 302 trechos, quase todos corrigíveis com um clique ("Corrigir os 27 de pontuação").
 * Cada aviso mostra sugestões, **Ignorar** (vale até fechar o aplicativo) e **Está certa: guardar no vocabulário** (grava no `vocabulario_teologico.txt`, que também melhora o Whisper nas próximas transcrições).
 * **Não** corrige concordância, crase nem sentido. Para isso seria preciso o LanguageTool (Java, ~300 MB): fica como opção futura.
+
+### Fase 8: corte do vídeo, zoom, tratamento de imagem, vinhetas e Shorts de até 180 s (versão 1.2) — concluída em 2026-10-15
+
+Os sete pedidos da rodada (registrados no fim da seção 6), todos feitos e testados.
+
+**1. Cortar o começo e o fim do vídeo** (`ui/painel_aparar.py`, no cartão "1. Vídeo").
+
+* Dois campos de tempo, **Começar em** e **Terminar em** (`0:07`, `1:04:56,5`; vazios = o vídeo todo). Escrever `-2:04` no fim tira 2 min 04 s do final (o campo vira o tempo absoluto). O texto abaixo diz quanto o vídeo usado terá e o que sai.
+* Cada ponta mostra o **quadro exato** onde o corte cai (o primeiro, e o último antes do fim) e um botão **"Ver 15 s"**: gera em segundo plano um trecho de 15 s em baixa resolução (640 px, `ultrafast`, com som; HDR já convertido) e o abre no player do Windows. A prévia do começo são os 15 s que começam no corte; a do fim, os 15 s que terminam nele. Usa o zoom e o tratamento de cor que estiverem na tela. Fica travado no modo "Só vinhetas" e durante o processamento.
+* Opções: `video_inicio_s` e `video_fim_s` (0 = até o fim). **Onde vale:** `calcular_cortes` recorta os trechos mantidos à janela (então o vídeo longo, o `.srt` e a conferência final seguem sem mais nada); a análise dos Shorts só enxerga as palavras da janela; o Studio Shorts só mostra a fala dela; a estimativa de tempo e o espaço em disco contam só o trecho usado; o pré-voo recusa uma janela com menos de 10 s.
+* **Decisão:** a **transcrição continua sendo feita no áudio inteiro, uma vez**. Assim mudar o começo ou o fim depois (ou reabrir o projeto) refaz só os cortes, as legendas e a renderização, nunca os ~48 min do Whisper. O custo é transcrever (e mostrar na revisão da transcrição) o que depois é cortado. As palavras fora da janela não entram em nada que sai.
+* O começo e o fim são de cada vídeo: **não viram preferência** para o próximo (o zoom e o tratamento, sim).
+* O `recursos/cortador de vídeo.py` (script avulso do autor) passa a ser desnecessário.
+
+**2. Ajustar o zoom** (`ui/painel_zoom.py`, `core/aparencia.py`, `render/imagem.py`).
+
+* Quadro de exemplo do vídeo (com **"Outro quadro"**) e a **área que será cortada escurecida**, com moldura no que fica. Zoom em % (100 a 200 na tela; o modelo aceita até 300), digitado ou no controle, e **centro** escolhido **clicando no quadro** ou pelos controles de posição. O recorte nunca sai do quadro.
+* Render (vídeo longo): `crop` → conversão HDR→SDR → ampliação (`lanczos`) de volta ao tamanho original → tratamento → fades → marca d'água. Cortar antes da conversão poupa trabalho do `zscale`. Acima de 150% a tela avisa que a imagem perde nitidez.
+* **Shorts:** com "Aplicar também aos Shorts" (ligado), o recorte 9:16 sai de **dentro** da área do zoom, e o "Deslocamento do recorte" das opções avançadas é uma porcentagem da largura dessa área, somada ao centro do zoom. Sem zoom, nada muda em relação à 1.1.
+* **Presets** de zoom (nome → zoom + posição) ficam na configuração do programa (`config.toml`: `presets_enquadramento`). O que está na tela também é lembrado da próxima vez.
+* **Zoom e legenda dos Shorts** (`ui/painel_shorts.py`, logo abaixo do zoom do vídeo): prévia **vertical (9:16)** de um quadro do vídeo e, sobre ela, duas linhas de **legenda de exemplo** ("As legendas ficarão / posicionadas aqui"), sem gerar legenda nenhuma. A prévia sai do FFmpeg sobre o quadro `.nut` com o mesmo `recorte_vertical`, o mesmo tratamento e a ampliação para 1080×1920 do render, e a legenda é montada pelo mesmo `montar_ass` dos Shorts de verdade (Montserrat, contorno e altura reais): `render/previa.previa_do_short`. Controles: **zoom do Short** (100 a 200% na tela), **posição horizontal e vertical** desse zoom e **altura da legenda** (30 a 90%, contada de cima; também se arrasta clicando no quadro). A altura da legenda saiu das opções avançadas e vive só aqui (`legenda_posicao_vertical`).
+* O zoom do Short é um **segundo zoom, dentro do 9:16** já recortado (depois do zoom do vídeo e do deslocamento do recorte): `shorts_zoom_pct`, `shorts_zoom_centro_x_pct`, `shorts_zoom_centro_y_pct`. É independente do "Aplicar também aos Shorts" do zoom do vídeo. Acima de 125% a tela avisa da perda de nitidez (o 9:16 de um vídeo 1080p já é uma ampliação de ~1,8×). Só entra nas assinaturas quando é maior que 100%: Shorts já renderizados sem zoom continuam valendo.
+
+**3. Tratamento de imagem** (`ui/painel_tratamento.py`, `render/imagem.py`, `render/previa.py`).
+
+* Novo cartão "4. Tratamento de imagem": **brilho, contraste, saturação, temperatura (frio ↔ quente), tom (verde ↔ magenta), brancos e sombras**, de −100 a +100, com a explicação de cada um. Um quadro do vídeo com **divisória que se arrasta**: original à esquerda, tratado à direita. Mexer num ajuste liga o tratamento.
+* **O quadro tratado sai do próprio FFmpeg, com os mesmos filtros do render**, a partir de um quadro SDR guardado sem perdas (`.nut`, yuv420p, BT.709 de faixa limitada): o que se vê é o que sai. Filtros (depois do HDR→SDR, em yuv420p limitado): `eq` (brilho, contraste, saturação) e `lutyuv` (brancos e sombras como curva de luma ponderada pela própria luz; temperatura e tom como deslocamento de Cb/Cr). Ajustes em zero não geram filtro.
+* **✨ Sugestão automática:** mede 5 quadros espalhados pelo trecho usado (histograma de luz, saturação média, dominante de cor) e propõe um ponto de partida: estica o contraste só se faltar amplitude, leva a luz média para perto do meio (com tolerância), abre sombras muito fechadas, recupera brancos estourados, reforça cor apagada e desfaz uma dominante de cor com a metade da força (madeira e pele são quentes de verdade). Uma imagem equilibrada volta quase neutra; nada passa de ±45.
+* **Presets** (nome → os 7 ajustes) em `presets_tratamento` da configuração; **Salvar preset…**, **Excluir** e a lista. "Aplicar também aos Shorts" (ligado). A introdução e a vinheta **não** são tratadas.
+* Mudar zoom ou tratamento entra nas assinaturas e refaz o vídeo longo e os Shorts afetados; a aba Studio Shorts mostra "⟳ alterado" nos Shorts que já estavam prontos (o registro guarda uma assinatura da aparência: zoom, cor, recorte e marca d'água).
+
+**4. Introdução e vinheta: arquivo à escolha e fade** (`ui/painel_opcoes.py`, `render/video_longo.py`, `render/vinhetas.py`).
+
+* Cada uma ganhou **"Escolher arquivo…"** e **"Usar o padrão"** (`recursos/introducao.mp4` e `recursos/vinheta_final.mp4`). A caixa de marcar vale se o arquivo escolhido existir, mesmo sem o padrão. Opções `introducao_arquivo` e `vinheta_arquivo`; o pré-voo, a conferência final e o deslocamento do `.srt` usam o arquivo escolhido.
+* **Fade (imagem e som) pelo preto, com duração de 0,1 a 3 s (padrão 0,5 s):** a introdução escurece até o preto e o vídeo surge dele; no fim, o vídeo escurece e a vinheta entra do preto. Imagem: `fade` na primeira e na última parte do vídeo e nos clipes (depois da marca d'água, que também some no preto); som: `afade` no áudio montado de uma vez. A duração total não muda (o fade cai dentro dos clipes e do vídeo).
+* **Limite no modo "Só vinhetas":** o vídeo pronto é emendado sem recodificar, então ali o fade vale só do lado da introdução (sai para o preto) e da vinheta (entra do preto); o vídeo principal começa e termina seco. Para o fade dos dois lados, renderize o vídeo longo no modo Tudo.
+
+**5. Opções avançadas** (`ui/painel_opcoes.py`).
+
+* **Modelo do Ollama é uma lista**, não um campo de texto: os modelos já instalados (lidos de `/api/tags`, em segundo plano, ao abrir e no botão ↻), mais os recomendados que faltam, marcados "não instalado (será baixado)", e o modelo escolhido mesmo que o Ollama não responda ("não encontrado no Ollama"). O projeto aberto mostra o modelo dele.
+* **Uma legendinha cinza logo abaixo de cada opção avançada** explica o que ela faz (pausa residual, duração mínima e máxima, limite de segurança, nota mínima, modelo, deslocamento do recorte, posição da legenda, qualidade personalizada, intermediários e bloqueio do PC).
+
+**6. Shorts de até 180 s, com preferência por ~60 s** (`shorts/analise.py`, `shorts/etapas.py`, `shorts/llm.py`).
+
+* **Limite de 180 s** (o que o YouTube aceita) em tudo: opções (`shorts_duracao_max_s`, padrão e teto 180), candidatos, ajuste de bordas, Studio Shorts (aviso e recusa de renderizar acima de 180 s), renderização e conferência final. A configuração antiga com o 60 s de então migra para 180 s (versão 2 do `config.toml`); quem escolheu outro valor o mantém.
+* **Peso por duração** (`pontos_de_duracao`, 0 a 10): de 50 a 75 s vale 10; abaixo, 8 (40 s) e 5 (30 s); acima de 75 s cai em linha reta até **2 pontos aos 180 s**. É pontuação, não corte: um trecho de 150 s precisa ser bem melhor que um de 60 s para passar na frente, mas pode passar. Entra duas vezes (pré-nota, 0 a 20, e nota final, 0 a 10).
+* **Cota para os longos:** sem ela, a pré-seleção dos 40 candidatos que vão para a IA seria toda de ~60 s e os longos nunca seriam avaliados. `escolher_para_ia` reserva **25% das vagas** para os melhores trechos de 90 s ou mais (sem sobreposição maior que 60%); se não houver longos, as vagas voltam para os demais. A IA recebe a instrução de que o ideal é ~1 min, mas de que num trecho de mais de 90 s a ideia precisa se sustentar o tempo todo.
+* **As avaliações da IA agora valem por trecho e texto, não por número do candidato.** Achado ao mudar o limite: refazer a análise renumera os candidatos, e as avaliações guardadas por número passariam para o trecho errado. Agora cada avaliação é guardada com o hash do trecho (`avaliacoes.json` versão 2); um projeto antigo é **migrado antes** de a análise trocar os candidatos, e as avaliações dos trechos que continuam existindo são reaproveitadas (a IA leva ~1 min por trecho): mudar o limite, o começo ou o fim só avalia o que é novo.
+
+**7. Studio Shorts: a legenda acompanha o que se acrescenta e se tira** (`ui/studio_shorts.py`, `shorts/edicao.py`).
+
+* Ao acrescentar ou tirar uma palavra ou uma frase (ou digitar o tempo, ou dar duplo clique numa palavra), a caixa da legenda mostra **como ficou**: as **palavras acrescentadas ganham fundo verde**, e uma linha diz o que entrou ("➕ acrescentou no fim: …") ou saiu ("➖ tirou do começo: …"), já que o que saiu não está mais na caixa.
+* A caixa **rola até o ponto que mudou** (o começo ou o fim), o que importa numa legenda de 3 minutos, que não cabe na tela.
+* Acima e abaixo da caixa, em cinza, o **texto que vem antes do começo e depois do fim** (30 palavras) acompanha cada ajuste: dá para ir "correndo" o sermão para trás e para a frente e ver o que ainda há fora do corte. Trocar de corte ou desfazer as correções limpa o destaque.
+
+**8. Studio Shorts: caixa única, português compacto, prévia e rolagem** (`ui/studio_shorts.py`, `ui/miniplayer.py`, `ui/rolagem.py`, `render/previa.py`).
+
+* **Início e fim numa caixa só** (`shorts/edicao.janela_do_corte`): "Começa em" + botões, a caixa, botões + "Termina em" (espelhado). A ordem dos botões é a mesma nas duas pontas; a seta mostra para onde a ponta anda. Dois botões "↥ começo" e "↧ fim" levam a caixa às marcas.
+* **Painel "Português" compacto** (`PainelDePortugues(compacto=True)`): a lista tem uma linha por aviso (até 8) e some, com a navegação, quando não há aviso. A revisão da transcrição continua com o painel de altura cheia.
+* **Prévia do Short** (final do detalhe): "Gerar prévia" renderiza o corte em miniatura (270×480, 12 quadros/s, x264 ultrafast CRF 34) com o MESMO recorte 9:16, zoom, HDR→SDR, tratamento e legenda (`montar_ass`, com a legenda corrigida) do Short; o vídeo é reduzido logo depois do recorte, antes da conversão de cor, para sair rápido. O som é o do vídeo original (mono, sem limpeza nem normalização) e a marca d'água não entra. Aparece num **mini player** (botão, barra de posição, tempo): quadros por um FFmpeg que decodifica o `.mp4` para RGB e segue o relógio (pula quadros se atrasa); som pelo `winsound` a partir do ponto certo. A prévia é guardada por corte e só vale enquanto o trecho, a legenda e a aparência (zoom, cor, recorte, legenda) não mudam; senão a tela avisa "⟳ versão anterior". Abrir outro corte cancela a geração em andamento. Vive em `%TEMP%/spurgeon_previas/shorts` (apagada ao fechar o app).
+* **Rolagem** (`QuadroRolavel`, no lugar do `CTkScrollableFrame`): 80 px por giro da roda (eram 20) com desaceleração, em passos de no máximo 70 px com o Tk desenhando entre um e outro, o que tira os rastros (texto repetido) ao rolar rápido.
+
+**Testes:** a suíte passou de 617 (fora o `test_render`) para 875 testes (arquivos novos: `test_imagem.py`, `test_estilo_e_cortes.py`, `test_paineis_imagem.py`, `test_studio_legenda.py`, `test_janela_rodada8.py`, `test_cli_rodada8.py`, `test_correcoes_da_revisao.py`; a verificação do vídeo longo com fade e zoom roda o FFmpeg de verdade e mede a luz nos quadros da emenda).
+
+### Fase 9: janela reorganizada, elementos do YouTube, log detalhado e Shorts livre (versão 1.3) — concluída em 2026-10-17
+
+Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e testados.
+
+**1. Nova ordem dos cartões** (`ui/painel_opcoes.py`, `ui/painel_entrada.py`, `ui/app.py`).
+
+* A coluna da esquerda agora é: **1. Vídeo** (arquivo, nome, data, pasta) → **2. O que gerar** → **3. Corte e enquadramento** (cortar começo e fim, zoom do vídeo, zoom e legenda dos Shorts) → **4. Tratamento de imagem** → **5. Marca d'água** → **6. Pontos de revisão** → **7. Processamento** → opções avançadas.
+* Para pôr o "O que gerar" entre a escolha do vídeo e o corte, o `PainelEntrada` deixou de criar o corte, o zoom e a legenda dos Shorts: eles nascem em `PainelEntrada.montar_ajustes(pai)`, que a janela chama com o cartão 3 (`PainelOpcoes.cartao_ajustes`). `aparar`, `zoom` e `shorts` continuam sendo atributos do `PainelEntrada` (`valores`, `aplicar_valores`, `habilitar` não mudaram).
+
+**2. "O que gerar" mostra só o que vale para o modo** (`PainelOpcoes._montar_gerar`, `_mostrar_grupos`).
+
+* Quatro grupos com título e fio: **Áudio** (limpar, normalizar), **Vídeo completo** (vídeo sem silêncios + .srt, tamanho mínimo da pausa), **Introdução e vinheta final** (arquivos, fade) e **Shorts (vertical 9:16)** (gerar Shorts, legendas dinâmicas). Cada opção tem uma legendinha cinza.
+* **Tudo** mostra os quatro; **Só Shorts** mostra Áudio e Shorts (sem a caixa "Gerar Shorts", que no modo já é o produto); **Só vinhetas** mostra só a introdução e a vinheta. Os grupos escondidos continuam existindo (só saem da tela), então o estado e a validação não mudam.
+
+**3. Elementos do YouTube Shorts sobre a prévia** (`ui/youtube_shorts.py`, `ui/painel_shorts.py`).
+
+* Sobre a prévia vertical do cartão 3 aparecem, desenhados à parte (não passam pelo FFmpeg, então ligar e desligar é imediato): os **botões da direita** (curtir, não gostei, comentar, compartilhar, remixar, disco do som), o **canal com "Inscrever-se"**, o **título e a descrição**, a **música**, os **ícones do topo** e a **barra de progresso**, com o escurecimento da base que o aplicativo faz. O botão **"Esconder/Mostrar elementos do YouTube"** liga e desliga.
+* Abaixo do botão, uma **conclusão em palavras**: "⚠ A legenda a 62% pode ficar atrás dos botões da direita…" ou "✔ A legenda a 35% fica livre dos elementos do YouTube" (`conflitos_da_legenda`: a legenda ocupa ~9,4% da altura em torno do centro e, com linhas longas, chega a 93% da largura).
+* É uma **referência aproximada** do aplicativo do YouTube (que muda de tempos em tempos), com as áreas medidas em fração da tela (`REGIOES`): ajuste ali se o desenho do YouTube mudar. **Achado:** com a legenda no padrão (62%), duas linhas longas encostam na coluna de botões da direita; a conclusão da tela já avisa disso.
+
+**4. Log mais detalhado e a "pausa" da transcrição** (`core/pipeline.py`, `core/diagnostico.py`, `transcricao/etapas.py`, `core/trabalhador.py`, `shorts/etapas.py`).
+
+* **O que foi achado (a conclusão sobre "algo externo" foi corrigida na rodada 1.3.1: era o stdin do trabalhador).** O log do projeto mostra que a lacuna de 21 min 35 s fica entre `Carregando o modelo…` e `Termos de apoio ao Whisper`, isto é, **dentro de `carregar_modelo` ou da decodificação do áudio**, passos que não escreviam nada. Medido nesta máquina: importar o `faster-whisper` leva ~5 s e carregar o `large-v3-turbo` (1,6 GB) ~8 a 10 s, com a leitura do disco feita em ~4 s; a decodificação de 8 min de áudio é instantânea. Ou seja, **não é o código**: aquele carregamento ficou ~150 vezes mais lento por algo externo (disco ocupado ou lento na leitura a frio, antivírus lendo o arquivo, ou pouca memória livre). **Não deu para provar qual**, porque o log não registrava nada ali (e agora registra). O "pause" do autor **não foi o que destravou**: o carregamento terminou sozinho às 12:08:16, e o "Pausado pelo usuário" (12:08:37) só apareceu depois porque a pausa só vale no próximo segmento transcrito (`ponto_seguro`), e dentro do carregamento ela nem era vista.
+* **Passos que não dá para interromper** (`ContextoProjeto.executar_vigiado`): rodam numa thread vigiada; o log diz a cada 15 s que continuam, há quanto tempo e o que se mede (para o modelo: **MB lidos do disco** de `model.bin` pelo processo, **RAM livre** e **uso do processador**). **Cancelar vale na hora**; a **pausa é confirmada** ("Pausa pedida: ela vale quando “Carregando o modelo do Whisper” terminar"). Passando de 90 s, um **aviso** explica as causas prováveis (se os MB lidos não andam, é o disco; se a RAM livre está perto de zero, é memória).
+* **Trabalho da própria etapa** (`ContextoProjeto.batimento`): a transcrição diz a cada 20 s "transcrito até 3:12 de 8:43, 24 trechos, 1,3× o tempo real, falta cerca de 5 min"; cada avaliação da IA e cada título dizem "ainda em andamento há 30 s" (a IA leva ~1 min por trecho na CPU).
+* **Mais detalhe em geral:** cada etapa diz "(etapa 3 de 12)" ao começar e "em 1 min 02 s" ao terminar; o início da execução lista as etapas por fazer; o FFmpeg informa a cada 30 s (% , minutos de mídia, velocidade e quanto falta); a decodificação do áudio, a verificação do Ollama e o modelo em uso aparecem; o download do modelo Whisper mostra a porcentagem. **Pausar, retomar e cancelar são confirmados na hora no log** (`comando`), antes de a etapa chegar ao ponto seguro.
+
+**5. Studio Shorts: aba "Shorts livre"** (`shorts/busca.py`, `shorts/livre.py`, `ui/shorts_livre.py`, `ui/aba_studio.py`).
+
+* No Studio, o seletor **"Cortes | Shorts livre"**. O Shorts livre mostra o **texto inteiro da transcrição** (uma frase por linha, com a hora), uma **busca** e o **trecho escolhido**.
+* **Busca por palavras parecidas** (`rapidfuzz`): tolera erro de digitação, falta de acento e variação ("perdoar" acha "perdoou"); a frase achada fica destacada e as palavras que casaram, em destaque forte. **Busca por tema:** compara o assunto de janelas de 4 frases com o da busca pelos **vetores de palavras do modelo de português do spaCy** (offline; acha "perdão" num trecho que fala em "misericórdia" e "culpa"). É uma **aproximação**: serve para chegar perto, e a pessoa confere lendo; abstrações vagas ("o que é pecado") dão resultados fracos.
+* **Marcar o trecho:** arrastando o mouse sobre as palavras, ou clicando numa palavra e usando "↥ Começar aqui" / "↧ Terminar aqui"; "Começar neste achado" e "Usar o achado todo" partem de um resultado da busca. Os quatro botões de cada ponta (−palavra, −frase, +frase, +palavra) afinam. A tela mostra início, fim, duração, número de palavras, com que palavras abre e fecha, e **avisa** se o trecho tem menos de 10 s ou passa de 180 s (já contando o respiro).
+* **Criar Short deste trecho:** em segundo plano, a IA **avalia** o trecho (categoria, retenção, risco de contexto), a **nota** sai da mesma conta dos automáticos (`calcular_nota`, com os sinais calculados das palavras escolhidas por `analise.candidato_do_trecho`), as pontas se ajustam ao **silêncio de verdade** (`refinar_bordas`) e a IA cria **título, descrição, hashtags e nome do arquivo** (`etapas.metadados_sem_repetir`, sem repetir título). O corte entra na lista do Studio **marcado**, é **gravado** na hora em `cortes_shorts.json` e a tela vai até ele. Leva ~2 min na CPU. A IA é descarregada da memória ao terminar, para sobrar RAM para a renderização.
+* **Anotação de origem:** `Corte.origem` (`automatico` ou `manual`; cortes antigos valem como automáticos). A lista e o detalhe do Studio mostram **"gerado automaticamente"** ou **"gerado manualmente"** (este em azul, no detalhe).
+* **Os cortes manuais sobrevivem:** refazer a seleção automática reescreve `cortes_shorts.json`; `SelecionarShorts` agora **mantém os cortes manuais** (`cortes_manuais_guardados`). Seus ids começam em 1.000.000, longe dos ids dos candidatos.
+* O Ollama precisa estar de pé e o **modelo já instalado** (aqui não se baixa sozinho: o aviso diz o que fazer). A aba só abre quando o projeto já tem cortes calculados, como o resto do Studio.
+
+**6. A prévia do Short no Studio sempre leva a legenda** (`ui/studio_shorts.py`).
+
+* Antes a prévia só queimava a legenda se as "Legendas dinâmicas" estivessem marcadas nas opções (que vêm desmarcadas), então a prévia saía sem texto. Agora **`com_legenda=True` sempre**: a prévia mostra a legenda com a correção feita no corte, e a legenda deixou de entrar na assinatura da prévia. O texto da tela explica que **no vídeo final a legenda só é queimada com "Legendas dinâmicas" ligado**.
+
+**Testes:** arquivos novos `test_youtube_shorts.py`, `test_shorts_livre.py`, `test_shorts_livre_ui.py`, `test_janela_rodada9.py`, e casos novos em `test_pipeline.py` (passo vigiado, cancelamento, pausa, alerta, batimento, posição da etapa) e `test_painel_shorts.py`.
 
 ---
 
@@ -461,7 +569,7 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 
 ## 4. Fora do Escopo da v1
 
-* Preview de vídeo na interface; fila de vários vídeos.
+* Player de vídeo embutido na interface (a prévia de 15 s abre no player do Windows); fila de vários vídeos.
 * Enquadramento com rastreamento de rosto ou fundo desfocado (hoje: recorte central fixo).
 * Título fixo no vídeo; introdução e vinheta nos Shorts. (A marca d'água entrou na 1.1.)
 * Remoção de muletas de fala ("é...", "hum").
@@ -497,7 +605,7 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 * **Pausa:** padrão 10 s, faixa de 0,5 a 30 s, com pausa residual de 1,0 s em cada corte.
 * **Revisão da transcrição:** o processo pausa para revisar o .srt.
 * **Introdução e vinheta final:** só nos vídeos longos.
-* **Shorts:** mínimo de 30 s e máximo de 60 s, limite de segurança de 20 por vídeo, descarte de janelas com pausa interna maior que 3 s.
+* **Shorts:** mínimo de 30 s e máximo de 60 s (desde a 1.2: máximo de 180 s, com preferência por ~60 s), limite de segurança de 20 por vídeo, descarte de janelas com pausa interna maior que 3 s.
 * **Loudness:** −16 LUFS (vídeo longo) e −14 LUFS (Shorts).
 * **Qualidade padrão:** máxima (`veryslow`, CRF 16), com aviso de tempo estimado na interface. Mantida depois de medir (~4 h para 65 min de vídeo): o autor roda o PC de madrugada.
 * **HDR do iPhone:** convertido para SDR BT.709 em H.264 de 8 bits, compatível com qualquer tela.
@@ -523,3 +631,62 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 10. **(1.1) Português:** o verificador usa o dicionário `pt_BR` do LibreOffice (aceita algumas formas de Portugal, como "facto" ou "aspeto", mas recusa as grafias do acordo europeu como "perceção"). Não é um corretor gramatical completo (seção da Fase 7).
 11. **(1.1) Legenda corrigida** só aparece no vídeo com as "Legendas dinâmicas" ligadas; sem elas a correção fica guardada no corte.
 12. **(1.1) Modos persistem como "Tudo":** o modo escolhido vale só para aquela execução; o aplicativo sempre abre em "Tudo" e lembra o que for a marca d'água e as demais opções.
+
+
+
+13. **(1.2) Transcrição sempre do áudio inteiro**, mesmo com começo e fim cortados: mudar o corte depois não refaz os ~48 min do Whisper. O que fica fora do trecho não entra em nada que sai, mas aparece na revisão da transcrição.
+14. **(1.2) Zoom também nos Shorts (ligado, dá para desligar):** o recorte 9:16 sai de dentro da área do zoom, e o "Deslocamento do recorte" se soma ao centro do zoom. Com o zoom em 100% nada muda. O mesmo vale para o tratamento de imagem; a introdução e a vinheta nunca são tratadas.
+15. **(1.2) Fade passando pelo preto** (e não fusão entre as imagens), porque as partes do vídeo longo são emendadas sem recodificar. No modo "Só vinhetas" o fade vale só do lado da introdução e da vinheta.
+16. **(1.2) A prévia de 15 s abre no player do Windows** (o CustomTkinter não tem player); a tela mostra o quadro exato de cada corte.
+17. **(1.2) Peso dos Shorts por duração:** 10 pontos de 50 a 75 s, caindo em linha reta até 2 pontos aos 180 s, e 25% das vagas da IA reservadas aos trechos de 90 s ou mais. Os números (75 s, 2 pontos, 25%) são escolhas minhas: se os Shorts longos estiverem sobrando ou faltando, mude `pontos_de_duracao` e `COTA_DE_LONGOS` em `shorts/analise.py`.
+18. **(1.2) Configuração antiga:** um `config.toml` com o 60 s de antes passa para 180 s sozinho (uma vez). Projetos já criados mantêm as opções que tinham (60 s) até a pessoa mudar na tela.
+19. **(1.2) Sugestão automática de cor é uma heurística** (histograma, saturação e dominante de cor de 5 quadros), com a metade da força na correção de cor e limite de ±45. Vale como ponto de partida; **ainda não foi comparada olho a olho no sermão real** (o zoom e o tratamento só foram testados com vídeos sintéticos e o HDR de teste).
+
+### Pedidos da rodada 1.2 (todos feitos: veja a Fase 8)
+
+1. Ao selecionar o vídeo para iniciar o projeto, dar a opção de cortar o início do vído e o final, para iniciar no segundo correto e terminar antes do "fim absoluto", e se for possível incluir uma preview de 15 segundos de início para ver onde de fato via começar o vídeo depois do corte, fazer o mesmo, uma preview de 15 segundos antes do fim para ver onde o vídeo vai acabar, isso só ficaria habilitado na parte de inclusão do vídeo.
+
+2. Na parte de adicionar o vídeo dar a opção de "ajustar o zoom" (em % para ficar mais fácil) no caso pega um frame do vídeo e mostra em área sombreada o que vai ser cortado para "aproximar" mais a câmera do pregador, também coloque a opção de salvar o preset. 
+
+3. Também se for possível adicionar uma etapa de "tratamento de imagem" com alguns comandos básics de configuração como saturação, correção de cor, brilho, contraste, realçe de brancos o sombras, pode usar isso com um frame de exemplo do vídeo com uma divisão rolável no meio do frame para o origina na esquerda e o editado na direitta, faça um botãozinho de sugestão automática e outro de salvar preset, para ficar salvo no grograma o estilo dos vídeos.
+
+4. Na parte de adicionar a vinheta tem a possibilidade e habilitar "fade in" de vídeo e áudio entre a vinheta e o vídeo? e também a opção de selecionar o arquivo tanto de início quanto de fim.
+5. Nas opções avançadas coloque o modelo do Ollama como caixa de seleção suspensa, e não digitado. também coloque uma legendinha abaixo de cada opção avançada para explicar o que ela faz.
+6. De modo geral limite o tamanho do shorts para 180 segundos, dando um peso maior para gerações por volta de 60 segundos, mas sem descartar os 180 segundos que ainda geram oportunidade de shorts valiosos.
+7. No studio de shorts também quando adicionarmos ou removermos uma frase, também atualiza a caixa da legenda do short para ver como ficaria a frase que adicionamos ou removemos, também que o texto vá "correndo" para frente ou para trás para irmos vendo o que tem para t´ras ainda do texto ou para frente.
+
+### Pedidos da rodada 1.3 (todos feitos: veja a Fase 9)
+
+1. Reorganizar: o **"O que gerar"** vem logo depois da escolha do vídeo ou do projeto, antes de cortar o começo e o fim do vídeo; o **"Processamento"** vai para depois dos **"Pontos de revisão"**.
+2. No "O que gerar", a janela mostra **só o que vale para o modo escolhido** (Tudo mostra tudo; Só Shorts, só o que é de Shorts; Só vinhetas, só o que é de vinhetas), com as opções **melhor organizadas**.
+3. Na parte de ajuste de zoom e legenda dos Shorts, pôr os **elementos de exemplo da interface de Shorts do YouTube** (com botão de esconder e mostrar) para conferir se nada fica na frente da legenda ou da pessoa do vídeo.
+4. Deixar o **terminalzinho (log) mais "verbose"** e **investigar por que "demorou para avançar"**: a transcrição ficou 21 min entre "Carregando o modelo…" (11:46:41) e "Termos de apoio ao Whisper" (12:08:16), parecendo travada, e só "voltou" quando o autor pausou.
+5. No Studio Shorts, uma aba **"Shorts livre"**: o texto inteiro da legenda numa caixa, com busca (palavras parecidas ou tema), para o autor escolher o trecho; o sistema faz o Short como os outros (título, legenda, hashtags e nota) e o joga no Studio com a anotação **"gerado manualmente"** (os automáticos ganham **"gerado automaticamente"**).
+6. No Studio Shorts, a **prévia tem de vir também com a legenda**.
+
+### Escolhas que fiz sozinho na rodada 1.3 (confirmar ou mudar)
+
+20. **(1.3) A lacuna de 21 min da transcrição teve causa, achada na rodada 1.3.1** (leitura bloqueante do stdin no trabalhador travando os `import` pesados; veja a seção "Rodada 1.3.1"). A explicação "disco ou antivírus" que este item dava antes estava errada.
+21. **(1.3) Numeração:** "Corte e enquadramento" virou o cartão 3 (e o Tratamento, a Marca e a Revisão seguem 4, 5 e 6). Os outros cartões não escondem nada por modo (só o "O que gerar"); eles só ficam apagados, como antes.
+22. **(1.3) Elementos do YouTube** são um desenho aproximado (medidas em fração da tela em `ui/youtube_shorts.REGIOES`), com os rótulos em português ("Não gostei", "Compart.", "Remixar"). A conclusão em palavras usa a altura da legenda de duas linhas (~9,4%) e a largura total; por isso a legenda a 62% já avisa que pode encostar nos botões da direita.
+23. **(1.3) Busca por tema** usa os vetores do `pt_core_news_md` (janelas de 4 frases, passo 2, até 12 resultados sem sobreposição). É barato e offline, mas fraco em assuntos vagos; a alternativa (embeddings do Ollama, como o `nomic-embed-text`) pede baixar outro modelo.
+24. **(1.3) Shorts livre:** aceita de 10 s a 180 s menos o respiro (179,45 s); o modelo do Ollama é o das opções avançadas e **não é baixado sozinho** aqui; a IA é descarregada da memória depois de cada Short criado (o próximo recarrega o modelo, ~30 s). O corte é gravado na hora em `cortes_shorts.json`.
+25. **(1.3) A prévia do Studio sempre mostra a legenda**, mesmo com "Legendas dinâmicas" desligado (como o autor pediu); o vídeo final só a queima com a opção ligada, e o texto da tela diz isso.
+
+### Rodada 1.3.1 (2026-10-17, à noite): "só anda se eu pausar e retomar" e a coluna de opções
+
+**Causa achada e reproduzida: uma thread lendo o stdin de forma bloqueante.** O log desta execução mostrou o carregamento do modelo do Whisper levando **18 min 33 s com 0 MB lidos do disco** (e o processo vivo, avisando a cada 15 s), terminando 8 s depois de a pessoa clicar em Pausar; a análise dos Shorts levou **17 min 33 s** (15 s numa máquina livre) e também terminou junto com uma pausa. O trabalhador tinha uma thread esperando comandos num `for linha in sys.stdin`. No Windows, uma leitura síncrona pendente num handle **bloqueia qualquer outra operação nele**, e as bibliotecas nativas (spaCy, faster-whisper, ONNX…) consultam os handles padrão ao carregar: o primeiro `import` pesado ficava parado, sem gastar processador nem disco, até chegar um comando pelo stdin. Pausar ou retomar era justamente o comando que o liberava. **Reproduzido isolado:** `import spacy` com a thread bloqueante levou 61,6 s (e só andou quando se escreveu no stdin); sem ela, 2,2 s.
+
+* **Correção** (`core/trabalhador.linhas_do_stdin`): o pipe só é consultado (`PeekNamedPipe`, a cada 0,15 s) e só se lê quando já há bytes; nunca fica uma leitura pendente. Pipe fechado = a interface sumiu (cancela). Fora do Windows, ou se o stdin não é um pipe, volta para a leitura comum. Teste de regressão (`test_stdin_do_trabalhador.py`): um filho com a thread ouvinte importa o spaCy sem receber comando nenhum e ainda recebe pausar, retomar e cancelar e o fechamento.
+* **Regra nova:** nunca deixar uma leitura bloqueante pendente no stdin do trabalhador (nem em outro handle padrão que as bibliotecas possam consultar).
+* **A análise dos Shorts** ganhou passos vigiados (`executar_vigiado`: carregar o spaCy, separar frases, montar as janelas), com log e pausa/cancelamento que valem, e ficou ~3× mais rápida (`_sem_acento` com cache: 9 s → ~3 s nas 5010 janelas do sermão do Miquéias).
+* **Passos vigiados mostram onde estão parados:** passando do alerta, o log escreve a **pilha da thread** (e de novo a cada 5 min), o que teria apontado a causa na hora.
+* **Prioridade do trabalho:** o trabalhador roda um degrau abaixo do normal (`BELOW_NORMAL_PRIORITY_CLASS`; o FFmpeg herda), para a janela continuar respondendo com o processador cheio.
+
+**Coluna de opções em três páginas** (`ui/painel_opcoes.py`, `ui/app.py`, `ui/secao.py`).
+
+* Botões no topo da coluna: **1 · Vídeo e geração** (Vídeo, O que gerar), **2 · Corte e imagem** (Corte e enquadramento, Tratamento, Marca d'água) e **3 · Revisão e opções** (Revisão, Processamento, opções avançadas). Só uma página fica na tela, então há bem menos widgets para rolar; cada página abre no topo. A numeração dos cartões não mudou.
+* No cartão 3, **cortar começo e fim, zoom do vídeo e zoom e legenda dos Shorts** viraram **seções que recolhem** (`SecaoRecolhivel`; começam recolhidas) e o título repetido dentro de cada painel saiu.
+* **Cartão do vídeo:** o campo do arquivo e o nome do sermão usam a largura toda; "Escolher vídeo…" e "Abrir projeto…" ficam numa linha própria (antes o campo ficava com ~150 px e cortava o caminho, e a estimativa de tempo aparecia pela metade).
+* **Arrastar a barra de rolagem** agora anda em passos curtos (`QuadroRolavel._arrastar`, até 160 px por quadro, desenhando entre eles), como já era com a roda. **O rastro de texto da imagem não foi reproduzido** aqui (nem com o processador saturado e arrastos agressivos: a imagem final sempre saiu igual à de um redesenho limpo), então não dá para garantir que acabou; as três páginas e o arrasto suave atacam as causas prováveis (muitos widgets movidos de uma vez). Se voltar, mande o print e o que estava rodando.
+* Corrigido um erro no console ao reabrir um projeto com o Studio aberto (`_ajustar_quebras_do_detalhe` mexia em rótulos de um editor já destruído).

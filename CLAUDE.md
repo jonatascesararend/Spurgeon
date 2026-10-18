@@ -67,8 +67,53 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   apaga cada parte ao lê-la (modo econômico). HDR→SDR em `render/filtros.py` (`desat=0` de propósito).
 - IA dos Shorts (`shorts/`): nunca ponha exemplos concretos de título nos prompts (a IA os copia);
   o Ollama roda só em CPU quando não há GPU utilizável (`num_gpu=0`).
+- Começo e fim do vídeo (`video_inicio_s`/`video_fim_s`, 0 = até o fim): vale em `calcular_cortes`
+  (`limitar_trechos`), na análise dos Shorts e no Studio (`palavras_da_janela`), na estimativa e no
+  pré-voo. A **transcrição continua sendo do áudio inteiro** (mudar o corte não refaz o Whisper); o
+  começo e o fim não viram preferência salva. Use `opcoes.janela_do_video(duracao)`.
+- Estilo da imagem: `core/aparencia.py` (`Enquadramento` = zoom, `TratamentoImagem`), filtros em
+  `render/imagem.py`. Ordem no vídeo longo: crop do zoom → HDR→SDR → ampliação → tratamento (em
+  yuv420p limitado) → fades → marca. Nos Shorts o 9:16 sai de dentro do zoom. A prévia da tela usa o
+  MESMO filtro pelo FFmpeg sobre um quadro `.nut` (`render/previa.py`); nunca reimplemente o filtro em
+  PIL. Zoom, tratamento, fade e arquivos das vinhetas entram em `opcoes_relevantes` e nas assinaturas.
+- Zoom e legenda dos Shorts: `ui/painel_shorts.py` (`PainelShorts`, abaixo do zoom do vídeo). O zoom
+  do Short (`shorts_zoom_*`, `OpcoesProcessamento.enquadramento_do_short`) é aplicado DENTRO do 9:16
+  em `filtros.recorte_vertical(..., zoom_do_short)`; só entra nas assinaturas quando ativo. A altura
+  da legenda (`legenda_posicao_vertical`) vive só nesse painel (não existe mais nas opções
+  avançadas). A prévia é `render/previa.previa_do_short` (FFmpeg + `montar_ass` com texto de
+  exemplo); o painel pega as demais opções por `JanelaPrincipal._opcoes_da_tela`.
+- Prévias na interface: quadros por `ui/quadros.FonteDeQuadros` (uma extração por vez, com trava) e
+  tarefas por `ui/assincrono.Tarefas` (a thread só calcula; o resultado volta pela fila da janela).
+  Cada prévia grava num arquivo próprio; dois FFmpeg no mesmo arquivo se atrapalham no Windows.
+- Rolagem: use `ui/rolagem.QuadroRolavel`, nunca `CTkScrollableFrame` direto (a roda do padrão é lenta e deixa rastros na imagem). Prévia do Short em miniatura: `render/previa.previa_do_corte` (reduz logo depois do recorte, antes do HDR→SDR) + `ui/miniplayer.MiniPlayer` (quadros por FFmpeg→RGB, som por `winsound`); o `EditorDeCortes` recebe `tarefas` e `origem_da_previa` e guarda uma prévia por corte, com assinatura. O início e o fim do corte são uma caixa só (`janela_do_corte`); `PainelDePortugues` tem o modo `compacto`.
+- Shorts: o limite é `DURACAO_MAXIMA_SHORT_S` (180 s, em `core/config.py`), nunca o número solto.
+  As avaliações da IA são guardadas por **hash do trecho** (`marca_do_candidato`), não pelo id, e
+  `migrar_avaliacoes` roda antes de `candidatos.json` ser trocado. Mudou algo em `config.toml` que
+  precisa migrar? Suba `VERSAO_CONFIG` e trate em `ConfigApp._migrar`.
+- Ao editar com `perl -0pi` e heredocs, `\n` e `\S` nos textos de substituição se perdem (viram
+  quebra de linha e `S`): para código com barras invertidas use a ferramenta de edição.
+- Passo que não dá para interromper no meio (carregar modelo, decodificar áudio) roda em
+  `ctx.executar_vigiado`; trabalho da própria etapa, em `ctx.batimento`: o log avisa a cada ~15 s, cancelar
+  vale na hora e a pausa é confirmada. Nunca deixe um passo longo sem log (a transcrição já ficou 21 min
+  "parada" sem dizer nada). Medidas da máquina para o log em `core/diagnostico.py`.
+- **Nunca deixe uma leitura bloqueante pendente no stdin do trabalhador** (`for linha in sys.stdin` numa
+  thread): no Windows isso trava os `import` pesados (spaCy, faster-whisper…) até chegar um comando, e foi
+  a causa do "só anda se eu pausar e retomar" (62 s em vez de 2 s). Use `trabalhador.linhas_do_stdin`
+  (`PeekNamedPipe`). O trabalhador roda em prioridade abaixo do normal.
+- A coluna esquerda tem 3 páginas (`PainelOpcoes.paginas`, botões no topo): 1 Vídeo e geração, 2 Corte e
+  imagem, 3 Revisão e opções. Corte, zoom e legenda dos Shorts são `SecaoRecolhivel`.
+- Ordem dos cartões da coluna esquerda: 1 Vídeo, 2 O que gerar, 3 Corte e enquadramento, 4 Tratamento,
+  5 Marca, 6 Revisão, 7 Processamento. O corte, o zoom e a legenda dos Shorts nascem em
+  `PainelEntrada.montar_ajustes(PainelOpcoes.cartao_ajustes)`. O "O que gerar" esconde grupos por modo
+  (`_GRUPOS_POR_MODO`); widgets escondidos continuam existindo (só saem da tela).
+- Elementos do YouTube sobre a prévia do Short: `ui/youtube_shorts.py` (desenhados por PIL, não pelo
+  FFmpeg; `REGIOES` e `conflitos_da_legenda` dizem o que a legenda encobre).
+- Shorts livre: `shorts/livre.py` (cria o corte de um trecho escolhido), `shorts/busca.py` (palavras
+  parecidas e tema) e `ui/shorts_livre.py`. `Corte.origem` é `automatico` ou `manual`; manuais têm id
+  >= `ID_BASE_DOS_MANUAIS` e `SelecionarShorts` os mantém ao refazer a seleção. A prévia do Studio leva
+  SEMPRE a legenda (`com_legenda=True`), mesmo com "Legendas dinâmicas" desligado.
 - Testes de render usam vídeos sintéticos; o de sincronia usa quadros numerados em binário e ruído
-  branco. `tests/test_render.py` leva ~2 min; a suíte inteira ~7 min.
+  branco. `tests/test_render.py` leva ~2 min; a suíte inteira ~25 min (os testes de janela são lentos).
 - Commits: o hook do pre-commit chama `uv`; no Git Bash ponha a pasta do winget do uv no PATH.
   No Git Bash não há `python`, e heredocs com apóstrofos às vezes quebram: use a ferramenta de
   edição ou um script para textos assim.

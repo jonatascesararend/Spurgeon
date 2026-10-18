@@ -11,7 +11,8 @@ from pathlib import Path
 from spurgeon import __version__
 from spurgeon.core.config import caminho_config, carregar_config
 from spurgeon.core.erros import ErroSpurgeon
-from spurgeon.core.formatacao import formatar_duracao, resumir_linha_log
+from spurgeon.core.ffmpeg import sondar
+from spurgeon.core.formatacao import formatar_duracao, formatar_tempo_preciso, resumir_linha_log
 from spurgeon.core.hardware import detectar_hardware, recomendar, threads_para_uso
 from spurgeon.core.pipeline import ResultadoPipeline
 from spurgeon.core.preflight import Nivel, executar_preflight, tem_erro
@@ -21,6 +22,7 @@ from spurgeon.ui.formulario import (
     ErroFormulario,
     ValoresFormulario,
     ler_data,
+    ler_tempo_do_video,
     para_opcoes,
     sugerir_nome,
 )
@@ -92,6 +94,51 @@ def _processar(args: argparse.Namespace) -> int:
         valores.introducao = True
     if args.vinheta_final:
         valores.vinheta_final = True
+    if args.introducao_arquivo:
+        valores.introducao = True
+        valores.introducao_arquivo = str(args.introducao_arquivo)
+    if args.vinheta_arquivo:
+        valores.vinheta_final = True
+        valores.vinheta_arquivo = str(args.vinheta_arquivo)
+    if args.fade:
+        valores.fade_vinhetas = True
+        valores.fade_vinhetas_s = args.fade
+    if args.inicio:
+        valores.video_inicio = args.inicio
+    if args.fim:
+        valores.video_fim = args.fim
+        if args.fim.strip().startswith(("-", "−")) and args.video.is_file():
+            # "--fim=-2:04": tira 2 min 04 s do final; vira o tempo absoluto
+            try:
+                duracao = sondar(args.video).duracao_s
+                valores.video_fim = formatar_tempo_preciso(
+                    ler_tempo_do_video(args.fim, duracao_s=duracao)
+                )
+            except (ValueError, ErroSpurgeon) as erro:
+                print(f"--fim: {erro}", file=sys.stderr)
+                return 2
+    if args.zoom:
+        valores.zoom_pct = args.zoom
+        valores.zoom_centro_x_pct = args.zoom_x
+        valores.zoom_centro_y_pct = args.zoom_y
+    if args.preset_zoom:
+        preset = config.presets_enquadramento.get(args.preset_zoom)
+        if preset is None:
+            print(f"Não há preset de zoom chamado {args.preset_zoom!r}.", file=sys.stderr)
+            return 2
+        valores.zoom_pct = preset.zoom_pct
+        valores.zoom_centro_x_pct = preset.centro_x_pct
+        valores.zoom_centro_y_pct = preset.centro_y_pct
+    if args.preset_tratamento:
+        preset = config.presets_tratamento.get(args.preset_tratamento)
+        if preset is None:
+            print(
+                f"Não há preset de tratamento chamado {args.preset_tratamento!r}.", file=sys.stderr
+            )
+            return 2
+        valores.tratamento_ativo = True
+        for nome, valor in preset.model_dump().items():
+            setattr(valores, f"tratamento_{nome}", valor)
     if args.marca:
         valores.marca_dagua = True
         valores.marca_imagem = str(args.marca)
@@ -259,6 +306,30 @@ def main(argv: list[str] | None = None) -> int:
         "introdução e a vinheta a um vídeo longo já pronto",
     )
     processar.add_argument("--introducao", action="store_true", help="junta a introdução")
+    processar.add_argument(
+        "--introducao-arquivo", type=Path, help="vídeo da introdução (padrão: recursos/)"
+    )
+    processar.add_argument(
+        "--vinheta-arquivo", type=Path, help="vídeo da vinheta final (padrão: recursos/)"
+    )
+    processar.add_argument(
+        "--fade", help="liga o fade entre a introdução/vinheta e o vídeo, em s (0,5)"
+    )
+    processar.add_argument("--inicio", help="onde o vídeo começa, ex.: 0:07 (o antes é ignorado)")
+    processar.add_argument(
+        "--fim", help="onde o vídeo termina, ex.: 1:04:56 ou --fim=-2:04 (tira 2 min 04 s do final)"
+    )
+    processar.add_argument("--zoom", type=float, help="zoom em %% (100 = sem zoom; 120, 150…)")
+    processar.add_argument(
+        "--zoom-x", type=float, default=50.0, help="centro do zoom, %% da largura"
+    )
+    processar.add_argument(
+        "--zoom-y", type=float, default=50.0, help="centro do zoom, %% da altura"
+    )
+    processar.add_argument("--preset-zoom", help="usa um preset de zoom salvo no aplicativo")
+    processar.add_argument(
+        "--preset-tratamento", help="usa um preset de tratamento de imagem salvo"
+    )
     processar.add_argument("--vinheta-final", action="store_true", help="junta a vinheta final")
     processar.add_argument("--marca", type=Path, help="imagem da marca d'água (PNG, JPG…)")
     processar.add_argument(

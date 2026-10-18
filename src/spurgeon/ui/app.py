@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
+import tkinter
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
@@ -12,13 +14,21 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+from spurgeon.core.aparencia import TratamentoImagem
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento, carregar_config, salvar_config
 from spurgeon.core.erros import ErroSpurgeon, ProjetoConflito
 from spurgeon.core.estado import StatusEtapa, carregar_estado
 from spurgeon.core.executor import ExecutorProjeto
 from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
 from spurgeon.core.formatacao import resumir_linha_log
-from spurgeon.core.hardware import PerfilHardware, Recomendacao, detectar_hardware, recomendar
+from spurgeon.core.hardware import (
+    PerfilHardware,
+    Recomendacao,
+    detectar_hardware,
+    recomendar,
+    threads_para_uso,
+)
+from spurgeon.core.ollama import listar_modelos_instalados
 from spurgeon.core.preflight import Nivel, Verificacao, executar_preflight, tem_erro
 from spurgeon.core.projeto import (
     PastasProjeto,
@@ -29,8 +39,11 @@ from spurgeon.core.projeto import (
     ler_nome_e_data,
     nome_pasta_projeto,
 )
+from spurgeon.render.shorts import assinatura_visual
+from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.ui import dialogos
 from spurgeon.ui.aba_studio import AbaStudioShorts
+from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.estimativa import (
     EstimadorTempo,
     estimar_render_s,
@@ -45,11 +58,16 @@ from spurgeon.ui.formulario import (
     formatar_data,
     ler_data,
     para_opcoes,
+    shorts_do_formulario,
 )
 from spurgeon.ui.painel_entrada import PainelEntrada
 from spurgeon.ui.painel_execucao import EstadoUI, PainelExecucao
-from spurgeon.ui.painel_opcoes import PainelOpcoes
+from spurgeon.ui.painel_opcoes import NOMES_DAS_PAGINAS, PainelOpcoes
+from spurgeon.ui.presets import RepositorioDePresets
+from spurgeon.ui.quadros import FonteDeQuadros
 from spurgeon.ui.revisao import abrir_revisao
+from spurgeon.ui.rolagem import QuadroRolavel
+from spurgeon.ui.studio_shorts import OrigemDaPrevia
 
 _INTERVALO_MS = 100
 _CICLOS_POR_SEGUNDO = 1000 // _INTERVALO_MS
@@ -71,6 +89,9 @@ class JanelaPrincipal(ctk.CTk):
         self.config_app = config or carregar_config()
         self.config_app.pastas.garantir()
         self.executor = ExecutorProjeto()
+        self.tarefas = Tarefas(self._na_interface)
+        self.fonte = FonteDeQuadros(self.tarefas)
+        self.presets = RepositorioDePresets(self.config_app)
         self.estimador = EstimadorTempo()
         self._fila_ui: queue.Queue[Callable[[], None]] = queue.Queue()
         self._pastas: PastasProjeto | None = None
@@ -83,6 +104,7 @@ class JanelaPrincipal(ctk.CTk):
         self._ciclos = 0
         self._encerrando = False
         self._info_video: InfoMidia | None = None
+        self._perfil_hardware: PerfilHardware | None = None
         self._chave_do_studio: tuple[str, bool] | None = None
         self._abrindo_projeto = False
 
@@ -93,6 +115,7 @@ class JanelaPrincipal(ctk.CTk):
         self.bind("<FocusIn>", self._ao_ganhar_foco)
         self.after(_INTERVALO_MS, self._ciclo)
         threading.Thread(target=self._detectar_hardware, daemon=True).start()
+        self._listar_ollama()
 
     # --- montagem -----------------------------------------------------------------------------
     def _ajustar_tamanho(self) -> None:
@@ -109,25 +132,47 @@ class JanelaPrincipal(ctk.CTk):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        lateral = ctk.CTkScrollableFrame(self, width=500, fg_color="transparent")
-        lateral.grid(row=0, column=0, sticky="ns", padx=(12, 6), pady=(12, 0))
+        coluna = ctk.CTkFrame(self, fg_color="transparent")
+        coluna.grid(row=0, column=0, sticky="ns", padx=(12, 6), pady=(12, 0))
+        coluna.rowconfigure(1, weight=1)
+        self._paginas = ctk.CTkSegmentedButton(
+            coluna, values=list(NOMES_DAS_PAGINAS), command=self._trocar_pagina
+        )
+        self._paginas.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        lateral = QuadroRolavel(coluna, width=500, fg_color="transparent")
+        lateral.grid(row=1, column=0, sticky="ns")
         self.lateral = lateral
         pastas = self.config_app.pastas
-        self.entrada = PainelEntrada(
-            lateral,
-            pasta_entrada=pastas.entrada,
-            pasta_projetos=pastas.projetos,
-            ao_escolher_video=self._ao_escolher_video,
-            ao_abrir_projeto=self._abrir_projeto,
-        )
-        self.entrada.pack(fill="x", pady=(0, 10))
         self.opcoes = PainelOpcoes(
             lateral,
             valores=ValoresFormulario.de_opcoes(self.config_app.padroes),
             pastas=pastas,
             ao_mudar=self._atualizar_estimativa,
+            fonte=self.fonte,
+            tarefas=self.tarefas,
+            presets=self.presets,
+            ao_listar_ollama=self._listar_ollama,
         )
         self.opcoes.pack(fill="x")
+        self._paginas.set(NOMES_DAS_PAGINAS[0])
+        self.entrada = PainelEntrada(
+            self.opcoes.espaco_do_video,
+            pasta_entrada=pastas.entrada,
+            pasta_projetos=pastas.projetos,
+            ao_escolher_video=self._ao_escolher_video,
+            valores=ValoresFormulario.de_opcoes(self.config_app.padroes),
+            fonte=self.fonte,
+            tarefas=self.tarefas,
+            presets=self.presets,
+            ao_mudar=self._atualizar_estimativa,
+            estilo=self._estilo,
+            ao_abrir_projeto=self._abrir_projeto,
+            opcoes_atuais=self._opcoes_da_tela,
+            pasta_fontes=pastas.fontes,
+        )
+        self.entrada.pack(fill="x", pady=(0, 10))
+        # o corte, o zoom e a legenda dos Shorts moram no cartão 3, entre "O que gerar" e o resto
+        self.entrada.montar_ajustes(self.opcoes.cartao_ajustes)
 
         direita = ctk.CTkFrame(self, fg_color="transparent")
         direita.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 0))
@@ -154,6 +199,11 @@ class JanelaPrincipal(ctk.CTk):
             ao_renderizar=self._renderizar_do_studio,
             pastas_do_app=pastas,
             legenda_queimada=lambda: self.opcoes.valores().legendas_dinamicas,
+            janela_do_video=lambda: self.entrada.aparar.janela(),
+            aparencia=self._assinatura_visual,
+            tarefas=self.tarefas,
+            origem_da_previa=self.origem_da_previa,
+            contexto_da_ia=self._contexto_da_ia,
         )
         self.studio.grid(row=1, column=0, sticky="nsew")
         self._abas.set(ABA_PROCESSAMENTO)
@@ -201,11 +251,64 @@ class JanelaPrincipal(ctk.CTk):
         """Agenda `funcao` na thread da interface (as threads de trabalho não mexem nos widgets)."""
         self._fila_ui.put(funcao)
 
+    def _trocar_pagina(self, nome: str) -> None:
+        """Mostra uma das três páginas da coluna da esquerda e volta ao topo dela."""
+        self.opcoes.mostrar_pagina(NOMES_DAS_PAGINAS.index(nome))
+        with contextlib.suppress(tkinter.TclError):
+            self.lateral._parent_canvas.yview_moveto(0.0)
+
     def _ao_ganhar_foco(self, evento) -> None:
         if evento.widget is self:
             self.opcoes.atualizar_habilitacoes()  # introdução/vinheta podem ter sido copiadas
 
     # --- hardware e vídeo ---------------------------------------------------------------------
+    def _estilo(self):
+        """O zoom e o tratamento de cor que estão na tela (as prévias de corte os usam)."""
+        tratamento = (
+            self.opcoes.tratamento.tratamento()
+            if self.opcoes.tratamento.ativo.get()
+            else TratamentoImagem()
+        )
+        return self.entrada.zoom.enquadramento(), tratamento
+
+    def _valores(self) -> ValoresFormulario:
+        """Tudo o que está na tela: as opções (à direita do vídeo) e o corte e o zoom do vídeo."""
+        return replace(self.opcoes.valores(), **self.entrada.valores())
+
+    def _opcoes_da_tela(self) -> OpcoesProcessamento | None:
+        """As opções que a tela descreve agora, ou None se algum campo está incompleto."""
+        try:
+            return para_opcoes(self._valores(), self.config_app.padroes)
+        except ErroFormulario:
+            return None
+
+    def origem_da_previa(self) -> OrigemDaPrevia | None:
+        """O vídeo e as opções da tela, para a prévia de um Short; None se falta algo."""
+        opcoes = self._opcoes_da_tela()
+        if opcoes is None or not self.fonte.pronta:
+            return None
+        return OrigemDaPrevia(self.fonte.video, self.fonte.info, opcoes)
+
+    def _contexto_da_ia(self) -> ContextoDaIA | None:
+        """O modelo do Ollama e quanto da máquina usar no Shorts livre; None se falta algo."""
+        opcoes = self._opcoes_da_tela()
+        if opcoes is None:
+            return None
+        perfil = self._perfil_hardware or detectar_hardware(self.config_app.pastas.projetos)
+        return ContextoDaIA(
+            modelo=opcoes.ollama_modelo,
+            threads=threads_para_uso(perfil, opcoes.uso_cpu_percentual),
+            usar_gpu=perfil.cuda_utilizavel,
+        )
+
+    def _assinatura_visual(self) -> str | None:
+        """A aparência dos Shorts agora (zoom, cor, recorte, marca), para o Studio comparar."""
+        opcoes = self._opcoes_da_tela()
+        return None if opcoes is None else assinatura_visual(opcoes)
+
+    def _listar_ollama(self) -> None:
+        self.tarefas.rodar(listar_modelos_instalados, self.opcoes.definir_modelos_ollama)
+
     def _detectar_hardware(self) -> None:
         perfil = detectar_hardware(self.config_app.pastas.projetos)
         recomendacao = recomendar(perfil)
@@ -213,6 +316,7 @@ class JanelaPrincipal(ctk.CTk):
         self._na_interface(lambda: self._aplicar_hardware(perfil, recomendacao, nvenc))
 
     def _aplicar_hardware(self, perfil: PerfilHardware, rec: Recomendacao, nvenc: bool) -> None:
+        self._perfil_hardware = perfil
         self.opcoes.definir_perfil(
             recomendado=rec.whisper_modelo, cuda_utilizavel=perfil.cuda_utilizavel, nvenc=nvenc
         )
@@ -225,6 +329,7 @@ class JanelaPrincipal(ctk.CTk):
 
     def _ao_escolher_video(self, caminho: Path) -> None:
         self._info_video = None
+        self.fonte.definir_video(None, None)
         self.entrada.mostrar_estimativa("")
         if self._pastas is not None and not self._abrindo_projeto:
             self._pastas = None  # outro vídeo: não é mais o projeto que estava aberto
@@ -253,6 +358,9 @@ class JanelaPrincipal(ctk.CTk):
             self.entrada.mostrar_info(f"Não foi possível usar este vídeo: {motivo}", erro=True)
             return
         self._info_video = info
+        # a janela antes do vídeo: os quadros de exemplo saem de dentro do trecho usado
+        self.fonte.definir_janela(*self.entrada.aparar.janela())
+        self.fonte.definir_video(caminho, info)
         fps = f" · {info.fps:.0f} fps" if info.fps else ""
         self.entrada.mostrar_info(
             f"{formatar_duracao(info.duracao_s)} · {info.largura}×{info.altura}{fps}"
@@ -266,11 +374,17 @@ class JanelaPrincipal(ctk.CTk):
 
     def _atualizar_estimativa(self) -> None:
         """Mostra quanto tempo o processamento deve levar com o que está marcado na tela."""
+        valores = self._valores()
+        self.entrada.modo_so_vinhetas(
+            valores.modo == "so_vinhetas", shorts=shorts_do_formulario(valores)
+        )
+        self.fonte.definir_janela(*self.entrada.aparar.janela())
+        self.entrada.shorts.atualizar_previa()  # zoom, cor ou recorte podem ter mudado o Short
         if self._info_video is None:
             self.entrada.mostrar_estimativa("")
             return
         try:
-            opcoes = para_opcoes(self.opcoes.valores(), self.config_app.padroes)
+            opcoes = para_opcoes(self._valores(), self.config_app.padroes)
         except ErroFormulario:
             return  # há um campo ainda incompleto; a estimativa anterior continua
         total, render = estimar_tempo_total(
@@ -290,7 +404,7 @@ class JanelaPrincipal(ctk.CTk):
         erros: list[str] = []
         opcoes = video = data = None
         try:
-            valores = replace(self.opcoes.valores(), **(ajustes or {}))
+            valores = replace(self._valores(), **(ajustes or {}))
             opcoes = para_opcoes(valores, self.config_app.padroes)
         except ErroFormulario as erro:
             erros += erro.mensagens
@@ -419,10 +533,13 @@ class JanelaPrincipal(ctk.CTk):
     def _preferencias(self, executadas: OpcoesProcessamento) -> OpcoesProcessamento:
         """O que a tela mostra (sem os ajustes só de uma execução), no modo Tudo."""
         try:
-            da_tela = para_opcoes(self.opcoes.valores(), self.config_app.padroes)
+            da_tela = para_opcoes(self._valores(), self.config_app.padroes)
         except ErroFormulario:
             da_tela = executadas
-        return da_tela.model_copy(update={"modo": "completo"})
+        # o começo e o fim são de cada vídeo: não viram preferência para o próximo
+        return da_tela.model_copy(
+            update={"modo": "completo", "video_inicio_s": 0.0, "video_fim_s": 0.0}
+        )
 
     def _lembrar_preferencias(self, config: ConfigApp) -> None:
         self.config_app.padroes = self._preferencias(config.padroes)
@@ -542,7 +659,7 @@ class JanelaPrincipal(ctk.CTk):
         if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
             dialogos.aviso(self, "Abrir projeto", "Espere o processamento terminar para abrir.")
             return
-        if self.studio.mudou and not self.studio.salvar(exigir_ate_60s=False):
+        if self.studio.mudou and not self.studio.salvar(exigir_ate_o_limite=False):
             return
         try:
             estado = carregar_estado(pasta)
@@ -573,7 +690,9 @@ class JanelaPrincipal(ctk.CTk):
         try:
             self._pastas = PastasProjeto(pasta)
             self.entrada.abrir_projeto(video, nome, formatar_data(dia), pasta.parent)
-            self.opcoes.aplicar_valores(ValoresFormulario.de_opcoes(opcoes))
+            valores_do_projeto = ValoresFormulario.de_opcoes(opcoes)
+            self.opcoes.aplicar_valores(valores_do_projeto)
+            self.entrada.aplicar_valores(valores_do_projeto)
             self._info_video = None
             if video.is_file():
                 self.entrada.mostrar_info("Lendo o vídeo…")
@@ -775,6 +894,7 @@ class JanelaPrincipal(ctk.CTk):
             ):
                 return
             self.executor.encerrar()
+        self.fonte.limpar()
         self.destroy()
 
 
