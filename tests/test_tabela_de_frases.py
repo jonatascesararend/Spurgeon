@@ -39,24 +39,23 @@ def _corte_e_palavras():
     return palavras, cortes_do_sermao(palavras)[0]
 
 
-def test_a_tabela_tem_os_dois_marcadores_e_o_corte_inteiro_uma_frase_por_linha():
+def test_a_tabela_nao_tem_marcador_de_comeco_nem_de_fim_e_o_corte_vem_uma_frase_por_linha():
     palavras, corte = _corte_e_palavras()
     primeira, ultima = indices_das_palavras(palavras, corte)
     frases = separar_frases(palavras)
     linhas = linhas_da_tabela(palavras, corte, frases, fora=30)
     tipos = [linha.tipo for linha in linhas]
-    inicio, fim = tipos.index("inicio"), tipos.index("fim")
-    assert tipos.count("inicio") == tipos.count("fim") == 1 and inicio < fim
+    assert not [t for t in tipos if t not in ("fora", "dentro")]  # sem nenhum marcador
+    inicio, fim = tipos.index("dentro"), len(tipos) - 1 - tipos[::-1].index("dentro")
     assert set(tipos[:inicio]) == set(tipos[fim + 1 :]) == {"fora"}
-    assert set(tipos[inicio + 1 : fim]) == {"dentro"}
-    dentro = [t for linha in linhas[inicio + 1 : fim] for t in linha.textos]
+    assert set(tipos[inicio : fim + 1]) == {"dentro"}
+    dentro = [t for linha in linhas[inicio : fim + 1] for t in linha.textos]
     assert dentro == [p.texto for p in palavras[primeira : ultima + 1]]
     assert len([p for linha in linhas[:inicio] for p in linha.textos]) == min(30, primeira)
     frase_de = {i: n for n, f in enumerate(frases) for i in range(f.primeira, f.ultima + 1)}
     for linha in linhas:
-        if not linha.e_marcador:
-            assert len({frase_de[i] for i in linha.indices}) == 1  # nunca mistura duas frases
-    horas = [linha.tempo for linha in linhas if not linha.e_marcador]
+        assert len({frase_de[i] for i in linha.indices}) == 1  # nunca mistura duas frases
+    horas = [linha.tempo for linha in linhas]
     assert horas == sorted(horas)
 
 
@@ -64,10 +63,10 @@ def test_a_frase_que_o_corte_atravessa_vira_duas_linhas_uma_de_cada_lado():
     palavras, corte = _corte_e_palavras()
     no_meio = mover_limite(palavras, corte, "inicio", 4)
     linhas = linhas_da_tabela(palavras, no_meio, separar_frases(palavras), fora=30)
-    k = [linha.tipo for linha in linhas].index("inicio")
-    antes, depois = linhas[k - 1], linhas[k + 1]
+    k = [linha.tipo for linha in linhas].index("dentro")
+    antes, depois = linhas[k - 1], linhas[k]
     assert (antes.tipo, depois.tipo) == ("fora", "dentro")
-    assert antes.indices[-1] + 1 == depois.indices[0]  # a mesma frase, cortada no marcador
+    assert antes.indices[-1] + 1 == depois.indices[0]  # a mesma frase, cortada onde o Short começa
     assert len(antes.textos) == 4
 
 
@@ -130,15 +129,23 @@ def test_a_correcao_de_uma_palavra_que_sai_do_corte_se_perde():
 
 _LINHAS = [
     LinhaDaTabela("fora", 10.0, ("Antes", "um."), (0, 1)),
-    LinhaDaTabela("inicio"),
     LinhaDaTabela("dentro", 20.0, ("Dentro", "um."), (2, 3)),
     LinhaDaTabela("dentro", 25.0, ("Dentro", "dois."), (4, 5)),
-    LinhaDaTabela("fim"),
     LinhaDaTabela("fora", 30.0, ("Depois.",), (6,)),
 ]
-# linhas do widget: 1 fora, 2 marcador, 3 e 4 dentro, 5 marcador, 6 fora; o texto começa na coluna
-# 5 (`0:10`, `0:20`, `0:25` e `0:30` têm 4 caracteres, mais o TAB)
+# linhas do widget: 1 fora, 2 e 3 dentro, 4 fora; o texto começa na coluna 5 (`0:10`, `0:20`,
+# `0:25` e `0:30` têm 4 caracteres, mais o TAB)
 _COLUNA = 5
+# com um pedaço cortado do meio (os únicos marcadores que a tabela tem)
+_LINHAS_COM_PULO = [
+    LinhaDaTabela("fora", 10.0, ("Antes.",), (0,)),
+    LinhaDaTabela("dentro", 20.0, ("Um.",), (1,)),
+    LinhaDaTabela("corta"),
+    LinhaDaTabela("cortado", 25.0, ("Dois.",), (2,)),
+    LinhaDaTabela("volta"),
+    LinhaDaTabela("dentro", 30.0, ("Tres.",), (3,)),
+    LinhaDaTabela("fora", 35.0, ("Depois.",), (4,)),
+]
 
 
 @pytest.fixture
@@ -166,6 +173,21 @@ def tabela(raiz):
     janela.destroy()
 
 
+@pytest.fixture
+def tabela_com_pulo(raiz):
+    import customtkinter as ctk
+
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    t = TabelaDeFrases(
+        janela, height=200, ao_editar=lambda: None, ao_duplo_clique=print, ao_menu=print
+    )
+    t.pack(fill="both", expand=True)
+    t.mostrar(_LINHAS_COM_PULO, centralizar="inicio")
+    yield t
+    janela.destroy()
+
+
 def _linha(tabela, numero: int) -> str:
     return tabela._textbox.get(f"{numero}.0", f"{numero}.end")
 
@@ -173,29 +195,38 @@ def _linha(tabela, numero: int) -> str:
 @pytest.mark.gui
 def test_a_tabela_mostra_a_hora_e_a_frase_em_cada_linha(tabela):
     assert _linha(tabela, 1) == "0:10\tAntes um."
-    assert _linha(tabela, 2) == "▶ COMEÇA AQUI ▶"
-    assert _linha(tabela, 3) == "0:20\tDentro um."
-    assert _linha(tabela, 5) == "◀ TERMINA AQUI ◀"
+    assert _linha(tabela, 2) == "0:20\tDentro um."
+    assert _linha(tabela, 3) == "0:25\tDentro dois."
+    assert _linha(tabela, 4) == "0:30\tDepois."
+    texto = tabela._textbox.get("1.0", "end")
+    assert "COMEÇA AQUI" not in texto and "TERMINA AQUI" not in texto  # sem marcador de ponta
     assert tabela.texto_dentro() == "Dentro um. Dentro dois."
     caixa = tabela._textbox
     assert caixa.tag_ranges("hora") and caixa.tag_ranges("fora") and caixa.tag_ranges("dentro")
 
 
 @pytest.mark.gui
-def test_pode_escrever_dentro_do_corte_e_o_texto_novo_fica_em_destaque(tabela):
-    caixa = tabela._textbox
-    caixa.insert(f"3.{_COLUNA}", "Novo ")
-    assert _linha(tabela, 3) == "0:20\tNovo Dentro um."
-    assert "dentro" in caixa.tag_names(f"3.{_COLUNA}")
-    caixa.insert("4.end", " fim")  # no fim da linha também
-    assert _linha(tabela, 4) == "0:25\tDentro dois. fim"
+def test_o_comeco_e_o_fim_do_short_sao_a_primeira_e_a_ultima_linha_em_branco(tabela):
+    assert tabela._marcas["inicio"] == "2.0" and tabela._marcas["fim"] == "3.0"
 
 
 @pytest.mark.gui
-def test_nao_deixa_escrever_na_hora_no_que_e_de_fora_nem_nos_marcadores(tabela):
+def test_pode_escrever_dentro_do_corte_e_o_texto_novo_fica_em_destaque(tabela):
     caixa = tabela._textbox
+    caixa.insert(f"2.{_COLUNA}", "Novo ")
+    assert _linha(tabela, 2) == "0:20\tNovo Dentro um."
+    assert "dentro" in caixa.tag_names(f"2.{_COLUNA}")
+    caixa.insert("3.end", " fim")  # no fim da linha também
+    assert _linha(tabela, 3) == "0:25\tDentro dois. fim"
+
+
+@pytest.mark.gui
+def test_nao_deixa_escrever_na_hora_no_que_e_de_fora_nem_nos_marcadores(tabela_com_pulo):
+    caixa = tabela_com_pulo._textbox
     antes = caixa.get("1.0", "end-1c")
-    for onde in ("3.1", "3.0", "1.7", "1.end", "2.3", "5.2", "6.3"):
+    # a hora do Short (2.1, 2.0), o texto de fora (1.7, 1.end, 7.3), os marcadores (3.3, 5.2) e o
+    # que foi cortado (4.7)
+    for onde in ("2.1", "2.0", "1.7", "1.end", "7.3", "3.3", "5.2", "4.7"):
         caixa.insert(onde, "XX")
     assert caixa.get("1.0", "end-1c") == antes
 
@@ -204,33 +235,40 @@ def test_nao_deixa_escrever_na_hora_no_que_e_de_fora_nem_nos_marcadores(tabela):
 def test_apagar_so_leva_o_texto_do_corte_e_a_estrutura_fica(tabela):
     caixa = tabela._textbox
     fim = caixa.index("end-1c")
-    caixa.delete(f"3.{_COLUNA + 3}", "4.8")  # do meio de uma linha ao meio da outra
-    assert _linha(tabela, 3) == "0:20\tDen"
-    assert _linha(tabela, 4).startswith("0:25\t")  # a hora e a quebra de linha continuam
+    caixa.delete(f"2.{_COLUNA + 3}", "3.8")  # do meio de uma linha ao meio da outra
+    assert _linha(tabela, 2) == "0:20\tDen"
+    assert _linha(tabela, 3).startswith("0:25\t")  # a hora e a quebra de linha continuam
     assert caixa.index("end-1c") == fim  # nenhuma linha sumiu nem se juntou
-    caixa.delete("3.0", "3.4")  # a hora não sai
+    caixa.delete("2.0", "2.4")  # a hora não sai
     caixa.delete("1.0", "1.end")  # nem o texto de fora
-    caixa.delete("2.0", "2.end")  # nem o marcador
-    caixa.delete("3.end", "4.0")  # nem a quebra de linha entre duas frases
-    assert _linha(tabela, 3) == "0:20\tDen" and _linha(tabela, 1) == "0:10\tAntes um."
-    assert _linha(tabela, 2) == "▶ COMEÇA AQUI ▶"
+    caixa.delete("2.end", "3.0")  # nem a quebra de linha entre duas frases
+    assert _linha(tabela, 2) == "0:20\tDen" and _linha(tabela, 1) == "0:10\tAntes um."
+
+
+@pytest.mark.gui
+def test_apagar_nao_leva_os_marcadores_do_pedaco_cortado(tabela_com_pulo):
+    caixa = tabela_com_pulo._textbox
+    caixa.delete("3.0", "3.end")
+    caixa.delete("5.0", "5.end")
+    assert _linha(tabela_com_pulo, 3) == "✂ CORTA AQUI ✂"
+    assert _linha(tabela_com_pulo, 5) == "↩ CONTINUA AQUI ↩"
 
 
 @pytest.mark.gui
 def test_enter_nao_parte_a_frase_e_colar_com_quebras_vira_espacos(tabela):
     caixa = tabela._textbox
     fim = caixa.index("end-1c")
-    caixa.insert("3.end", "\n")
+    caixa.insert("2.end", "\n")
     assert caixa.index("end-1c") == fim
-    caixa.insert("3.end", " a\nb")
-    assert _linha(tabela, 3) == "0:20\tDentro um. a b"
+    caixa.insert("2.end", " a\nb")
+    assert _linha(tabela, 2) == "0:20\tDentro um. a b"
 
 
 @pytest.mark.gui
 def test_o_aviso_de_edicao_so_vem_quando_o_texto_mudou(tabela):
     tabela._conferir_edicao()
     assert tabela.eventos.edicoes == 0
-    tabela._textbox.insert(f"3.{_COLUNA}", "x")
+    tabela._textbox.insert(f"2.{_COLUNA}", "x")
     tabela._conferir_edicao()
     tabela._conferir_edicao()
     assert tabela.eventos.edicoes == 1
@@ -255,7 +293,7 @@ def test_a_palavra_sob_o_mouse_e_achada_pela_posicao_na_transcricao(tabela):
     assert tabela.posicao_da_palavra(1) == f"1.{_COLUNA + 6}"  # "um." depois de "Antes "
     assert _clicar(tabela, 1, duplo=False) == 1
     assert _clicar(tabela, 3, duplo=False) == 3  # dentro do corte também, enquanto não for editada
-    tabela._textbox.insert(f"3.{_COLUNA}", "x")  # a linha mudou: já não dá para dizer
+    tabela._textbox.insert(f"2.{_COLUNA}", "x")  # a linha mudou: já não dá para dizer
     assert _clicar(tabela, 3, duplo=False) is None
     assert _clicar(tabela, 1, duplo=False) == 1  # as outras seguem valendo
 
@@ -812,3 +850,165 @@ def test_destruir_o_editor_com_edicao_pendente_nao_deixa_erro_para_tras(raiz, pa
     janela.update()
     janela.destroy()
     assert erros == []
+
+
+# --- o pincel: cursor, aviso sob o mouse, arrasto em elástico -----------------------------------
+
+_MAIS_LINHAS = [
+    LinhaDaTabela("fora", 10.0, ("a0", "a1", "a2"), (0, 1, 2)),
+    LinhaDaTabela("dentro", 20.0, ("d3", "d4", "d5"), (3, 4, 5)),
+    LinhaDaTabela("dentro", 25.0, ("d6", "d7", "d8"), (6, 7, 8)),
+    LinhaDaTabela("fora", 30.0, ("f9", "f10", "f11"), (9, 10, 11)),
+]
+
+
+@pytest.fixture
+def tabela_de_pincel(raiz):
+    import customtkinter as ctk
+
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    pintadas: list = []
+    t = TabelaDeFrases(
+        janela, height=200, ao_editar=lambda: None, ao_duplo_clique=print, ao_menu=print,
+        ao_pintar=lambda indices, ferramenta: pintadas.append((indices, ferramenta)),
+    )  # fmt: skip
+    t.pack(fill="both", expand=True)
+    t.mostrar(_MAIS_LINHAS)
+    t.pintadas = pintadas
+    # o mouse "vê" a palavra que o teste disser (a janela escondida não tem posições de verdade)
+    t.sob = {}
+    t._pincel._palavra_em = lambda x, y: t.sob.get((x, y))
+    yield t
+    janela.destroy()
+
+
+def _mouse(x: int, y: int = 0):
+    return SimpleNamespace(x=x, y=y)
+
+
+def _acesas(tabela, tag: str) -> list[str]:
+    caixa = tabela._textbox
+    return [
+        caixa.get(inicio, fim)
+        for inicio, fim in zip(caixa.tag_ranges(tag)[::2], caixa.tag_ranges(tag)[1::2], strict=True)
+    ]
+
+
+@pytest.mark.gui
+def test_as_tres_ferramentas_usam_o_cursor_de_texto(tabela_de_pincel):
+    caixa = tabela_de_pincel._textbox
+    assert str(caixa.cget("cursor")) == "xterm"
+    for nome in ("marca", "borracha", "seta", "marca"):
+        tabela_de_pincel.definir_ferramenta(nome)
+        assert str(caixa.cget("cursor")) == "xterm", nome  # nunca a seta do sistema nem lápis
+
+
+@pytest.mark.gui
+def test_o_marca_texto_acende_em_amarelo_so_a_palavra_de_fora_sob_o_mouse(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("marca")
+    t.sob = {(1, 0): 10, (2, 0): 4}
+    t._pincel._passou(_mouse(1))
+    assert _acesas(t, "previa_marca") == ["f10"]  # uma palavra de fora: vai entrar no Short
+    t._pincel._passou(_mouse(2))
+    assert _acesas(t, "previa_marca") == []  # uma palavra que já é do Short não acende
+    t._pincel._passou(_mouse(3))  # em cima de nada
+    assert _acesas(t, "previa_marca") == []
+
+
+@pytest.mark.gui
+def test_a_borracha_acende_em_vermelho_so_a_palavra_do_short_sob_o_mouse(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("borracha")
+    t.sob = {(1, 0): 4, (2, 0): 10}
+    t._pincel._passou(_mouse(1))
+    assert _acesas(t, "previa_borracha") == ["d4"] and _acesas(t, "previa_marca") == []
+    t._pincel._passou(_mouse(2))
+    assert _acesas(t, "previa_borracha") == []  # uma palavra de fora não tem o que apagar
+
+
+@pytest.mark.gui
+def test_com_a_seta_nada_acende_e_ao_trocar_de_ferramenta_o_aviso_some(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.sob = {(1, 0): 10}
+    t._pincel._passou(_mouse(1))
+    assert _acesas(t, "previa_marca") == [] == _acesas(t, "previa_borracha")
+    t.definir_ferramenta("marca")
+    t._pincel._passou(_mouse(1))
+    assert _acesas(t, "previa_marca") == ["f10"]
+    t.definir_ferramenta("seta")
+    assert _acesas(t, "previa_marca") == []
+    t.definir_ferramenta("marca")
+    t._pincel._passou(_mouse(1))
+    t._pincel._apagar_a_previa()  # o mouse saiu da tabela
+    assert _acesas(t, "previa_marca") == []
+
+
+@pytest.mark.gui
+def test_o_arrasto_e_um_elastico_voltar_o_mouse_desfaz_o_que_passou(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("marca")
+    t.sob = {(1, 0): 9, (2, 0): 11, (3, 0): 10}
+    assert t._pincel._comecou(_mouse(1)) == "break"
+    t._pincel._arrastou(_mouse(2))
+    assert _acesas(t, "pintando") == ["f9", "f10", "f11"]
+    t._pincel._arrastou(_mouse(3))  # voltou até a palavra 10: a 11 sai da conta
+    assert _acesas(t, "pintando") == ["f9", "f10"]
+    assert t._pincel._soltou(_mouse(3)) == "break"
+    assert t.pintadas == [([9, 10], "marca")]
+    assert _acesas(t, "pintando") == []  # a tinta some depois de entregar
+
+
+@pytest.mark.gui
+def test_a_borracha_arrastada_por_cima_de_texto_de_fora_so_leva_o_que_e_do_short(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("borracha")
+    t.sob = {(1, 0): 1, (2, 0): 5}  # do texto de fora (a1) até uma palavra do Short (d5)
+    t._pincel._comecou(_mouse(1))
+    t._pincel._arrastou(_mouse(2))
+    t._pincel._soltou(_mouse(2))
+    assert t.pintadas == [([3, 4, 5], "borracha")]  # as palavras de fora no caminho não entram
+
+
+@pytest.mark.gui
+def test_o_marca_texto_arrastado_por_cima_do_short_so_leva_o_que_e_de_fora(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("marca")
+    t.sob = {(1, 0): 7, (2, 0): 11}  # de dentro do Short até o texto de fora depois dele
+    t._pincel._comecou(_mouse(1))
+    t._pincel._arrastou(_mouse(2))
+    t._pincel._soltou(_mouse(2))
+    assert t.pintadas == [([9, 10, 11], "marca")]
+
+
+@pytest.mark.gui
+def test_um_arrasto_sem_nenhuma_palavra_valida_nao_entrega_nada(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("borracha")
+    t.sob = {(1, 0): 10, (2, 0): 11}  # só palavras de fora: a borracha não tem o que apagar
+    t._pincel._comecou(_mouse(1))
+    t._pincel._arrastou(_mouse(2))
+    t._pincel._soltou(_mouse(2))
+    assert t.pintadas == [] and _acesas(t, "pintando") == [] == _acesas(t, "apagando")
+
+
+@pytest.mark.gui
+def test_trocar_de_ferramenta_no_meio_do_arrasto_cancela_a_tinta(tabela_de_pincel):
+    t = tabela_de_pincel
+    t.definir_ferramenta("marca")
+    t.sob = {(1, 0): 10}
+    t._pincel._comecou(_mouse(1))
+    assert _acesas(t, "pintando")
+    t.definir_ferramenta("seta")
+    assert _acesas(t, "pintando") == [] and t.pintadas == []
+
+
+@pytest.mark.gui
+def test_selecionar_palavra_deixa_a_palavra_azul_na_tabela(tabela_de_pincel):
+    t = tabela_de_pincel
+    assert t.selecionar_palavra(4) is True
+    caixa = t._textbox
+    assert caixa.get("sel.first", "sel.last") == "d4"
+    assert t.selecionar_palavra(10) is True and caixa.get("sel.first", "sel.last") == "f10"
+    assert t.selecionar_palavra(999) is False  # uma palavra que não está na tabela

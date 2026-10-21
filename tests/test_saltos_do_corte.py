@@ -272,18 +272,18 @@ def test_a_tabela_mostra_o_pedaco_cortado_entre_dois_marcadores():
     cortado = tirar_palavras(palavras, corte, range(meio.primeira, meio.ultima + 1))
     linhas = linhas_da_tabela(palavras, cortado, frases, fora=24)
     tipos = [linha.tipo for linha in linhas]
-    assert tipos.count("inicio") == tipos.count("corta") == tipos.count("volta") == 1
-    assert tipos.count("fim") == 1
-    ordem = [t for t in tipos if t in ("inicio", "corta", "volta", "fim")]
-    assert ordem == ["inicio", "corta", "volta", "fim"]
-    i, c, v = tipos.index("inicio"), tipos.index("corta"), tipos.index("volta")
+    assert tipos.count("corta") == tipos.count("volta") == 1
+    assert not {"inicio", "fim"} & set(tipos)  # o começo e o fim do Short não têm marcador
+    ordem = [t for t in tipos if t in ("corta", "volta")]
+    assert ordem == ["corta", "volta"]
+    c, v = tipos.index("corta"), tipos.index("volta")
+    i = tipos.index("dentro")
+    ultimo = len(tipos) - 1 - tipos[::-1].index("dentro")
     assert set(tipos[c + 1 : v]) == {"cortado"}
     assert [t for linha in linhas[c + 1 : v] for t in linha.textos] == [
         palavras[k].texto for k in range(meio.primeira, meio.ultima + 1)
     ]
-    assert set(tipos[i + 1 : c]) == {"dentro"} and set(tipos[v + 1 : tipos.index("fim")]) == {
-        "dentro"
-    }
+    assert set(tipos[i:c]) == {"dentro"} and set(tipos[v + 1 : ultimo + 1]) == {"dentro"}
     # o texto das linhas do Short é a legenda: sem as palavras cortadas
     dentro = [t for linha in linhas if linha.tipo == "dentro" for t in linha.textos]
     assert dentro == [palavras[k].texto for k in indices_incluidos(palavras, cortado)]
@@ -298,9 +298,7 @@ def test_a_tabela_com_a_legenda_corrigida_poe_as_palavras_no_pedaco_certo():
     editado[0], editado[-1] = "primeira", "ultima"
     linhas = linhas_da_tabela(palavras, cortado, frases, fora=5, texto_dentro=" ".join(editado))
     tipos = [linha.tipo for linha in linhas]
-    assert [t for t in tipos if t in ("inicio", "corta", "volta", "fim")] == [
-        "inicio", "corta", "volta", "fim",
-    ]  # fmt: skip
+    assert [t for t in tipos if t in ("corta", "volta")] == ["corta", "volta"]
     k = tipos.index("corta")
     antes = [t for linha in linhas[:k] if linha.tipo == "dentro" for t in linha.textos]
     depois = [t for linha in linhas[k:] if linha.tipo == "dentro" for t in linha.textos]

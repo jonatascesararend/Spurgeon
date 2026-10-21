@@ -87,10 +87,10 @@ _AJUDA_DA_BUSCA = {
 _TEXTO_DA_FERRAMENTA = {
     FERRAMENTA_SETA: "Arraste no texto para escolher do começo ao fim, ou clique numa palavra "
     "e use “Começar aqui” e “Terminar aqui”.",
-    FERRAMENTA_MARCA: "Arraste sobre as palavras para pintá-las: elas entram no Short, mesmo "
-    "longe das outras. Pinte a frase 1 e a frase 3 para montar “1 + 3”.",
-    FERRAMENTA_BORRACHA: "Arraste sobre as palavras já escolhidas para tirá-las: o Short pula "
-    "essa parte e continua logo depois.",
+    FERRAMENTA_MARCA: "A palavra sob o mouse acende em amarelo: arraste para pintá-las e elas "
+    "entram no Short, mesmo longe das outras. Pinte a frase 1 e a frase 3 para montar “1 + 3”.",
+    FERRAMENTA_BORRACHA: "A palavra escolhida sob o mouse acende em vermelho: arraste para "
+    "tirá-las; o Short pula essa parte e continua logo depois.",
 }
 _PREFIXO = 3  # a margem de cada linha: a barra da categoria, o losango do Short e um espaço
 _BARRA = "▌"
@@ -238,7 +238,11 @@ class PainelShortsLivre(ctk.CTkFrame):
         texto.tag_raise("pulado")
         texto.tag_raise("escolhido")
         self._pincel = Pincel(
-            texto, palavra_em=self._palavra_sob, onde=self._onde_esta, ao_pintar=self._pintou
+            texto,
+            palavra_em=self._palavra_sob,
+            onde=self._onde_esta,
+            ao_pintar=self._pintou,
+            vale=self._pode_pintar,
         )
         texto.bind("<ButtonRelease-1>", self._soltou_o_mouse, add="+")
         texto.bind("<Motion>", self._mouse_passou, add="+")
@@ -646,6 +650,17 @@ class PainelShortsLivre(ctk.CTkFrame):
         if coluna < self._posicoes[self._frases[linha - 1].primeira][1]:
             return None
         return self._palavra_no_indice(f"{linha}.{coluna}")
+
+    def _pode_pintar(self, k: int, ferramenta: str) -> bool:
+        """O marca-texto só acende palavras que ainda não estão no trecho; a borracha, só as que
+        estão (o que acende é sempre o que vai mudar)."""
+        trecho = self.trecho()
+        base = (
+            set(trecho.indices)
+            if trecho is not None
+            else {i for i in (self._primeira, self._ultima) if i is not None}
+        )
+        return (k not in base) if ferramenta == FERRAMENTA_MARCA else (k in base)
 
     def _pintou(self, indices: list[int], ferramenta: str) -> None:
         """O marca-texto soma estas palavras ao trecho; a borracha as tira dele."""

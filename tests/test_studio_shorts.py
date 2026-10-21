@@ -368,15 +368,19 @@ def test_uma_caixa_so_mostra_o_corte_inteiro_e_o_que_ha_antes_e_depois(editor):
     corte = editor._cortes[editor._atual]
     primeira, ultima = indices_das_palavras(editor._palavras, corte)
     texto = editor._janela.get("1.0", "end-1c")
-    assert "▶ COMEÇA AQUI ▶" in texto and "◀ TERMINA AQUI ◀" in texto
-    antes, resto = texto.split("▶ COMEÇA AQUI ▶")
-    dentro, depois = resto.split("◀ TERMINA AQUI ◀")
+    assert "COMEÇA AQUI" not in texto and "TERMINA AQUI" not in texto  # só cinza e branco
+    linhas = editor._janela.linhas
+    tipos = [linha.tipo for linha in linhas]
+    primeira_dentro = tipos.index("dentro")
+    ultima_dentro = len(tipos) - 1 - tipos[::-1].index("dentro")
+    antes = linhas[:primeira_dentro]
+    dentro = linhas[primeira_dentro : ultima_dentro + 1]
+    depois = linhas[ultima_dentro + 1 :]
+    assert {linha.tipo for linha in antes} == {linha.tipo for linha in depois} == {"fora"}
+    assert {linha.tipo for linha in dentro} == {"dentro"}
 
-    def palavras_do(bloco):  # cada linha é `hora<TAB>frase`
-        return [p for linha in bloco.split("\n") if "\t" in linha for p in linha.split("\t")[1:]]
-
-    def lidas(bloco):
-        return " ".join(palavras_do(bloco)).split()
+    def lidas(bloco):  # as palavras de um grupo de linhas da tabela
+        return " ".join(linha.texto for linha in bloco).split()
 
     assert lidas(antes)[-1] == editor._palavras[primeira - 1].texto
     assert lidas(dentro)[0] == editor._palavras[primeira].texto

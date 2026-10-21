@@ -764,3 +764,32 @@ Treze pedidos do autor, todos feitos e testados (o autor pediu para trabalhar a 
 Ao escrever o teste do dicionário usei `Pastas(raiz=tmp_path)`, mas `Pastas` não tem o campo `raiz` (o pydantic o ignora), então o teste escreveu e apagou termos no `recursos/vocabulario_teologico.txt` **de verdade**. O arquivo foi restaurado a partir do último commit (227 linhas), **mas as 3 linhas que o autor tinha acrescentado depois do commit (termos guardados por "Está certa: guardar no vocabulário") foram perdidas**: não há outra cópia. É preciso guardá-las de novo (agora o botão "Dicionário…" do Studio ajuda). **Correção:** `tests/conftest.py` ganhou um fixture automático (`vocabulario_do_usuario_protegido`) que restaura o arquivo e reprova qualquer teste que o altere; os testes do dicionário usam pastas dentro de `tmp_path`.
 
 **Testes:** arquivos novos `test_studio_ferramentas.py`, `test_saltos_do_corte.py`, `test_pausas_do_short.py`, `test_marcas_do_sermao.py`, `test_categorias.py`, `test_tutorial_e_ajuda.py`, `test_estabilidade_e_dicas.py`, e casos novos em `test_shorts_livre.py` e `test_shorts_livre_ui.py`.
+
+### Rodada 1.5.1 (2026-10-21): seta, marca-texto e borracha da tabela
+
+Pedido: tirar "COMEÇA AQUI" e "TERMINA AQUI" da tabela e revisar as três ferramentas (o marca-texto "marcava e o
+texto sumia", a borracha "apagava texto que não estava selecionado", a seta "não selecionava com dois cliques").
+Reproduzido com cliques e arrastos de mouse simulados numa janela de verdade (`event_generate`):
+
+1. **Sem marcador de começo e de fim.** O Short é o texto em branco, em negrito; só o pedaço cortado do meio tem
+   marcadores ("corta aqui" e "continua aqui"). `linhas_da_tabela` não devolve mais as linhas `inicio` e `fim`.
+2. **Cursor de texto nas três ferramentas.** A seta trocava o cursor por `""`, que herda a seta do sistema (o
+   marca-texto usava `pencil`, que parece espelhado, e a borracha `circle`). Agora é `xterm` nas três. O ícone do
+   marca-texto passou a ser o "⌶" (o cursor de texto). Para mostrar o que o clique vai fazer, a palavra sob o
+   mouse **acende**: amarelo no marca-texto (só as palavras de fora ou riscadas) e vermelho na borracha (só as do
+   Short).
+3. **Arrasto em elástico.** Antes, toda palavra que o mouse tocasse no caminho ficava pintada, mesmo que ele
+   voltasse (por isso a borracha tirava uma palavra a mais). Agora o pintado é sempre do ponto em que o botão foi
+   apertado até a palavra sob o mouse, e as palavras que a ferramenta não muda (de fora, para a borracha; do
+   Short, para o marca-texto) não entram na conta.
+4. **A vista da tabela não pula.** A tabela ficava com a metade de baixo escondida pela rolagem do detalhe, e o
+   texto pintado "sumia" para baixo; escolher o marca-texto ou a borracha agora rola o detalhe até a tabela caber
+   na tela. Pintar ou apagar no meio não leva mais a vista da tabela de volta ao começo do Short.
+5. **Duplo clique da seta.** Dentro do Short já selecionava a palavra; numa palavra cinza ele leva o começo ou o
+   fim até ela e agora também **deixa a palavra selecionada**. A seleção da tabela ganhou cor própria
+   (`selectbackground`), que continua visível quando o foco sai.
+6. As mesmas regras (cursor, aviso sob o mouse, elástico, `vale`) valem no Shorts livre, pelo mesmo `Pincel`.
+
+**Escolhas que fiz sozinho:** (38) o duplo clique numa palavra cinza continua movendo o começo ou o fim (era o
+combinado: "a seta seleciona normal e corta com 2 cliques"); (39) a borracha e o marca-texto têm o mesmo cursor
+(`xterm`), e o que os diferencia é o botão aceso e a cor do aviso.

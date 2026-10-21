@@ -464,3 +464,74 @@ def test_todo_botao_da_aba_e_da_janela_do_dicionario_tem_dica(raiz, pastas, tmp_
         dicionario.destroy()
     finally:
         quadro.destroy()
+
+
+# --- a tabela do Studio: vista parada, duplo clique que seleciona, ferramentas ------------------
+
+
+@pytest.mark.gui
+def test_pintar_ou_apagar_no_meio_nao_leva_a_vista_da_tabela_para_o_comeco(editor):
+    editor.selecionar(editor._ordem[0])
+    tabela = editor._janela
+    inc = _incluidas(editor)
+    alvo = inc[len(inc) // 2]
+    linha = tabela._onde[alvo][0]
+    tabela._textbox.yview(f"{linha}.0")  # a vista está no meio do Short
+    antes = tabela._tempo_do_alto()
+    editor._pintou(inc[len(inc) // 2 : len(inc) // 2 + 3], FERRAMENTA_BORRACHA)
+    assert tabela._tempo_do_alto() == pytest.approx(antes, abs=6.0)  # a mesma frase (ou a vizinha)
+    primeira = tabela._marcas["inicio"]
+    assert tabela._textbox.compare(f"{linha}.0", ">", primeira)  # e não foi parar no começo
+
+
+@pytest.mark.gui
+def test_o_duplo_clique_numa_palavra_cinza_leva_a_ponta_e_deixa_a_palavra_selecionada(editor):
+    editor.selecionar(editor._ordem[0])
+    primeira = _incluidas(editor)[0]
+    alvo = primeira - 14
+    editor._levar_ponta_a(alvo)
+    assert _incluidas(editor)[0] == alvo  # o começo veio até a palavra
+    caixa = editor._janela._textbox
+    assert caixa.get("sel.first", "sel.last") == editor._palavras[alvo].texto
+
+
+@pytest.mark.gui
+def test_a_tabela_nao_tem_marcadores_de_comeco_e_fim_e_a_seta_e_a_ferramenta_inicial(editor):
+    editor.selecionar(editor._ordem[0])
+    texto = editor._janela._textbox.get("1.0", "end")
+    assert "COMEÇA AQUI" not in texto and "TERMINA AQUI" not in texto
+    assert editor._janela.ferramenta == FERRAMENTA_SETA
+    assert str(editor._janela._textbox.cget("cursor")) == "xterm"
+
+
+@pytest.mark.gui
+def test_escolher_marca_texto_ou_borracha_traz_a_tabela_para_a_vista_sem_erro(editor):
+    editor.selecionar(editor._ordem[0])
+    editor._ferramentas.definir(FERRAMENTA_MARCA)
+    editor._trazer_a_tabela_para_a_vista()  # com a janela escondida não há o que rolar: não quebra
+    editor._ferramentas.definir(FERRAMENTA_BORRACHA)
+    editor.update()
+    assert str(editor._janela._textbox.cget("cursor")) == "xterm"
+    editor._ferramentas.definir(FERRAMENTA_SETA)
+    assert (
+        str(editor._janela._textbox.cget("cursor")) == "xterm"
+    )  # a seta também é o cursor de texto
+
+
+@pytest.mark.gui
+def test_os_tres_botoes_de_ferramenta_tem_icone_e_dica(raiz):
+    import customtkinter as ctk
+
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    f = FerramentasDeMarca(janela)
+    f.pack()
+    textos = {nome: b.cget("text") for nome, b in f._botoes.items()}
+    assert textos[FERRAMENTA_SETA].endswith("Seta") and textos[FERRAMENTA_MARCA].endswith(
+        "Marca-texto"
+    )
+    assert "⌶" in textos[FERRAMENTA_MARCA]  # o ícone do cursor de texto, não um lápis
+    for botao in f._botoes.values():
+        assert getattr(botao, "_dica_spurgeon", None) is not None
+        assert len(botao._dica_spurgeon.texto) > 60
+    janela.destroy()

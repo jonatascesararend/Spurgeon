@@ -1,7 +1,8 @@
 """Os três botões de "ferramenta do mouse" do texto: seta, marca-texto e borracha.
 
 É um interruptor de três posições (uma só fica ligada). A tabela de frases do Studio e o texto
-do Shorts livre perguntam `ferramenta` (ou recebem `ao_trocar`) para saber o que o mouse faz.
+do Shorts livre perguntam `ferramenta` (ou recebem `ao_trocar`) para saber o que o mouse faz. O
+cursor é sempre o de texto; o que muda é o que o arrasto faz (veja `ui/pincel.py`).
 """
 
 from __future__ import annotations
@@ -18,25 +19,28 @@ FERRAMENTAS = (
     (
         FERRAMENTA_SETA,
         "↖ Seta",
-        "Seleciona e edita como sempre. No texto cinza, duplo clique leva o começo ou o fim do "
-        "Short até a palavra; botão direito numa palavra abre mais opções (começar aqui, "
-        "terminar aqui, pôr ou cortar a palavra ou a frase).",
+        "Seleciona e edita o texto como em qualquer caixa de texto: arraste para selecionar e dê "
+        "duplo clique para escolher uma palavra. No texto cinza, o duplo clique também leva o "
+        "começo ou o fim do Short até a palavra; o botão direito numa palavra abre mais opções "
+        "(começar aqui, terminar aqui, pôr ou cortar a palavra ou a frase).",
         "#1f6aa5",
     ),
     (
         FERRAMENTA_MARCA,
-        "✎ Marca-texto",
-        "Pinta, palavra por palavra, o que entra no Short: arraste o mouse sobre palavras cinzas "
-        "(ou riscadas) para acrescentá-las. Dá para pintar longe do Short e montar um corte com "
+        "⌶ Marca-texto",
+        "Realça o texto para entrar no Short: a palavra sob o mouse acende em amarelo e, "
+        "arrastando, você pinta palavra por palavra o que quer incluir (só acendem as palavras "
+        "que estão de fora ou riscadas). Dá para pintar longe do Short e montar um corte com "
         "pedaços separados.",
         "#a67c00",
     ),
     (
         FERRAMENTA_BORRACHA,
         "⌫ Borracha",
-        "Apaga, palavra por palavra, o que sai do Short: arraste sobre palavras brancas para "
-        "tirá-las e o Short continua logo depois. Serve para cortar um erro de pronúncia ou uma "
-        "frase do meio sem ter que parar antes.",
+        "Tira texto do Short: a palavra sob o mouse acende em vermelho e, arrastando, você "
+        "apaga palavra por palavra o que quer cortar (só acendem as palavras que estão no "
+        "Short). O Short pula essa parte e continua logo depois: serve para cortar um erro de "
+        "pronúncia ou uma frase do meio sem ter que parar antes.",
         "#a03a3a",
     ),
 )

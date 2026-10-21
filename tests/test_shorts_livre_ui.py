@@ -618,7 +618,7 @@ def test_os_botoes_de_palavra_pulam_o_que_esta_de_fora(painel):
     assert painel.trecho().primeira == 21 and painel.trecho().fora == frozenset({30, 31, 32})
 
 
-def test_arrastar_o_marca_texto_pinta_o_arrasto_e_entrega_as_palavras_ao_soltar(painel):
+def test_arrastar_o_marca_texto_e_um_elastico_e_entrega_as_palavras_ao_soltar(painel):
     pintadas: list = []
     painel._pincel._ao_pintar = lambda indices, ferramenta: pintadas.append((indices, ferramenta))
     painel._ferramentas.definir(FERRAMENTA_MARCA)
@@ -626,15 +626,51 @@ def test_arrastar_o_marca_texto_pinta_o_arrasto_e_entrega_as_palavras_ao_soltar(
         (1, 0): 20,
         (2, 0): 24,
         (3, 0): 22,
-    }  # o mouse "pula" palavras (y=0: a janela está escondida)
+    }  # o mouse "pula" palavras e volta (y=0: a janela está escondida)
     painel._pincel._palavra_em = lambda x, y: sob.get((x, y))
     assert painel._pincel._comecou(SimpleNamespace(x=1, y=0)) == "break"
     assert painel._caixa._textbox.tag_ranges("pintando")
     painel._pincel._arrastou(SimpleNamespace(x=2, y=0))
-    painel._pincel._arrastou(SimpleNamespace(x=3, y=0))
+    assert len(painel._caixa._textbox.tag_ranges("pintando")) == 2 * 5  # 20 a 24, uma a uma
+    painel._pincel._arrastou(SimpleNamespace(x=3, y=0))  # voltou: a 23 e a 24 saem da conta
     assert painel._pincel._soltou(SimpleNamespace(x=3, y=0)) == "break"
-    assert pintadas == [(list(range(20, 25)), FERRAMENTA_MARCA)]
+    assert pintadas == [(list(range(20, 23)), FERRAMENTA_MARCA)]
     assert not painel._caixa._textbox.tag_ranges("pintando")  # a tinta some depois de entregar
+
+
+def test_o_marca_texto_so_acende_o_que_ainda_nao_esta_no_trecho_e_a_borracha_o_que_esta(painel):
+    painel.definir_trecho(14, 130)
+    assert painel._pode_pintar(5, FERRAMENTA_MARCA) and not painel._pode_pintar(
+        5, FERRAMENTA_BORRACHA
+    )
+    assert painel._pode_pintar(50, FERRAMENTA_BORRACHA) and not painel._pode_pintar(
+        50, FERRAMENTA_MARCA
+    )
+    painel._pintou(list(range(40, 52)), FERRAMENTA_BORRACHA)  # um pedaço tirado do meio
+    assert painel._pode_pintar(45, FERRAMENTA_MARCA)  # pode voltar a entrar
+    assert not painel._pode_pintar(45, FERRAMENTA_BORRACHA)  # e não há o que apagar
+
+
+def test_sem_trecho_a_borracha_nao_acende_nada_e_o_marca_texto_acende_tudo(painel):
+    assert painel.trecho() is None
+    assert painel._pode_pintar(30, FERRAMENTA_MARCA) and not painel._pode_pintar(
+        30, FERRAMENTA_BORRACHA
+    )
+
+
+def test_o_aviso_sob_o_mouse_no_texto_do_shorts_livre(painel):
+    texto = painel._caixa._textbox
+    painel.definir_trecho(14, 130)
+    painel._ferramentas.definir(FERRAMENTA_MARCA)
+    painel._pincel._palavra_em = lambda x, y: {(1, 0): 5, (2, 0): 50}.get((x, y))
+    painel._pincel._passou(SimpleNamespace(x=1, y=0))  # uma palavra de fora do trecho
+    assert texto.tag_ranges("previa_marca")
+    painel._pincel._passou(SimpleNamespace(x=2, y=0))  # uma que já está nele
+    assert not texto.tag_ranges("previa_marca")
+    painel._ferramentas.definir(FERRAMENTA_BORRACHA)
+    painel._pincel._passou(SimpleNamespace(x=2, y=0))
+    assert texto.tag_ranges("previa_borracha") and not texto.tag_ranges("previa_marca")
+    assert str(texto.cget("cursor")) == "xterm"
 
 
 def test_a_seta_deixa_o_mouse_como_sempre(painel):

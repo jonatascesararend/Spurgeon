@@ -146,7 +146,15 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   relê o arquivo e esquece a história.
 - Marca-texto e borracha: `ui/pincel.Pincel` (o arrasto sobre as palavras de um `Text`, usado pela tabela e pelo
   Shorts livre; `ui/ferramentas_de_marca.FerramentasDeMarca` são os três botões seta/marca-texto/borracha).
-  A seta é o gesto antigo; com as outras duas o Pincel devolve "break" nos eventos do mouse.
+  A seta é o gesto antigo; com as outras duas o Pincel devolve "break" nos eventos do mouse. O cursor é SEMPRE o
+  de texto (`xterm`; `cursor=""` herdaria a seta do sistema). A palavra sob o mouse acende (amarelo no
+  marca-texto, vermelho na borracha) e só acendem as palavras que a ferramenta muda (`vale`: o marca-texto, as de
+  fora; a borracha, as do Short). O arrasto é um elástico do ponto apertado até a palavra sob o mouse.
+- A tabela não tem marcador de começo nem de fim (só `corta`/`volta`, do pedaço cortado): o Short é o texto em
+  branco. `TabelaDeFrases._marcas["inicio"|"fim"]` apontam a primeira e a última linha em branco (para `ir_a`).
+  Depois de pintar ou apagar a vista da tabela NÃO se mexe; o duplo clique numa palavra cinza leva a ponta até ela
+  e deixa a palavra selecionada (`selecionar_palavra`); escolher marca-texto ou borracha rola o detalhe para a
+  tabela caber na tela (`_trazer_a_tabela_para_a_vista`).
 - Categorias dos Shorts: 17 chaves em `shorts/dados.CATEGORIAS` (rótulo e cor únicos por categoria; a IA só pode
   responder uma delas, o esquema leva o enum). Mudar a lista exige mexer em `ROTULOS_CATEGORIA`,
   `COR_DA_CATEGORIA` e `DEFINICOES_DAS_CATEGORIAS` juntos (`tests/test_categorias.py` confere).

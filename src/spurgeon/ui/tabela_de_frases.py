@@ -6,10 +6,12 @@ numa coluna e o texto em outra (as linhas que quebram se alinham sob o texto). A
 do corte ficam em cinza e só se lê; as do corte podem ser editadas ali mesmo, e quem usa a tabela
 fica sabendo pelo `ao_editar`.
 
-Um pedaço que a pessoa cortou de dentro do Short aparece riscado, entre dois marcadores
-(“corta aqui” e “continua aqui”). Há três ferramentas do mouse: a seta (seleciona e edita
-como sempre), o marca-texto (pinta, palavra por palavra, o que entra no Short) e a borracha
-(apaga, palavra por palavra, o que sai dele); quem usa a tabela fica sabendo pelo `ao_pintar`.
+O começo e o fim do Short não têm marcador: é onde o texto passa de cinza para branco. Um
+pedaço que a pessoa cortou de dentro dele aparece riscado, entre dois marcadores (“corta aqui” e
+“continua aqui”). Há três ferramentas do mouse, todas com o cursor de texto: a seta (seleciona e
+edita como sempre), o marca-texto (pinta, palavra por palavra, o que entra no Short; só as
+palavras de fora acendem) e a borracha (apaga, palavra por palavra, o que sai dele; só as
+palavras do Short acendem); quem usa a tabela fica sabendo pelo `ao_pintar`.
 
 A edição é protegida no nível do Tcl: o comando do widget é trocado por um filtro que só deixa
 inserir e apagar dentro do texto das linhas do corte (nunca na hora, nas linhas de fora, nos
@@ -33,12 +35,10 @@ from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA
 COR_FORA = "#7f7f7f"
 _COR_HORA = "#7a7a7a"
 _COR_DENTRO = "#f2f2f2"
-_COR_LIMITE = "#6ab0f3"
 _COR_CORTE = "#e0a030"
 _COR_CORTADO = "#a07070"
+_COR_SELECAO = "#2a6fb0"
 _MARCADOR = {
-    "inicio": "▶ COMEÇA AQUI ▶",
-    "fim": "◀ TERMINA AQUI ◀",
     "corta": "✂ CORTA AQUI ✂",
     "volta": "↩ CONTINUA AQUI ↩",
 }
@@ -78,7 +78,11 @@ class TabelaDeFrases(ctk.CTkTextbox):
         caixa.bind("<Double-Button-1>", self._duplo_clique)
         caixa.bind("<Button-3>", self._abrir_menu)
         self._pincel = Pincel(
-            caixa, palavra_em=self.palavra_em, onde=lambda i: self._onde.get(i), ao_pintar=ao_pintar
+            caixa,
+            palavra_em=self.palavra_em,
+            onde=lambda i: self._onde.get(i),
+            ao_pintar=ao_pintar,
+            vale=self._pode_pintar,
         )
 
     # --- aparência ----------------------------------------------------------------------------
@@ -93,9 +97,15 @@ class TabelaDeFrases(ctk.CTkTextbox):
         caixa.tag_config("hora", foreground=_COR_HORA, font=("Segoe UI", 9))
         caixa.tag_config("fora", foreground=COR_FORA)
         caixa.tag_config("dentro", foreground=_COR_DENTRO, font=("Segoe UI", 11, "bold"))
-        caixa.tag_config("limite", foreground=_COR_LIMITE, font=("Segoe UI", 10, "bold"))
         caixa.tag_config("limite_corte", foreground=_COR_CORTE, font=("Segoe UI", 10, "bold"))
         caixa.tag_config("cortado", foreground=_COR_CORTADO, overstrike=True)
+        # a seleção fica visível mesmo quando o foco sai da tabela, e vale sobre as cores do texto
+        caixa.configure(
+            selectbackground=_COR_SELECAO,
+            inactiveselectbackground=_COR_SELECAO,
+            selectforeground="#ffffff",
+        )
+        caixa.tag_raise("sel")
 
     # --- o filtro de edição -------------------------------------------------------------------
     def _instalar_filtro(self) -> None:
@@ -190,8 +200,7 @@ class TabelaDeFrases(ctk.CTkTextbox):
             for numero, linha in enumerate(self._linhas, start=1):
                 if linha.e_marcador:
                     self._marcas.setdefault(linha.tipo, f"{numero}.0")
-                    cor = "limite" if linha.tipo in ("inicio", "fim") else "limite_corte"
-                    caixa.insert("end", _MARCADOR[linha.tipo] + "\n", (cor, "marcador"))
+                    caixa.insert("end", _MARCADOR[linha.tipo] + "\n", ("limite_corte", "marcador"))
                     self._colunas.append(0)
                     continue
                 hora = segundos_para_rotulo(linha.tempo)
@@ -204,6 +213,9 @@ class TabelaDeFrases(ctk.CTkTextbox):
                 for texto, indice in zip(linha.textos, linha.indices, strict=False):
                     self._onde[indice] = (numero, coluna, len(texto))
                     coluna += len(texto) + 1
+                if linha.tipo == "dentro":  # onde o Short começa e termina (sem marcador)
+                    self._marcas.setdefault("inicio", f"{numero}.0")
+                    self._marcas["fim"] = f"{numero}.0"
             caixa.edit_reset()
             caixa.edit_modified(False)
             self._ultimo_texto = self.texto_dentro()
@@ -244,9 +256,9 @@ class TabelaDeFrases(ctk.CTkTextbox):
 
     # --- a vista ------------------------------------------------------------------------------
     def ir_a(self, ponta: str, *, so_se_preciso: bool = False) -> None:
-        """Rola até o marcador do começo ou do fim, deixando contexto de um lado e do outro.
+        """Rola até a primeira ou a última linha do Short, deixando contexto de um lado e do outro.
 
-        Com `so_se_preciso` a vista só anda se o marcador não estiver à vista (sem recentralizar).
+        Com `so_se_preciso` a vista só anda se a linha não estiver à vista (sem recentralizar).
         """
         marca = self._marcas.get(ponta)
         if marca is None:
@@ -317,7 +329,29 @@ class TabelaDeFrases(ctk.CTkTextbox):
         onde = self._onde.get(indice)
         return self._linhas[onde[0] - 1] if onde else None
 
+    def selecionar_palavra(self, indice: int) -> bool:
+        """Deixa a palavra `indice` selecionada (azul) na tabela, como um duplo clique faria."""
+        onde = self._onde.get(indice)
+        if onde is None:
+            return False
+        linha, coluna, tamanho = onde
+        with contextlib.suppress(TclError):
+            self._textbox.tag_remove("sel", "1.0", "end")
+            self._textbox.tag_add("sel", f"{linha}.{coluna}", f"{linha}.{coluna + tamanho}")
+            return True
+        return False
+
     # --- marca-texto e borracha -----------------------------------------------------------------
+    def _pode_pintar(self, indice: int, ferramenta: str) -> bool:
+        """O marca-texto só mexe nas palavras que estão de fora (ou cortadas); a borracha, só nas
+        que estão no Short: assim o que acende é sempre o que muda."""
+        linha = self.linha_da_palavra(indice)
+        if linha is None:
+            return False
+        if ferramenta == FERRAMENTA_MARCA:
+            return linha.tipo in ("fora", "cortado")
+        return linha.tipo == "dentro"
+
     @property
     def ferramenta(self) -> str:
         return self._pincel.ferramenta

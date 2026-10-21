@@ -504,11 +504,12 @@ class LinhaDaTabela:
     """Uma linha da tabela da janela: uma frase, ou o pedaço dela que fica de um lado do corte.
 
     `fora` é o que o Short não pega; `dentro`, o que ele tem; `cortado`, o que um salto tirou de
-    dentro dele. `inicio`, `corta`, `volta` e `fim` são marcadores (sem palavras): onde o Short
-    começa, onde um pedaço sai, onde ele continua e onde termina.
+    dentro dele. `corta` e `volta` são marcadores (sem palavras): onde um pedaço sai do Short e
+    onde ele continua. O começo e o fim do Short não têm marcador: é onde o texto muda de cinza
+    para branco.
     """
 
-    tipo: Literal["fora", "dentro", "cortado", "inicio", "corta", "volta", "fim"]
+    tipo: Literal["fora", "dentro", "cortado", "corta", "volta"]
     tempo: float = 0.0  # onde a primeira palavra da linha foi dita, em segundos
     textos: tuple[str, ...] = ()
     indices: tuple[int, ...] = ()  # posição de cada palavra na transcrição (vazio = não se sabe)
@@ -519,7 +520,7 @@ class LinhaDaTabela:
 
     @property
     def e_marcador(self) -> bool:
-        return self.tipo in ("inicio", "corta", "volta", "fim")
+        return self.tipo in ("corta", "volta")
 
 
 def _fecha_frase(texto: str) -> bool:
@@ -534,11 +535,11 @@ def linhas_da_tabela(
     fora: int = 220,
     texto_dentro: str | None = None,
 ) -> list[LinhaDaTabela]:
-    """O corte e o que há ao redor, uma frase por linha: as de fora, o marcador de começo, as do
-    Short (com os pedaços cortados e seus marcadores) e o marcador de fim, e as de fora de novo.
+    """O corte e o que há ao redor, uma frase por linha: as de fora, as do Short (com os pedaços
+    cortados e seus marcadores) e as de fora de novo.
 
     Mostra todas as palavras do corte mais `fora` palavras antes do começo e depois do fim. Uma
-    frase que o corte atravessa aparece em várias linhas, uma de cada lado do marcador.
+    frase que o corte atravessa aparece em duas linhas, uma de cada lado (a de fora e a do Short).
     `texto_dentro` é a legenda como está sendo editada (`None` = a guardada no corte; vazio = a da
     transcrição): se difere da transcrição, as linhas do Short saem dela, quebradas na pontuação, e
     sem `indices`.
@@ -587,20 +588,17 @@ def linhas_da_tabela(
 
     linhas: list[LinhaDaTabela] = []
     visto_dentro = False
-    fim_posto = False
     numero_do_pedaco = -1
     for tipo, indices in regioes:
         if tipo == "fora":
-            if visto_dentro and not fim_posto:
-                linhas.append(LinhaDaTabela("fim"))
-                fim_posto = True
             linhas += por_frases(indices, "fora")
         elif tipo == "cortado":
             linhas.append(LinhaDaTabela("corta"))
             linhas += por_frases(indices, "cortado")
         else:
             numero_do_pedaco += 1
-            linhas.append(LinhaDaTabela("volta" if visto_dentro else "inicio"))
+            if visto_dentro:
+                linhas.append(LinhaDaTabela("volta"))
             visto_dentro = True
             if not editado:
                 linhas += por_frases(indices, "dentro")
@@ -613,8 +611,6 @@ def linhas_da_tabela(
                         atual_p = []
                 if atual_p:
                     linhas.append(_linha_de_palavras(atual_p))
-    if not fim_posto:
-        linhas.append(LinhaDaTabela("fim"))
     return linhas
 
 

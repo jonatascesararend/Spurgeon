@@ -108,6 +108,7 @@ from spurgeon.ui.tabela_de_frases import (
     COR_FORA,
     FERRAMENTA_BORRACHA,
     FERRAMENTA_MARCA,
+    FERRAMENTA_SETA,
     TabelaDeFrases,
 )
 from spurgeon.ui.verificacao import PainelDePortugues
@@ -959,7 +960,8 @@ class EditorDeCortes(ctk.CTkFrame):
             cabeca,
             text="Uma frase por linha. Cinza: fora do Short. Branco: o texto do Short, que se "
             "corrige aqui mesmo (vale para a legenda). Riscado: pedaço cortado do meio. Troque a "
-            "ferramenta acima para pintar (marca-texto) ou apagar (borracha) palavra por palavra.",
+            "ferramenta acima para pintar (marca-texto: acende o que vai entrar) ou apagar "
+            "(borracha: acende o que vai sair) palavra por palavra.",
             anchor="w",
             justify="left",
             wraplength=500,
@@ -1406,7 +1408,8 @@ class EditorDeCortes(ctk.CTkFrame):
             ponta = "inicio" if indice - primeira <= ultima - indice else "fim"
         palavra = self._palavras[indice]
         segundos = palavra.inicio if ponta == "inicio" else palavra.fim
-        self._ajustar(lambda c: definir_limite(self._palavras, c, ponta, segundos))
+        if self._ajustar(lambda c: definir_limite(self._palavras, c, ponta, segundos)):
+            self._janela.selecionar_palavra(indice)  # o duplo clique também seleciona a palavra
 
     # --- ajustes do início e do fim -----------------------------------------------------------
     def mover(self, ponta: str, passo: int) -> bool:
@@ -1476,6 +1479,26 @@ class EditorDeCortes(ctk.CTkFrame):
     # --- marca-texto e borracha -----------------------------------------------------------------
     def _trocou_a_ferramenta(self, nome: str) -> None:
         self._janela.definir_ferramenta(nome)
+        if nome != FERRAMENTA_SETA:
+            self.after_idle(self._trazer_a_tabela_para_a_vista)
+
+    def _trazer_a_tabela_para_a_vista(self) -> None:
+        """Rola o detalhe (a coluna da direita) até a tabela caber na tela: pintar e apagar exigem
+        ver o texto inteiro, e a tabela costuma ficar com a metade de baixo escondida."""
+        try:
+            tela = self._detalhe._parent_canvas
+            topo = self._janela.winfo_rooty() - tela.winfo_rooty()
+            base = topo + self._janela.winfo_height()
+            altura = tela.winfo_height()
+            if topo >= 0 and base <= altura:
+                return
+            total = tela.bbox("all")[3]
+            if total <= altura:
+                return
+            avanco = topo - 8 if topo < 0 else min(base - altura + 8, topo - 8)
+            tela.yview_moveto(max(0.0, (tela.yview()[0] * total + avanco) / total))
+        except (TclError, TypeError, ZeroDivisionError):
+            return
 
     def _pintou(self, indices: list[int], ferramenta: str) -> None:
         """A tabela entrega as palavras que o marca-texto pintou ou a borracha apagou."""

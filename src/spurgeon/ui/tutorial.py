@@ -229,13 +229,14 @@ PASSOS: tuple[Passo, ...] = (
     ),
     Passo(
         "Tabela de frases e ferramentas",
-        "A tabela mostra a fala do corte frase por frase, com a hora ao lado; o que está em "
-        "cinza fica de fora do Short. Três botões escolhem o que o mouse faz: a seta seleciona e "
-        "corrige o texto (duplo clique no cinza leva o começo ou o fim até ali); o marca-texto "
-        "pinta, palavra por palavra, o que entra no Short, mesmo longe dele; a borracha apaga, "
-        "palavra por palavra, o que sai: no meio do corte o Short pula essa parte e continua "
-        "depois, ótimo para cortar um erro de pronúncia. As palavras tiradas ficam riscadas. "
-        "Os botões de palavra e de frase, em cima e embaixo, mexem no começo e no fim.",
+        "A tabela mostra a fala do corte frase por frase, com a hora ao lado; o texto em "
+        "branco é o Short e o cinza fica de fora. Três botões escolhem o que o mouse faz: a seta "
+        "seleciona e corrige o texto (duplo clique no cinza leva o começo ou o fim até ali); o "
+        "marca-texto realça, palavra por palavra, o que entra no Short, mesmo longe dele (a "
+        "palavra sob o mouse acende em amarelo); a borracha apaga, palavra por palavra, o que "
+        "sai (acende em vermelho): no meio do corte o Short pula essa parte e continua depois, "
+        "ótimo para cortar um erro de pronúncia. As palavras tiradas ficam riscadas. Os botões "
+        "de palavra e de frase, em cima e embaixo, mexem no começo e no fim.",
         alvo="studio_tabela",
         vista=VISTA_STUDIO,
     ),
