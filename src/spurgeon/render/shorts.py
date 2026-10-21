@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -24,6 +25,7 @@ from spurgeon.core.ffmpeg import InfoMidia, nvenc_funciona, sondar
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
+from spurgeon.core.tempo import MapaTempo, Trecho
 from spurgeon.render import filtros as f
 from spurgeon.render.imagem import filtro_tratamento
 from spurgeon.render.legenda import EstiloLegenda, montar_ass, palavras_do_short
@@ -34,9 +36,11 @@ from spurgeon.render.marca import (
     montar_marca,
     trecho_do_filtro,
 )
+from spurgeon.render.video_longo import recortes_de_quadros
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
+from spurgeon.shorts.pausas import ha_o_que_cortar, remapear_palavras, trechos_mantidos
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 
 VERSAO_DO_RENDER = 1  # não mude à toa: refaria todos os Shorts já prontos
@@ -44,6 +48,8 @@ VERSAO_DO_RENDER = 1  # não mude à toa: refaria todos os Shorts já prontos
 DURACAO_MAXIMA_S = DURACAO_MAXIMA_SHORT_S + 0.5
 FADE_S = 0.1
 FADE_MINIMO_S = 0.02
+#: fade em cada emenda do som onde uma pausa foi cortada (o corte cai no silêncio: é contra estalo)
+MICRO_FADE_S = 0.01
 _TOLERANCIA_DE_DURACAO_S = 0.6
 
 
@@ -90,6 +96,78 @@ def texto_de_publicacao(corte: Corte) -> str:
     return "\n".join(linhas) + "\n"
 
 
+def linhas_do_video_cortado(
+    trechos: Sequence[Trecho], fps: Fraction, *, entrada: str = "0:v", saida: str = "bruto"
+) -> list[str]:
+    """As linhas do filtro que montam o vídeo só com os `trechos` (Short sem as pausas longas).
+
+    Os tempos dos trechos contam desde o `-ss` da leitura. O vídeo vai para a grade de `fps` e
+    cada trecho pega um número EXATO de quadros (`recortes_de_quadros`: o erro nunca passa de meio
+    quadro e não acumula de um corte para o outro): `trim` escolhe os quadros k com
+    `(k - 0.5)/fps <= tempo < (k + n - 0.5)/fps`, o mesmo critério do vídeo longo.
+
+    O `fps` leva `start_time=0`: depois do `-ss` o primeiro quadro costuma chegar uns centésimos
+    depois de 0 e cairia na posição 1 da grade; sem a posição 0 o primeiro trecho perderia um
+    quadro e o vídeo inteiro ficaria um quadro adiantado em relação ao som.
+    """
+    taxa = f.texto_fps(fps)
+    grade = f"fps={taxa}:start_time=0"
+    recortes = recortes_de_quadros([(t.inicio, t.fim) for t in trechos], fps)
+
+    def tempos(primeiro: int, quantos: int) -> str:
+        inicio = Fraction(2 * primeiro - 1, 2) / fps
+        fim = Fraction(2 * (primeiro + quantos) - 1, 2) / fps
+        return f"start={f.numero_ffmpeg(float(inicio))}:end={f.numero_ffmpeg(float(fim))}"
+
+    if len(recortes) == 1:
+        return [f"[{entrada}]{grade},trim={tempos(*recortes[0])},setpts=PTS-STARTPTS[{saida}]"]
+    saidas = "".join(f"[s{i}]" for i in range(len(recortes)))
+    linhas = [f"[{entrada}]{grade},split={len(recortes)}{saidas}"]
+    for i, recorte in enumerate(recortes):
+        linhas.append(f"[s{i}]trim={tempos(*recorte)},setpts=PTS-STARTPTS[p{i}]")
+    pedacos = "".join(f"[p{i}]" for i in range(len(recortes)))
+    linhas.append(f"{pedacos}concat=n={len(recortes)}:v=1:a=0[{saida}]")
+    return linhas
+
+
+def linhas_do_audio_cortado(
+    trechos: Sequence[Trecho], cadeia: str, *, entrada: str = "1:a", saida: str = "a",
+    micro_fade_s: float = MICRO_FADE_S,
+) -> list[str]:  # fmt: skip
+    """As linhas do filtro que montam o som só com os `trechos`, e depois aplicam `cadeia`.
+
+    O corte usa `atrim` (exato até a amostra). Cada emenda leva um micro-fade (saída no trecho que
+    termina nela, entrada no que começa), contra o estalo; as pontas do Short não, que têm o fade
+    de `cadeia`. `cadeia` vazia = o som sai direto da junção.
+    """
+    depois = f",{cadeia}" if cadeia else ""
+    ultimo = len(trechos) - 1
+
+    def corte(i: int, t: Trecho) -> str:
+        passos = [
+            f"atrim=start={f.numero_ffmpeg(t.inicio)}:end={f.numero_ffmpeg(t.fim)}",
+            "asetpts=PTS-STARTPTS",
+        ]
+        fade = min(micro_fade_s, t.duracao / 2)
+        if i > 0:
+            passos.append(f"afade=t=in:st=0:d={f.numero_ffmpeg(fade)}")
+        if i < ultimo:
+            passos.append(
+                f"afade=t=out:st={f.numero_ffmpeg(t.duracao - fade)}:d={f.numero_ffmpeg(fade)}"
+            )
+        return ",".join(passos)
+
+    if len(trechos) == 1:
+        return [f"[{entrada}]{corte(0, trechos[0])}{depois}[{saida}]"]
+    saidas = "".join(f"[x{i}]" for i in range(len(trechos)))
+    linhas = [f"[{entrada}]asplit={len(trechos)}{saidas}"]
+    for i, trecho in enumerate(trechos):
+        linhas.append(f"[x{i}]{corte(i, trecho)}[t{i}]")
+    juntos = "".join(f"[t{i}]" for i in range(len(trechos)))
+    linhas.append(f"{juntos}concat=n={len(trechos)}:v=0:a=1{depois}[{saida}]")
+    return linhas
+
+
 def filtro_de_video(
     info: InfoMidia,
     fps: Fraction,
@@ -100,29 +178,35 @@ def filtro_de_video(
     enquadramento: Enquadramento | None = None,
     tratamento: TratamentoImagem | None = None,
     zoom_do_short: Enquadramento | None = None,
+    trechos: Sequence[Trecho] | None = None,
 ) -> str:
     """O grafo do vídeo: da entrada `0:v` até `[v]`.
 
     Recorte vertical (dentro do zoom, se houver, e com o zoom do Short), conversão para SDR,
     tratamento de imagem, ampliação para 1080×1920, marca d'água (entrada `2:v`) e legenda
     queimada, nesta ordem: a marca fica sob a legenda se as duas se encontrarem.
+
+    Com `trechos` (Short sem as pausas longas) o vídeo é montado antes de tudo isso, só com esses
+    trechos, em quadros exatos (`linhas_do_video_cortado`); sem eles o grafo é o de sempre.
     """
     cor = filtro_tratamento(tratamento) if tratamento is not None else None
-    ate_a_ampliacao = ",".join(
-        [
-            f"fps={f.texto_fps(fps)}",
-            f.recorte_vertical(info, deslocamento_pct, enquadramento, zoom_do_short),
-            f.cadeia_para_sdr(info),
-            *([cor] if cor else []),
-            f"scale={f.LARGURA_SHORT}:{f.ALTURA_SHORT}:flags=lanczos",
-            "setsar=1",
-        ]
-    )
+    adiante = [
+        f.recorte_vertical(info, deslocamento_pct, enquadramento, zoom_do_short),
+        f.cadeia_para_sdr(info),
+        *([cor] if cor else []),
+        f"scale={f.LARGURA_SHORT}:{f.ALTURA_SHORT}:flags=lanczos",
+        "setsar=1",
+    ]
+    if trechos:
+        cortes = ";\n".join(linhas_do_video_cortado(trechos, fps))
+        entrada, ate_a_ampliacao = f"{cortes};\n[bruto]", ",".join(adiante)
+    else:
+        entrada, ate_a_ampliacao = "[0:v]", ",".join([f"fps={f.texto_fps(fps)}", *adiante])
     final = ([f"ass={legenda}:fontsdir=fontes"] if legenda else []) + ["format=yuv420p"]
     if marca is None:
-        return f"[0:v]{ate_a_ampliacao},{','.join(final)}[v]"
+        return f"{entrada}{ate_a_ampliacao},{','.join(final)}[v]"
     sobreposicao = trecho_do_filtro(marca, base="base", entrada="2:v", saida="marcado")
-    return f"[0:v]{ate_a_ampliacao}[base];{sobreposicao};[marcado]{','.join(final)}[v]"
+    return f"{entrada}{ate_a_ampliacao}[base];{sobreposicao};[marcado]{','.join(final)}[v]"
 
 
 def filtro_de_audio(
@@ -221,6 +305,10 @@ def detalhes_do_registro(corte: Corte, visual: str | None = None) -> dict[str, A
         "corte": [round(corte.inicio, 3), round(corte.fim, 3)],
         "legenda": hashlib.sha1(corte.legenda.encode()).hexdigest()[:10],
     }
+    if corte.saltos:  # só entram quando existem: um registro antigo, sem eles, continua valendo
+        detalhes["saltos"] = [[round(de, 3), round(ate, 3)] for de, ate in corte.saltos]
+    if corte.pausa_s:
+        detalhes["pausa_s"] = round(corte.pausa_s, 2)
     if visual is not None:
         detalhes["visual"] = visual
     return detalhes
@@ -239,6 +327,10 @@ def situacao_do_short(
         return SITUACAO_NOVO
     atual = detalhes_do_registro(corte)
     if "corte" in entrada and entrada["corte"] != atual["corte"]:
+        return SITUACAO_ALTERADO
+    if entrada.get("saltos") != atual.get("saltos") or entrada.get("pausa_s") != atual.get(
+        "pausa_s"
+    ):
         return SITUACAO_ALTERADO
     if com_legenda and "legenda" in entrada and entrada["legenda"] != atual["legenda"]:
         return SITUACAO_ALTERADO
@@ -278,6 +370,11 @@ def assinatura_do_short(
         dados["zoom_do_short"] = opcoes.enquadramento_do_short.model_dump()
     if not opcoes.tratamento_nos_curtos.neutro:
         dados["tratamento"] = opcoes.tratamento_nos_curtos.model_dump()
+    # o que a pessoa tirou do meio e as pausas encurtadas só contam quando existem
+    if corte.saltos:
+        dados["saltos"] = [[round(de, 3), round(ate, 3)] for de, ate in corte.saltos]
+    if corte.pausa_s:
+        dados["pausa_s"] = round(corte.pausa_s, 2)
     return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -533,7 +630,21 @@ class RenderizarShorts(Etapa):
         faladas = palavras_do_short(
             palavras_com_a_legenda(palavras, corte), corte.inicio, corte.fim
         )
-        fade_entrada, fade_saida = fades_do_short(faladas, corte.duracao)
+        duracao = corte.janela_s  # a do Short pronto; o corte original só é lido (`leitura`)
+        trechos = (
+            None  # o que fica do corte sem os saltos e as pausas (segundos desde o início dele)
+        )
+        mantidos = trechos_mantidos(palavras, corte)
+        if ha_o_que_cortar(mantidos, corte.janela_s):
+            mapa = MapaTempo(mantidos)
+            trechos, duracao = mantidos, mapa.duracao_editada
+            faladas = remapear_palavras(faladas, mapa)
+            ctx.log.info(
+                "%d cortes no Short (pedaços tirados e pausas): ele fica com %.1f s (o trecho "
+                "lido tem %.1f s).",
+                len(mantidos) - 1, duracao, corte.janela_s,
+            )  # fmt: skip
+        fade_entrada, fade_saida = fades_do_short(faladas, duracao)
         legenda = None
         if fontes is not None:
             legenda = f"legendas/{curto.nome}.ass"
@@ -545,7 +656,18 @@ class RenderizarShorts(Etapa):
         if ctx.opcoes.normalizar_volume:
             medido = self._medir_volume(ctx, audio, canais, corte, ctx.opcoes.lufs_shorts)
 
-        duracao = corte.duracao
+        cadeia_do_audio = filtro_de_audio(
+            canais,
+            duracao,
+            medido,
+            ctx.opcoes.lufs_shorts,
+            fade_entrada_s=fade_entrada,
+            fade_saida_s=fade_saida,
+        )
+        if trechos:
+            audio_do_short = ";\n".join(linhas_do_audio_cortado(trechos, cadeia_do_audio))
+        else:
+            audio_do_short = f"[1:a]{cadeia_do_audio}[a]"
         script = trabalho / "legendas" / f"{curto.nome}.filter"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(
@@ -558,22 +680,16 @@ class RenderizarShorts(Etapa):
                 enquadramento=ctx.opcoes.enquadramento_nos_curtos,
                 tratamento=ctx.opcoes.tratamento_nos_curtos,
                 zoom_do_short=ctx.opcoes.enquadramento_do_short,
+                trechos=trechos,
             )
-            + ";\n[1:a]"
-            + filtro_de_audio(
-                canais,
-                duracao,
-                medido,
-                ctx.opcoes.lufs_shorts,
-                fade_entrada_s=fade_entrada,
-                fade_saida_s=fade_saida,
-            )
-            + "[a]",
+            + ";\n"
+            + audio_do_short,
             encoding="utf-8",
         )
         destino = ctx.pastas.shorts / curto.video
         parcial = destino.with_name(destino.name + ".parcial")
-        leitura = ["-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(duracao)]
+        # a leitura é sempre do corte original; só a saída (`-t` final) tem a duração já cortada
+        leitura = ["-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.janela_s)]
         ctx.ffmpeg(
             ["-y", *leitura, "-i", video, *leitura, "-i", audio,
              *(["-i", marca.arquivo] if marca else []),
@@ -606,7 +722,7 @@ class RenderizarShorts(Etapa):
     ) -> dict[str, float] | None:
         """Primeira passagem do loudnorm, só no trecho do Short e já em estéreo."""
         saida = ctx.ffmpeg(
-            ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.duracao),
+            ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.janela_s),
              "-i", audio, "-af", f"{f.filtro_audio_estereo(canais)},{filtro_medir(alvo_lufs)}",
              "-f", "null", "-"],
         )  # fmt: skip

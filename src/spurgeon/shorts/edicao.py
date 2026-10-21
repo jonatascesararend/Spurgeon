@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -24,6 +25,7 @@ _TOLERANCIA_S = 0.001
 _PAUSA_SEM_VIZINHA_S = 5.0
 
 Ponta = Literal["inicio", "fim"]
+PontaDaMudanca = Literal["inicio", "fim", "meio"]  # `meio`: palavras tiradas ou postas no meio
 AVISO_ACIMA_DO_LIMITE = f"Com mais de {DURACAO_MAXIMA_S:g} segundos o vídeo não pode ser um Short."
 
 
@@ -37,37 +39,116 @@ def faixa_da_nota(nota: float) -> Literal["alta", "media", "baixa"]:
     return "media" if nota >= NOTA_MEDIA else "baixa"
 
 
-def indices_das_palavras(palavras: Sequence[Palavra], corte: Corte) -> tuple[int, int]:
-    """Posição da primeira e da última palavra que estão dentro do corte."""
-    dentro = [
+def _no_salto(p: Palavra, saltos: Sequence[Sequence[float]]) -> bool:
+    """A palavra foi tirada do Short por um salto (cai dentro de um pedaço cortado)?"""
+    meio = (p.inicio + p.fim) / 2
+    return any(de <= meio <= ate for de, ate in saltos)
+
+
+def indices_incluidos(palavras: Sequence[Palavra], corte: Corte) -> list[int]:
+    """Posição, na transcrição, de cada palavra que está no Short: as do corte, menos as que os
+    saltos tiram (em ordem)."""
+    return [
         i
         for i, p in enumerate(palavras)
-        if p.fim > corte.inicio + _TOLERANCIA_S and p.inicio < corte.fim - _TOLERANCIA_S
+        if p.fim > corte.inicio + _TOLERANCIA_S
+        and p.inicio < corte.fim - _TOLERANCIA_S
+        and not _no_salto(p, corte.saltos)
     ]
+
+
+def indices_das_palavras(palavras: Sequence[Palavra], corte: Corte) -> tuple[int, int]:
+    """Posição da primeira e da última palavra que estão dentro do corte."""
+    dentro = indices_incluidos(palavras, corte)
     if not dentro:
         raise LimiteInvalido("Não há fala da transcrição neste corte.")
     return dentro[0], dentro[-1]
 
 
-def _com_limites(palavras: Sequence[Palavra], corte: Corte, primeira: int, ultima: int) -> Corte:
-    antes = palavras[primeira].inicio - palavras[primeira - 1].fim if primeira > 0 else None
-    depois = (
-        palavras[ultima + 1].inicio - palavras[ultima].fim if ultima + 1 < len(palavras) else None
-    )
-    inicio, fim = respiro_nas_pontas(
-        palavras[primeira].inicio,
-        palavras[ultima].fim,
-        _PAUSA_SEM_VIZINHA_S if antes is None else antes,
-        _PAUSA_SEM_VIZINHA_S if depois is None else depois,
-    )
+def faixas_de(indices: Iterable[int]) -> list[tuple[int, int]]:
+    """`[3, 4, 5, 9, 10]` → `[(3, 5), (9, 10)]`: as sequências de palavras seguidas."""
+    faixas: list[tuple[int, int]] = []
+    for i in sorted(set(indices)):
+        if faixas and faixas[-1][1] == i - 1:
+            faixas[-1] = (faixas[-1][0], i)
+        else:
+            faixas.append((i, i))
+    return faixas
+
+
+def faixas_do_corte(palavras: Sequence[Palavra], corte: Corte) -> list[tuple[int, int]]:
+    """As sequências de palavras que o Short junta (uma só, se não há saltos)."""
+    return faixas_de(indices_incluidos(palavras, corte))
+
+
+def _com_faixas(
+    palavras: Sequence[Palavra], corte: Corte, faixas: Sequence[tuple[int, int]]
+) -> Corte:
+    """O corte que junta estas faixas de palavras, nesta ordem, cada ponta com o respiro de
+    costume (nunca mais que metade da pausa vizinha). O que fica entre duas faixas vira um salto."""
+    limites = []
+    for primeira, ultima in faixas:
+        antes = palavras[primeira].inicio - palavras[primeira - 1].fim if primeira > 0 else None
+        depois = (
+            palavras[ultima + 1].inicio - palavras[ultima].fim
+            if ultima + 1 < len(palavras)
+            else None
+        )
+        limites.append(
+            respiro_nas_pontas(
+                palavras[primeira].inicio,
+                palavras[ultima].fim,
+                _PAUSA_SEM_VIZINHA_S if antes is None else antes,
+                _PAUSA_SEM_VIZINHA_S if depois is None else depois,
+            )
+        )
+    saltos = [
+        [limites[k][1], limites[k + 1][0]]
+        for k in range(len(limites) - 1)
+        if limites[k + 1][0] - limites[k][1] > _TOLERANCIA_S
+    ]
+    textos = [palavras[i].texto for primeira, ultima in faixas for i in range(primeira, ultima + 1)]
     return replace(
         corte,
-        inicio=inicio,
-        fim=fim,
-        texto=" ".join(p.texto for p in palavras[primeira : ultima + 1]),
+        inicio=limites[0][0],
+        fim=limites[-1][1],
+        texto=" ".join(textos),
+        saltos=saltos,
         editado=True,
         legenda="",  # as correções valiam para as palavras de antes: o corte agora é outro
     )
+
+
+def _com_limites(palavras: Sequence[Palavra], corte: Corte, primeira: int, ultima: int) -> Corte:
+    return _com_faixas(palavras, corte, [(primeira, ultima)])
+
+
+def corte_com_indices(palavras: Sequence[Palavra], corte: Corte, indices: Iterable[int]) -> Corte:
+    """O corte que tem exatamente estas palavras (posições na transcrição). Se não são seguidas,
+    o que fica entre elas vira salto. Levanta `LimiteInvalido` se não sobra palavra nenhuma."""
+    faixas = faixas_de(i for i in indices if 0 <= i < len(palavras))
+    if not faixas:
+        raise LimiteInvalido("O corte ficaria sem nenhuma palavra.")
+    return _com_faixas(palavras, corte, faixas)
+
+
+def incluir_palavras(palavras: Sequence[Palavra], corte: Corte, indices: Iterable[int]) -> Corte:
+    """O corte com estas palavras a mais (a ferramenta marca-texto)."""
+    return corte_com_indices(palavras, corte, [*indices_incluidos(palavras, corte), *indices])
+
+
+def tirar_palavras(palavras: Sequence[Palavra], corte: Corte, indices: Iterable[int]) -> Corte:
+    """O corte sem estas palavras (a ferramenta borracha): as do meio viram salto, as das pontas
+    encurtam o Short. Levanta `LimiteInvalido` se não sobra palavra nenhuma."""
+    fora = set(indices)
+    return corte_com_indices(
+        palavras, corte, [i for i in indices_incluidos(palavras, corte) if i not in fora]
+    )
+
+
+def abaixo_do_minimo(corte: Corte) -> bool:
+    """O Short ficou curto demais (menos de 10 s) para ser publicado?"""
+    return corte.duracao < DURACAO_MINIMA_S
 
 
 def passa_do_limite(corte: Corte) -> bool:
@@ -80,18 +161,28 @@ def mover_limite(palavras: Sequence[Palavra], corte: Corte, ponta: Ponta, passo:
 
     Sempre cai em fronteira de palavra, com o respiro de costume. Passar do limite é permitido (a
     tela avisa, pois acima dele o corte não pode ser Short). Levanta `LimiteInvalido` se o
-    resultado ficar com menos de 10 s ou sair da transcrição.
+    resultado ficar com menos de 10 s ou sair da transcrição. Num corte com saltos, avançar tira
+    as primeiras (ou últimas) palavras que estão no Short, e recuar acrescenta as que vêm antes.
     """
-    primeira, ultima = indices_das_palavras(palavras, corte)
+    incluidas = indices_incluidos(palavras, corte)
+    if not incluidas:
+        raise LimiteInvalido("Não há fala da transcrição neste corte.")
     if ponta == "inicio":
-        primeira += passo
+        if passo >= 0:
+            novas = incluidas[passo:]
+        else:
+            if incluidas[0] + passo < 0:
+                raise LimiteInvalido("Não há mais fala nesse sentido.")
+            novas = [*range(incluidas[0] + passo, incluidas[0]), *incluidas]
+    elif passo >= 0:
+        if incluidas[-1] + passo >= len(palavras):
+            raise LimiteInvalido("Não há mais fala nesse sentido.")
+        novas = [*incluidas, *range(incluidas[-1] + 1, incluidas[-1] + passo + 1)]
     else:
-        ultima += passo
-    if primeira < 0 or ultima >= len(palavras):
-        raise LimiteInvalido("Não há mais fala nesse sentido.")
-    if primeira > ultima:
+        novas = incluidas[:passo]
+    if not novas:
         raise LimiteInvalido("O corte ficaria sem nenhuma palavra.")
-    novo = _com_limites(palavras, corte, primeira, ultima)
+    novo = corte_com_indices(palavras, corte, novas)
     if novo.duracao < DURACAO_MINIMA_S:
         raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")
     return novo
@@ -124,18 +215,37 @@ def mover_por_frase(
     if sentido not in (-1, 1):
         raise ValueError("sentido deve ser -1 ou +1")
     frases = frases if frases is not None else separar_frases(palavras)
-    primeira, ultima = indices_das_palavras(palavras, corte)
+    incluidas = indices_incluidos(palavras, corte)
+    if not incluidas:
+        raise LimiteInvalido("Não há fala da transcrição neste corte.")
     if ponta == "inicio":
         pontos = sorted({f.primeira for f in frases})
-        atual = primeira
+        atual = incluidas[0]
     else:
         pontos = sorted({f.ultima for f in frases})
-        atual = ultima
+        atual = incluidas[-1]
     alvos = [p for p in pontos if (p > atual if sentido > 0 else p < atual)]
     if not alvos:
         raise LimiteInvalido("Não há mais fala nesse sentido.")
     alvo = alvos[0] if sentido > 0 else alvos[-1]
-    return mover_limite(palavras, corte, ponta, alvo - atual)
+    if ponta == "inicio":
+        novas = (
+            [i for i in incluidas if i >= alvo]
+            if sentido > 0
+            else [*range(alvo, atual), *incluidas]
+        )
+    else:
+        novas = (
+            [*incluidas, *range(atual + 1, alvo + 1)]
+            if sentido > 0
+            else [i for i in incluidas if i <= alvo]
+        )
+    if not novas:
+        raise LimiteInvalido("O corte ficaria sem nenhuma palavra.")
+    novo = corte_com_indices(palavras, corte, novas)
+    if novo.duracao < DURACAO_MINIMA_S:
+        raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")
+    return novo
 
 
 @dataclass(frozen=True)
@@ -295,27 +405,41 @@ def definir_limite(
 
     O início cai no começo de uma palavra e o fim, no fim de outra; o respiro é o de sempre.
     """
-    primeira, ultima = indices_das_palavras(palavras, corte)
+    incluidas = indices_incluidos(palavras, corte)
+    if not incluidas:
+        raise LimiteInvalido("Não há fala da transcrição neste corte.")
     if ponta == "inicio":
         alvo = min(range(len(palavras)), key=lambda i: abs(palavras[i].inicio - segundos))
-        primeira = alvo
+        if alvo > incluidas[-1]:
+            raise LimiteInvalido("O início ficaria depois do fim.")
+        novas = (
+            [i for i in incluidas if i >= alvo]
+            if alvo >= incluidas[0]
+            else [*range(alvo, incluidas[0]), *incluidas]
+        )
     else:
         alvo = min(range(len(palavras)), key=lambda i: abs(palavras[i].fim - segundos))
-        ultima = alvo
-    if primeira > ultima:
-        raise LimiteInvalido("O início ficaria depois do fim.")
-    novo = _com_limites(palavras, corte, primeira, ultima)
+        if alvo < incluidas[0]:
+            raise LimiteInvalido("O início ficaria depois do fim.")
+        novas = (
+            [i for i in incluidas if i <= alvo]
+            if alvo <= incluidas[-1]
+            else [*incluidas, *range(incluidas[-1] + 1, alvo + 1)]
+        )
+    novo = corte_com_indices(palavras, corte, novas)
     if novo.duracao < DURACAO_MINIMA_S:
         raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")
     return novo
 
 
 def palavras_do_corte(palavras: Sequence[Palavra], corte: Corte) -> list[Palavra]:
-    """As palavras da transcrição que estão dentro do corte."""
+    """As palavras da transcrição que estão dentro do corte (menos as que os saltos tiram)."""
     return [
         p
         for p in palavras
-        if p.fim > corte.inicio + _TOLERANCIA_S and p.inicio < corte.fim - _TOLERANCIA_S
+        if p.fim > corte.inicio + _TOLERANCIA_S
+        and p.inicio < corte.fim - _TOLERANCIA_S
+        and not _no_salto(p, corte.saltos)
     ]
 
 
@@ -346,6 +470,173 @@ def legenda_corrigida(palavras: Sequence[Palavra], corte: Corte, texto: str) -> 
     return "" if normal == original else normal
 
 
+def legenda_preservada(palavras: Sequence[Palavra], antes: Corte, depois: Corte) -> str:
+    """A legenda corrigida de `antes` adaptada a `depois`, que mudou as palavras do Short.
+
+    As palavras que continuam no corte mantêm a correção; as que entraram vêm como a transcrição as
+    tem; as que saíram levam a correção embora. Devolve o texto a guardar em `Corte.legenda`
+    (vazio se, no fim, nada difere da transcrição, ou se `antes` não tinha correção).
+    """
+    if not antes.legenda:
+        return ""
+    antigas, novas = indices_incluidos(palavras, antes), indices_incluidos(palavras, depois)
+    comuns = set(antigas) & set(novas)
+    if not comuns:  # nenhuma palavra continua: as correções não valem mais
+        return ""
+    trechos = [(palavras[de].inicio, palavras[ate].fim) for de, ate in faixas_de(comuns)]
+    corrigidas = palavras_com_a_legenda(palavras, antes)
+
+    def continua(p: Palavra) -> bool:
+        meio = (p.inicio + p.fim) / 2
+        return any(de - _TOLERANCIA_S <= meio <= ate for de, ate in trechos)
+
+    mantidas = [p for p in corrigidas if continua(p)]
+    entradas = [palavras[i] for i in sorted(set(novas) - set(antigas))]
+    ordenadas = sorted([*mantidas, *entradas], key=lambda p: (p.inicio, p.fim))
+    return legenda_corrigida(palavras, depois, " ".join(p.texto for p in ordenadas))
+
+
+# --- a tabela de frases da janela do corte ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LinhaDaTabela:
+    """Uma linha da tabela da janela: uma frase, ou o pedaço dela que fica de um lado do corte.
+
+    `fora` é o que o Short não pega; `dentro`, o que ele tem; `cortado`, o que um salto tirou de
+    dentro dele. `inicio`, `corta`, `volta` e `fim` são marcadores (sem palavras): onde o Short
+    começa, onde um pedaço sai, onde ele continua e onde termina.
+    """
+
+    tipo: Literal["fora", "dentro", "cortado", "inicio", "corta", "volta", "fim"]
+    tempo: float = 0.0  # onde a primeira palavra da linha foi dita, em segundos
+    textos: tuple[str, ...] = ()
+    indices: tuple[int, ...] = ()  # posição de cada palavra na transcrição (vazio = não se sabe)
+
+    @property
+    def texto(self) -> str:
+        return " ".join(self.textos)
+
+    @property
+    def e_marcador(self) -> bool:
+        return self.tipo in ("inicio", "corta", "volta", "fim")
+
+
+def _fecha_frase(texto: str) -> bool:
+    return texto.rstrip().rstrip("\"'”’»)]").endswith((".", "?", "!", "…"))
+
+
+def linhas_da_tabela(
+    palavras: Sequence[Palavra],
+    corte: Corte,
+    frases: Sequence[Frase],
+    *,
+    fora: int = 220,
+    texto_dentro: str | None = None,
+) -> list[LinhaDaTabela]:
+    """O corte e o que há ao redor, uma frase por linha: as de fora, o marcador de começo, as do
+    Short (com os pedaços cortados e seus marcadores) e o marcador de fim, e as de fora de novo.
+
+    Mostra todas as palavras do corte mais `fora` palavras antes do começo e depois do fim. Uma
+    frase que o corte atravessa aparece em várias linhas, uma de cada lado do marcador.
+    `texto_dentro` é a legenda como está sendo editada (`None` = a guardada no corte; vazio = a da
+    transcrição): se difere da transcrição, as linhas do Short saem dela, quebradas na pontuação, e
+    sem `indices`.
+    """
+    incluidas = indices_incluidos(palavras, corte)
+    if not incluidas:
+        raise LimiteInvalido("Não há fala da transcrição neste corte.")
+    primeira, ultima = incluidas[0], incluidas[-1]
+    de, ate = max(0, primeira - fora), min(len(palavras) - 1, ultima + fora)
+    no_short = set(incluidas)
+    inicios_de_frase = {f.primeira for f in frases}
+
+    regioes: list[tuple[str, list[int]]] = []
+    for i in range(de, ate + 1):
+        tipo = "fora" if i < primeira or i > ultima else ("dentro" if i in no_short else "cortado")
+        if regioes and regioes[-1][0] == tipo:
+            regioes[-1][1].append(i)
+        else:
+            regioes.append((tipo, [i]))
+
+    def por_frases(indices: list[int], tipo: Literal["fora", "dentro", "cortado"]):
+        linhas: list[LinhaDaTabela] = []
+        atual: list[int] = []
+        for i in indices:
+            if atual and i in inicios_de_frase:
+                linhas.append(_linha_de_indices(palavras, atual, tipo))
+                atual = []
+            atual.append(i)
+        if atual:
+            linhas.append(_linha_de_indices(palavras, atual, tipo))
+        return linhas
+
+    dentro = palavras_do_corte(palavras, corte)
+    escrita = corte.legenda if texto_dentro is None else texto_dentro
+    corrigidas = aplicar_edicao(dentro, escrita) if escrita.strip() and dentro else dentro
+    editado = [p.texto for p in corrigidas] != [p.texto for p in dentro]
+
+    # as palavras corrigidas vão para o pedaço do Short em que foram ditas
+    por_pedaco: dict[int, list[Palavra]] = {}
+    if editado:
+        pedacos = [r for r in regioes if r[0] == "dentro"]
+        comecos = [palavras[r[1][0]].inicio for r in pedacos]
+        for p in corrigidas:
+            k = max(0, bisect_right(comecos, (p.inicio + p.fim) / 2 + _TOLERANCIA_S) - 1)
+            por_pedaco.setdefault(k, []).append(p)
+
+    linhas: list[LinhaDaTabela] = []
+    visto_dentro = False
+    fim_posto = False
+    numero_do_pedaco = -1
+    for tipo, indices in regioes:
+        if tipo == "fora":
+            if visto_dentro and not fim_posto:
+                linhas.append(LinhaDaTabela("fim"))
+                fim_posto = True
+            linhas += por_frases(indices, "fora")
+        elif tipo == "cortado":
+            linhas.append(LinhaDaTabela("corta"))
+            linhas += por_frases(indices, "cortado")
+        else:
+            numero_do_pedaco += 1
+            linhas.append(LinhaDaTabela("volta" if visto_dentro else "inicio"))
+            visto_dentro = True
+            if not editado:
+                linhas += por_frases(indices, "dentro")
+            else:
+                atual_p: list[Palavra] = []
+                for p in por_pedaco.get(numero_do_pedaco, []):
+                    atual_p.append(p)
+                    if _fecha_frase(p.texto):
+                        linhas.append(_linha_de_palavras(atual_p))
+                        atual_p = []
+                if atual_p:
+                    linhas.append(_linha_de_palavras(atual_p))
+    if not fim_posto:
+        linhas.append(LinhaDaTabela("fim"))
+    return linhas
+
+
+def _linha_de_indices(
+    palavras: Sequence[Palavra],
+    indices: list[int],
+    tipo: Literal["fora", "dentro", "cortado"],
+) -> LinhaDaTabela:
+    return LinhaDaTabela(
+        tipo,
+        tempo=palavras[indices[0]].inicio,
+        textos=tuple(palavras[i].texto for i in indices),
+        indices=tuple(indices),
+    )
+
+
+def _linha_de_palavras(palavras: Sequence[Palavra]) -> LinhaDaTabela:
+    return LinhaDaTabela(
+        "dentro", tempo=palavras[0].inicio, textos=tuple(p.texto for p in palavras)
+    )
+
+
 def palavras_com_a_legenda(palavras: Sequence[Palavra], corte: Corte) -> list[Palavra]:
     """As palavras do corte com a legenda corrigida aplicada, mantendo os tempos da fala."""
     dentro = palavras_do_corte(palavras, corte)
@@ -356,45 +647,68 @@ def palavras_com_a_legenda(palavras: Sequence[Palavra], corte: Corte) -> list[Pa
 
 @dataclass(frozen=True)
 class MudancaDeLimite:
-    """O que um ajuste de início ou fim acrescentou ou tirou do corte, palavra por palavra."""
+    """O que um ajuste acrescentou ou tirou do corte, palavra por palavra: nas pontas ou no meio."""
 
     inicio_acrescentou: tuple[str, ...] = ()
     inicio_tirou: tuple[str, ...] = ()
     fim_acrescentou: tuple[str, ...] = ()
     fim_tirou: tuple[str, ...] = ()
+    meio_acrescentou: tuple[str, ...] = ()
+    meio_tirou: tuple[str, ...] = ()
 
     @property
     def houve(self) -> bool:
         return bool(
-            self.inicio_acrescentou or self.inicio_tirou or self.fim_acrescentou or self.fim_tirou
+            self.inicio_acrescentou
+            or self.inicio_tirou
+            or self.fim_acrescentou
+            or self.fim_tirou
+            or self.meio_acrescentou
+            or self.meio_tirou
         )
 
     @property
-    def ponta(self) -> Ponta | None:
-        """Onde o corte mudou (o fim, se mudou nas duas pontas)."""
+    def ponta(self) -> PontaDaMudanca | None:
+        """Onde o corte mudou (o fim, se mudou nas duas pontas; `meio` se só mudou por dentro)."""
         if self.fim_acrescentou or self.fim_tirou:
             return "fim"
         if self.inicio_acrescentou or self.inicio_tirou:
             return "inicio"
+        if self.meio_acrescentou or self.meio_tirou:
+            return "meio"
         return None
 
 
 def comparar_cortes(palavras: Sequence[Palavra], antes: Corte, depois: Corte) -> MudancaDeLimite:
     """As palavras que entraram e saíram do corte entre `antes` e `depois`."""
-    try:
-        p0, u0 = indices_das_palavras(palavras, antes)
-        p1, u1 = indices_das_palavras(palavras, depois)
-    except LimiteInvalido:
+    antigas, novas = indices_incluidos(palavras, antes), indices_incluidos(palavras, depois)
+    if not antigas or not novas:
         return MudancaDeLimite()
 
-    def textos(de: int, ate: int) -> tuple[str, ...]:
-        return tuple(p.texto for p in palavras[de : ate + 1]) if ate >= de else ()
+    def textos(indices) -> tuple[str, ...]:
+        return tuple(palavras[i].texto for i in indices)
 
+    def repartir(
+        indices: list[int], primeira: int, ultima: int
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        """(antes da primeira, depois da última, no meio): o texto de cada grupo."""
+        return (
+            textos(i for i in indices if i < primeira),
+            textos(i for i in indices if i > ultima),
+            textos(i for i in indices if primeira <= i <= ultima),
+        )
+
+    acrescentadas = sorted(set(novas) - set(antigas))
+    tiradas = sorted(set(antigas) - set(novas))
+    inicio_mais, fim_mais, meio_mais = repartir(acrescentadas, antigas[0], antigas[-1])
+    inicio_menos, fim_menos, meio_menos = repartir(tiradas, novas[0], novas[-1])
     return MudancaDeLimite(
-        inicio_acrescentou=textos(p1, min(p0 - 1, u1)) if p1 < p0 else (),
-        inicio_tirou=textos(p0, min(p1 - 1, u0)) if p1 > p0 else (),
-        fim_acrescentou=textos(max(u0 + 1, p1), u1) if u1 > u0 else (),
-        fim_tirou=textos(max(u1 + 1, p0), u0) if u1 < u0 else (),
+        inicio_acrescentou=inicio_mais,
+        inicio_tirou=inicio_menos,
+        fim_acrescentou=fim_mais,
+        fim_tirou=fim_menos,
+        meio_acrescentou=meio_mais,
+        meio_tirou=meio_menos,
     )
 
 

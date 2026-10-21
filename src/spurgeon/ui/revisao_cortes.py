@@ -16,6 +16,7 @@ import customtkinter as ctk
 from spurgeon.core.config import Pastas
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.ui import dialogos
+from spurgeon.ui.dicas import dica
 from spurgeon.ui.studio_shorts import (  # noqa: F401 - reexportados: os testes e outros usam daqui
     ORDEM_HORARIO,
     ORDEM_NOTA,
@@ -76,12 +77,18 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
     def _montar_rodape(self) -> None:
         rodape = ctk.CTkFrame(self, fg_color="transparent")
         rodape.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
-        ctk.CTkButton(rodape, text="Salvar e fechar", command=self.salvar_e_fechar).pack(
-            side="right"
+        salvar = ctk.CTkButton(rodape, text="Salvar e fechar", command=self.salvar_e_fechar)
+        salvar.pack(side="right")
+        dica(
+            salvar,
+            "Grava os cortes como estão (marcados, ajustados e com a legenda corrigida) e fecha "
+            "a janela (Ctrl+S).",
         )
-        ctk.CTkButton(
+        cancelar = ctk.CTkButton(
             rodape, text="Cancelar", width=90, fg_color=("gray70", "gray30"), command=self._cancelar
-        ).pack(side="right", padx=8)
+        )
+        cancelar.pack(side="right", padx=8)
+        dica(cancelar, "Fecha sem gravar o que você mudou.")
         ctk.CTkLabel(
             rodape,
             text="Alt+↑/↓ muda de corte · Ctrl+Espaço marca ou desmarca · Ctrl+S salva. "

@@ -9,11 +9,14 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from spurgeon.core.config import INFO_MODELOS_WHISPER, PRESETS_X264, Pastas
+from spurgeon.ui import dicas
+from spurgeon.ui.ajuda import CabecalhoDeEtapa, dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.formulario import (
     DICAS_MODO,
     ROTULO_USO_75,
     ROTULO_USO_100,
+    ROTULOS_FADE,
     ROTULOS_MODO,
     ValoresFormulario,
     aviso_qualidade,
@@ -33,6 +36,52 @@ _COR_AVISO = "#e0a030"
 
 #: os nomes dos botões que trocam de página, na ordem das páginas
 NOMES_DAS_PAGINAS = ("1 · Vídeo e geração", "2 · Corte e imagem", "3 · Revisão e opções")
+
+#: o que o "?" de cada cartão explica (o do cartão 1 é do `PainelEntrada`, os do 4 e do 5 dos
+#: painéis de tratamento e de marca)
+AJUDAS_DOS_CARTOES = {
+    "gerar": (
+        "Escolha o que o programa vai produzir. “Tudo” processa um sermão novo; “Só Shorts” e "
+        "“Só vinhetas” reaproveitam um projeto já feito. Em “Tudo”, marque o que quer: limpar o "
+        "áudio, o vídeo completo sem silêncios com legendas, a introdução e a vinheta, e os "
+        "Shorts com legendas dinâmicas."
+    ),
+    "ajustes": (
+        "Ajustes da imagem antes de renderizar: cortar o começo e o fim da gravação, aproximar a "
+        "câmera (zoom) e acertar o zoom e a legenda dos Shorts. Clique no título de cada seção "
+        "para abri-la. Tudo é opcional: se a gravação já está boa, deixe como está."
+    ),
+    "revisao": (
+        "Marque onde o processamento deve parar para você conferir o trabalho: depois da "
+        "transcrição, para corrigir o texto, e antes de renderizar os Shorts, para escolher os "
+        "cortes. É mais cuidadoso e um pouco mais demorado; desmarque para processar tudo de uma "
+        "vez."
+    ),
+    "processamento": (
+        "Como o computador vai trabalhar: quanto do processador usar, qual modelo transcreve a "
+        "fala (os maiores acertam mais, mas demoram) e a qualidade do vídeo final. As opções "
+        "recomendadas para este PC já vêm marcadas."
+    ),
+    "avancado": (
+        "Ajustes finos que quase nunca precisam mudar: pausa residual, duração e nota dos Shorts, "
+        "modelo de IA, deslocamento do recorte, qualidade personalizada e uso do disco. Na "
+        "dúvida, não mexa."
+    ),
+}
+BALOES_DO_MODO = {
+    "Tudo": (
+        "Faz o processamento completo de um sermão novo: áudio, transcrição, vídeo sem "
+        "silêncios, Shorts e vinhetas, conforme o que estiver marcado abaixo."
+    ),
+    "Só Shorts": (
+        "Para um projeto que já foi transcrito: refaz só os Shorts (escolha dos cortes, "
+        "legendas e vídeos verticais), sem renderizar o vídeo longo de novo."
+    ),
+    "Só vinhetas": (
+        "Para um projeto que já tem o vídeo longo pronto: só emenda a introdução e a vinheta "
+        "final, sem recodificar. É rápido."
+    ),
+}
 
 #: o que o "O que gerar" mostra em cada modo (na ordem em que aparece)
 _GRUPOS_POR_MODO = {
@@ -69,9 +118,12 @@ class PainelOpcoes(ctk.CTkFrame):
         self._rotulos_whisper = rotulos_whisper()
         self._rotulos_qualidade = rotulos_qualidade()
         self._todos: list[ctk.CTkBaseClass] = []
+        #: os cartões deste painel por chave (gerar, ajustes, revisao, processamento)
+        self.cartoes: dict[str, ctk.CTkFrame] = {}
         self._por_nome: dict[str, ctk.CTkBaseClass] = {}
 
         self._rotulos_modo = {rotulo: modo for modo, rotulo in ROTULOS_MODO.items()}
+        self._estilos_do_fade = {rotulo: estilo for estilo, rotulo in ROTULOS_FADE.items()}
         self.modo = ctk.StringVar(value=ROTULOS_MODO[valores.modo])
         self.uso = ctk.IntVar(value=valores.uso_cpu)
         self.whisper = ctk.StringVar()
@@ -112,6 +164,7 @@ class PainelOpcoes(ctk.CTkFrame):
             )
         }
         self.ollama = ctk.StringVar()
+        self.fade_estilo = ctk.StringVar(value=ROTULOS_FADE[valores.fade_estilo])
 
         # Três páginas, uma de cada vez na tela: menos widgets para rolar e uma tela mais curta.
         self.paginas = [ctk.CTkFrame(self, fg_color="transparent") for _ in NOMES_DAS_PAGINAS]
@@ -151,13 +204,21 @@ class PainelOpcoes(ctk.CTkFrame):
             pagina.pack_forget()
         self.paginas[indice].pack(fill="x")
 
-    def _cartao(self, titulo: str) -> ctk.CTkFrame:
+    def _cartao(self, titulo: str, ajuda: str = "", chave: str = "") -> ctk.CTkFrame:
+        """Um cartão da coluna: o título à esquerda e, se há `ajuda`, o "?" à direita."""
         cartao = ctk.CTkFrame(self.paginas[self._montando])
         cartao.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(cartao, text=titulo, font=ctk.CTkFont(size=15, weight="bold")).pack(
-            anchor="w", padx=12, pady=(10, 4)
-        )
+        cartao.cabecalho = CabecalhoDeEtapa(cartao, titulo, ajuda)
+        cartao.cabecalho.pack(fill="x", padx=12, pady=(10, 4))
+        if chave:
+            self.cartoes[chave] = cartao
         return cartao
+
+    @staticmethod
+    def _balao(widget, texto: dicas.Texto) -> None:
+        """A dica de ferramenta (o balão ao passar o mouse) de um widget."""
+        if texto:
+            dicas.dica(widget, texto)
 
     def _registrar(self, widget, nome: str | None = None):
         self._todos.append(widget)
@@ -202,22 +263,24 @@ class PainelOpcoes(ctk.CTkFrame):
         rotulo.pack(anchor="w", padx=(12 + recuo, 12), pady=(0, 6))
         return rotulo
 
-    def _check(self, pai, texto: str, nome: str, recuo: int = 0, ajuda: str = ""):
+    def _check(self, pai, texto: str, nome: str, recuo: int = 0, ajuda: str = "", balao=""):
         caixa = ctk.CTkCheckBox(pai, text=texto, variable=self.bools[nome], command=self._mudou)
         caixa.pack(anchor="w", padx=(12 + recuo, 12), pady=3)
+        self._balao(caixa, balao)
         if ajuda:
             self._ajuda(pai, ajuda, recuo + 28)
         return self._registrar(caixa, nome)
 
     def _campo(
         self, pai, rotulo: str, nome: str, *, largura: int = 80, dica: str = "", recuo=0,
-        ajuda: str = "",
+        ajuda: str = "", balao: str = "",
     ):  # fmt: skip
         linha = ctk.CTkFrame(pai, fg_color="transparent")
         linha.pack(anchor="w", padx=(12 + recuo, 12), pady=3, fill="x")
         ctk.CTkLabel(linha, text=rotulo, anchor="w").pack(side="left")
         entrada = ctk.CTkEntry(linha, textvariable=self.textos[nome], width=largura)
         entrada.pack(side="left", padx=8)
+        self._balao(entrada, balao)
         entrada.bind("<KeyRelease>", lambda _e: self._ao_mudar())
         if dica:
             ctk.CTkLabel(linha, text=dica, text_color=_COR_DICA, font=ctk.CTkFont(size=12)).pack(
@@ -227,9 +290,19 @@ class PainelOpcoes(ctk.CTkFrame):
             self._ajuda(pai, ajuda, recuo)
         return self._registrar(entrada, nome)
 
-    def _linha_de_arquivo(self, pai, rotulo: str, nome_check: str, nome_arquivo: str, padrao: str):
+    def _linha_de_arquivo(
+        self,
+        pai,
+        rotulo: str,
+        nome_check: str,
+        nome_arquivo: str,
+        padrao: str,
+        *,
+        balao: str = "",
+        quando: str = "",
+    ):
         """Caixa de marcar + o arquivo usado (o padrão de `recursos/` ou o escolhido)."""
-        self._check(pai, rotulo, nome_check, recuo=28)
+        self._check(pai, rotulo, nome_check, recuo=28, balao=balao)
         linha = ctk.CTkFrame(pai, fg_color="transparent")
         linha.pack(anchor="w", padx=(12 + 56, 12), pady=(0, 4), fill="x")
         botao = ctk.CTkButton(
@@ -241,6 +314,10 @@ class PainelOpcoes(ctk.CTkFrame):
             command=lambda: self._escolher_arquivo(nome_arquivo, rotulo),
         )
         botao.pack(side="left")
+        self._balao(
+            botao,
+            f"Escolhe outro vídeo para {quando}, no lugar do padrão ({padrao}, na pasta recursos).",
+        )
         padrao_btn = ctk.CTkButton(
             linha,
             text="Usar o padrão",
@@ -250,6 +327,10 @@ class PainelOpcoes(ctk.CTkFrame):
             command=lambda: self._definir_arquivo(nome_arquivo, ""),
         )
         padrao_btn.pack(side="left", padx=6)
+        self._balao(
+            padrao_btn,
+            f"Volta a usar o arquivo padrão ({padrao}) da pasta recursos, do lado do programa.",
+        )
         nome = ctk.CTkLabel(linha, text="", anchor="w", text_color=_COR_DICA)
         nome.pack(side="left", padx=4)
         self._registrar(botao, f"escolher_{nome_check}")
@@ -296,11 +377,23 @@ class PainelOpcoes(ctk.CTkFrame):
         self._mudou()
 
     def _montar_processamento(self) -> None:
-        c = self._cartao("7. Processamento")
+        c = self._cartao("7. Processamento", AJUDAS_DOS_CARTOES["processamento"], "processamento")
         ctk.CTkLabel(c, text="Uso do processador", anchor="w").pack(anchor="w", padx=12)
-        for rotulo, valor in ((ROTULO_USO_75, 75), (ROTULO_USO_100, 100)):
+        for rotulo, valor, balao in (
+            (
+                ROTULO_USO_75, 75,
+                "Usa cerca de três quartos dos núcleos do processador: o computador continua "
+                "utilizável para outras coisas enquanto o sermão é processado.",
+            ),
+            (
+                ROTULO_USO_100, 100,
+                "Usa o processador inteiro: termina mais cedo, mas o computador quase não "
+                "responde a mais nada durante o processamento.",
+            ),
+        ):  # fmt: skip
             r = ctk.CTkRadioButton(c, text=rotulo, variable=self.uso, value=valor)
             r.pack(anchor="w", padx=(24, 12), pady=2)
+            self._balao(r, balao)
             self._registrar(r)
 
         ctk.CTkLabel(c, text="Modelo do Whisper (transcrição)", anchor="w").pack(
@@ -315,6 +408,12 @@ class PainelOpcoes(ctk.CTkFrame):
             width=420,
         )
         self._menu_whisper.pack(anchor="w", padx=12, pady=(2, 2))
+        self._balao(
+            self._menu_whisper,
+            "O modelo que transcreve a fala. Os maiores acertam mais o português e os nomes, mas "
+            "são mais lentos e pesados. O marcado como “recomendado” é o melhor para este "
+            "computador.",
+        )
         self._registrar(self._menu_whisper)
         self._dica_whisper = self._dica(c)
         self._aviso_whisper = self._dica(c, empacotar=False)
@@ -329,6 +428,12 @@ class PainelOpcoes(ctk.CTkFrame):
             width=420,
         )
         self._menu_qualidade.pack(anchor="w", padx=12, pady=(2, 2))
+        self._balao(
+            self._menu_qualidade,
+            "O equilíbrio entre a qualidade do vídeo final e o tempo de renderização. “Máxima” dá "
+            "a melhor imagem e leva muito mais tempo; “Rápido” serve para testes. Num PC sem "
+            "placa de vídeo, a renderização pode levar horas.",
+        )
         self._registrar(self._menu_qualidade)
         self._dica_qualidade = self._dica(c, empacotar=False)
 
@@ -348,11 +453,12 @@ class PainelOpcoes(ctk.CTkFrame):
         return quadro
 
     def _montar_gerar(self) -> None:
-        c = self._cartao("2. O que gerar")
+        c = self._cartao("2. O que gerar", AJUDAS_DOS_CARTOES["gerar"], "gerar")
         self._seletor_modo = ctk.CTkSegmentedButton(
             c, values=list(ROTULOS_MODO.values()), variable=self.modo, command=self._mudou_modo
         )
         self._seletor_modo.pack(fill="x", padx=12, pady=(0, 2))
+        dica_do_seletor(self._seletor_modo, BALOES_DO_MODO)
         self._dica_modo = self._dica(c)
 
         audio = self._grupo(c, "Áudio")
@@ -361,6 +467,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "Limpar áudio (DeepFilterNet)",
             "limpar_audio",
             ajuda="Tira ruído de fundo com IA. Deixa o som e a transcrição melhores, mas é lento.",
+            balao="Use quando a gravação tem chiado, ventilador ou eco. Se o áudio já está "
+            "limpo, desligue para ganhar bastante tempo.",
         )
         self._check(
             audio,
@@ -368,6 +476,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "normalizar_volume",
             ajuda="Deixa o volume parecido do começo ao fim (−16 LUFS no vídeo longo e −14 nos "
             "Shorts).",
+            balao="Recomendado: põe o volume num nível que toca bem no YouTube e no celular, sem "
+            "estourar. Só muda o volume; o conteúdo do áudio é o mesmo.",
         )
 
         longo = self._grupo(c, "Vídeo completo")
@@ -376,6 +486,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "Gerar vídeo completo sem silêncios + arquivo .srt",
             "gerar_video_longo",
             ajuda="Corta as pausas longas, renderiza o sermão limpo e escreve as legendas (.srt).",
+            balao="Marque para ter o sermão inteiro, sem as pausas longas, e as legendas para "
+            "subir no YouTube. Desmarque se você só quer os Shorts.",
         )
         self._campo(
             longo,
@@ -384,20 +496,49 @@ class PainelOpcoes(ctk.CTkFrame):
             largura=64,
             dica="de 0,5 a 30",
             recuo=28,
+            balao="Silêncios mais longos que isto são cortados do vídeo; os mais curtos ficam "
+            "como estão. Quanto menor o número, mais corrido fica o sermão.",
         )
 
         vinhetas = self._grupo(c, "Introdução e vinheta final")
         self._linha_de_arquivo(
-            vinhetas, "Introdução", "introducao", "introducao_arquivo", "introducao.mp4"
-        )
+            vinhetas, "Introdução", "introducao", "introducao_arquivo", "introducao.mp4",
+            balao="Emenda um vídeo de abertura (a vinheta da igreja, por exemplo) antes do "
+            "sermão. Precisa do arquivo: veja o nome embaixo.",
+            quando="a introdução",
+        )  # fmt: skip
         self._linha_de_arquivo(
-            vinhetas, "Vinheta final", "vinheta_final", "vinheta_arquivo", "vinheta_final.mp4"
-        )
+            vinhetas, "Vinheta final", "vinheta_final", "vinheta_arquivo", "vinheta_final.mp4",
+            balao="Emenda um vídeo de encerramento depois do sermão. Precisa do arquivo: veja "
+            "o nome embaixo.",
+            quando="a vinheta final",
+        )  # fmt: skip
         self._check(
             vinhetas,
             "Suavizar com fade (imagem e som) entre a introdução/vinheta e o vídeo",
             "fade_vinhetas",
             recuo=28,
+            balao="Faz uma transição suave de imagem e som entre a introdução (ou a vinheta) e "
+            "o sermão, em vez de um corte seco.",
+        )
+        linha_estilo = ctk.CTkFrame(vinhetas, fg_color="transparent")
+        linha_estilo.pack(anchor="w", padx=(12 + 56, 12), pady=3, fill="x")
+        ctk.CTkLabel(linha_estilo, text="Como o fade acontece", anchor="w").pack(side="left")
+        self._seletor_fade = ctk.CTkSegmentedButton(
+            linha_estilo,
+            values=list(ROTULOS_FADE.values()),
+            variable=self.fade_estilo,
+            command=lambda _v: self._mudou(),
+        )
+        self._seletor_fade.pack(side="left", padx=8)
+        dica_do_seletor(
+            self._seletor_fade,
+            {
+                ROTULOS_FADE["mesclar"]: "A introdução se dissolve no vídeo, com as imagens e "
+                "os sons se misturando. O vídeo final fica um pouco mais curto.",
+                ROTULOS_FADE["preto"]: "A imagem escurece e volta, e o som some e volta. É o "
+                "único estilo possível no modo Só vinhetas.",
+            },
         )
         self._campo(
             vinhetas,
@@ -406,12 +547,17 @@ class PainelOpcoes(ctk.CTkFrame):
             largura=56,
             dica="de 0,1 a 3",
             recuo=56,
+            balao="Quanto dura a transição, em segundos. Mais curta é mais discreta.",
         )
         self._w_vinheta = self._ajuda(  # a dica de arquivo ausente vem logo depois deste texto
             vinhetas,
-            "A introdução escurece até o preto e o vídeo surge dele (e o mesmo, ao contrário, na "
-            "vinheta final), com o som acompanhando. No modo Só vinhetas o fade vale só do lado "
-            "da introdução e da vinheta, porque o vídeo pronto não é recodificado.",
+            "Mesclar: a introdução se dissolve no vídeo (e o vídeo na vinheta final), as duas "
+            "imagens e os dois sons se misturam, sem trecho escuro nem silêncio; o vídeo final "
+            "fica "
+            "a duração do fade mais curto. "
+            "Pelo preto: a imagem escurece e volta, e o som some e "
+            "volta. No modo Só vinhetas o fade sempre passa pelo preto, e só do lado da "
+            "introdução e da vinheta, porque o vídeo pronto não é recodificado.",
             56,
         )
         self._dica_recursos = self._dica(vinhetas, empacotar=False)
@@ -424,6 +570,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "gerar_shorts",
             ajuda="A IA procura os melhores trechos, escreve título e hashtags, e você aprova "
             "antes de renderizar.",
+            balao="Liga a escolha automática de cortes. Depois de processar, a aba Studio Shorts "
+            "lista os trechos sugeridos para você revisar, ajustar e renderizar.",
         )
         self._quadro_legendas = ctk.CTkFrame(shorts, fg_color="transparent")
         self._check(
@@ -432,6 +580,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "legendas_dinamicas",
             recuo=28,
             ajuda="Queima a legenda no vídeo dos Shorts. Sem isto o Short sai sem texto na tela.",
+            balao="Grava a legenda dentro do vídeo dos Shorts, com a palavra falada em destaque. "
+            "Desligue se você prefere pôr a legenda em outro programa.",
         )
         self._grupos = {"audio": audio, "longo": longo, "vinhetas": vinhetas, "shorts": shorts}
         self._modo_mostrado: str | None = None
@@ -453,21 +603,36 @@ class PainelOpcoes(ctk.CTkFrame):
 
     def _montar_ajustes_do_video(self) -> None:
         """O cartão onde a janela põe o corte do começo e do fim, o zoom e a legenda dos Shorts."""
-        self.cartao_ajustes = self._cartao("3. Corte e enquadramento")
+        self.cartao_ajustes = self._cartao(
+            "3. Corte e enquadramento", AJUDAS_DOS_CARTOES["ajustes"], "ajustes"
+        )
 
     def _montar_revisao(self) -> None:
-        c = self._cartao("6. Pontos de revisão")
+        c = self._cartao("6. Pontos de revisão", AJUDAS_DOS_CARTOES["revisao"], "revisao")
         self._check(
-            c, "Pausar para revisar a transcrição (.srt) antes de continuar", "revisar_transcricao"
+            c,
+            "Pausar para revisar a transcrição (.srt) antes de continuar",
+            "revisar_transcricao",
+            balao="O processamento para logo depois de transcrever, para você ler e corrigir o "
+            "texto (nomes, versículos, termos teológicos) antes de gerar as legendas e os "
+            "Shorts. Recomendado, principalmente nos primeiros sermões.",
         )
         self._check(
-            c, "Pausar para aprovar os cortes dos Shorts antes de renderizar", "aprovar_cortes"
+            c,
+            "Pausar para aprovar os cortes dos Shorts antes de renderizar",
+            "aprovar_cortes",
+            balao="O processamento para antes de renderizar os Shorts, para você escolher quais "
+            "cortes quer e ajustar o começo e o fim. Desligado, os Shorts marcados pela IA são "
+            "renderizados direto.",
         )
         ctk.CTkLabel(c, text="").pack(pady=1)
 
     def _montar_avancado(self) -> None:
+        cabecalho_avancado = ctk.CTkFrame(self.paginas[2], fg_color="transparent")
+        cabecalho_avancado.pack(fill="x", pady=(0, 4))
+        cabecalho_avancado.columnconfigure(0, weight=1)
         self._botao_avancado = ctk.CTkButton(
-            self.paginas[2],
+            cabecalho_avancado,
             text="▸ Opções avançadas",
             anchor="w",
             fg_color="transparent",
@@ -475,7 +640,19 @@ class PainelOpcoes(ctk.CTkFrame):
             hover_color=("gray80", "gray25"),
             command=self._alternar_avancado,
         )
-        self._botao_avancado.pack(fill="x", pady=(0, 4))
+        self._botao_avancado.grid(row=0, column=0, sticky="ew")
+        self._balao(
+            self._botao_avancado,
+            lambda: (
+                "Esconde os ajustes avançados."
+                if self._avancado_visivel
+                else "Mostra ajustes finos que quase nunca precisam mudar."
+            ),
+        )
+        self.icone_do_avancado = dicas.IconeDeAjuda(
+            cabecalho_avancado, AJUDAS_DOS_CARTOES["avancado"]
+        )
+        self.icone_do_avancado.grid(row=0, column=1, sticky="e", padx=(8, 12))
         self._avancado = ctk.CTkFrame(self.paginas[2])
         self._avancado_visivel = False
         a = self._avancado
@@ -486,6 +663,8 @@ class PainelOpcoes(ctk.CTkFrame):
             largura=64,
             ajuda="Quanto silêncio sobra em cada pausa cortada (metade em cada ponta), para a "
             "emenda não soar seca.",
+            balao="Segundos de silêncio que ficam em cada pausa cortada. Zero faz um corte seco; "
+            "cerca de 1 s deixa a fala respirar entre as frases.",
         )
         self._campo(
             a,
@@ -493,6 +672,7 @@ class PainelOpcoes(ctk.CTkFrame):
             "shorts_min",
             largura=64,
             ajuda="Trechos mais curtos que isto não viram Short. O padrão é 30 s.",
+            balao="Duração mínima, em segundos, de um trecho para ser sugerido como Short.",
         )
         self._campo(
             a,
@@ -502,6 +682,8 @@ class PainelOpcoes(ctk.CTkFrame):
             dica="até 180",
             ajuda="Trechos mais longos que isto nem são avaliados. 180 s (3 min) é o limite do "
             "YouTube. A nota favorece os de cerca de 60 s, mas os longos ainda concorrem.",
+            balao="Duração máxima, em segundos, de um trecho para ser avaliado como Short (até "
+            "180, o limite do YouTube).",
         )
         self._campo(
             a,
@@ -509,6 +691,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "limite_shorts",
             largura=64,
             ajuda="O máximo de cortes que vêm marcados; os demais bons viram reservas desmarcadas.",
+            balao="Quantos Shorts, no máximo, já vêm marcados para renderizar. Os outros bons "
+            "ficam na lista como reservas, desmarcados.",
         )
         self._campo(
             a,
@@ -517,6 +701,8 @@ class PainelOpcoes(ctk.CTkFrame):
             largura=64,
             dica="0 a 100",
             ajuda="Cortes abaixo desta nota aparecem na aprovação, mas desmarcados.",
+            balao="A nota vai de 0 a 100. Suba este número para sugerir menos Shorts, só os "
+            "melhores; desça para ter mais opções.",
         )
         linha_ollama = ctk.CTkFrame(a, fg_color="transparent")
         linha_ollama.pack(anchor="w", padx=12, pady=3, fill="x")
@@ -530,6 +716,11 @@ class PainelOpcoes(ctk.CTkFrame):
             width=230,
         )
         self._menu_ollama.pack(side="left", padx=8)
+        self._balao(
+            self._menu_ollama,
+            "A IA local (Ollama) que avalia os trechos e escreve os títulos. Os modelos maiores "
+            "entendem melhor o português, mas são mais lentos.",
+        )
         self._registrar(self._menu_ollama, "ollama_menu")
         atualizar = ctk.CTkButton(
             linha_ollama,
@@ -540,6 +731,9 @@ class PainelOpcoes(ctk.CTkFrame):
             command=lambda: self._ao_listar_ollama() if self._ao_listar_ollama else None,
         )
         atualizar.pack(side="left")
+        self._balao(
+            atualizar, "Pergunta ao Ollama quais modelos estão instalados e atualiza a lista."
+        )
         self._registrar(atualizar, "ollama_atualizar")
         self._ajuda(
             a,
@@ -556,6 +750,9 @@ class PainelOpcoes(ctk.CTkFrame):
             ajuda="Move o enquadramento vertical dos Shorts para o lado. +4 põe o pregador no meio "
             "com a câmera fixa do púlpito. O zoom e a altura da legenda dos Shorts ficam em "
             "“Ajustar o zoom e a legenda dos Shorts”, no começo da tela.",
+            balao="Move o recorte vertical dos Shorts para o lado, em % da largura: negativo "
+            "para a esquerda, positivo para a direita. Use se o pregador não ficar no centro do "
+            "Short.",
         )
         linha = ctk.CTkFrame(a, fg_color="transparent")
         linha.pack(anchor="w", padx=12, pady=3)
@@ -568,10 +765,20 @@ class PainelOpcoes(ctk.CTkFrame):
             command=self._mudou_menu,
         )
         menu.pack(side="left", padx=8)
+        self._balao(
+            menu,
+            "Velocidade de compressão do vídeo: quanto mais lento, menor o arquivo para a mesma "
+            "qualidade. Só vale quando a Qualidade é “Personalizado”.",
+        )
         self._registrar(menu, "x264_preset")
         ctk.CTkLabel(linha, text="  CRF").pack(side="left")
         crf = ctk.CTkEntry(linha, textvariable=self.textos["crf"], width=50)
         crf.pack(side="left", padx=8)
+        self._balao(
+            crf,
+            "O nível de qualidade: números menores dão mais qualidade e arquivos maiores (de 16 a "
+            "23 é o usual). Só vale quando a Qualidade é “Personalizado”.",
+        )
         self._registrar(crf, "crf")
         self._ajuda(
             a,
@@ -584,6 +791,8 @@ class PainelOpcoes(ctk.CTkFrame):
             "manter_intermediarios",
             ajuda="Não apaga os áudios e partes pesadas de _work/ ao concluir. Ocupam vários GB; "
             "só vale a pena para investigar um problema.",
+            balao="Deixe desligado no uso normal: ao terminar, os arquivos de trabalho pesados "
+            "são apagados para liberar disco (a análise da IA é guardada).",
         )
         self._check(
             a,
@@ -591,6 +800,7 @@ class PainelOpcoes(ctk.CTkFrame):
             "impedir_bloqueio",
             ajuda="As renderizações levam horas. Com isto ligado o Windows não suspende nem "
             "bloqueia o PC enquanto o aplicativo trabalha (volta ao normal ao terminar).",
+            balao="Recomendado: evita que o computador durma no meio de uma renderização longa.",
         )
         ctk.CTkLabel(a, text="").pack(pady=1)
 
@@ -612,6 +822,7 @@ class PainelOpcoes(ctk.CTkFrame):
             qualidade=self._rotulos_qualidade.get(self.qualidade.get(), "maxima"),
             **{nome: var.get() for nome, var in self.bools.items()},
             **{nome: var.get() for nome, var in self.textos.items()},
+            fade_estilo=self._estilos_do_fade.get(self.fade_estilo.get(), "mesclar"),
             **self.marca.valores(),
             **self.tratamento.valores(),
         )
@@ -624,6 +835,7 @@ class PainelOpcoes(ctk.CTkFrame):
             var.set(getattr(v, nome))
         for nome, var in self.textos.items():
             var.set(getattr(v, nome))
+        self.fade_estilo.set(ROTULOS_FADE.get(v.fade_estilo, ROTULOS_FADE["mesclar"]))
         self.selecionar_whisper(v.whisper_modelo)
         self.selecionar_qualidade(v.qualidade)
         self.definir_modelos_ollama(self._ollama_instalados)
@@ -684,6 +896,7 @@ class PainelOpcoes(ctk.CTkFrame):
             widget.configure(state="normal" if livre else "disabled")
         self._seletor_modo.configure(state="normal" if livre else "disabled")
         self._mostrar_grupos(v.modo)
+        self._seletor_fade.configure(state="normal" if livre and h.fade_estilo else "disabled")
         self._dica_modo.configure(text=DICAS_MODO[v.modo])
         self.marca.aplicar_habilitacoes(h, livre=livre)
         self.tratamento.aplicar_habilitacoes(h, livre=livre)

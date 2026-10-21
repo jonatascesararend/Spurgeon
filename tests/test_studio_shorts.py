@@ -239,15 +239,38 @@ def test_desfazer_correcoes_volta_ao_texto_da_transcricao(editor):
     assert editor._texto.get("1.0", "end-1c") == original
 
 
-@pytest.mark.gui
-def test_mexer_no_inicio_descarta_a_legenda_corrigida_e_avisa(editor):
-    editor.selecionar(editor._ordem[0])
+def corrigir_a_primeira_palavra(editor):
+    """Troca a primeira palavra da legenda do corte aberto e devolve a palavra nova."""
+    original = editor._texto.get("1.0", "end-1c")
+    primeira = original.split()[0]
     editor._texto.delete("1.0", "end")
-    editor._texto.insert("1.0", "Legenda corrigida pela pessoa.")
-    assert editor.mover("fim", -3)
+    editor._texto.insert("1.0", original.replace(primeira, "corrigida", 1))
+    editor._ao_editar_legenda()
+    return "corrigida"
+
+
+@pytest.mark.gui
+def test_mexer_nas_pontas_mantem_a_correcao_das_palavras_que_ficam(editor):
+    editor.selecionar(editor._ordem[0])
+    nova = corrigir_a_primeira_palavra(editor)
+    assert editor.mover("fim", -3)  # tira 3 palavras do fim: a correção, no começo, continua
+    corte = editor._cortes[editor._atual]
+    assert corte.legenda.startswith(nova)
+    assert editor._rotulo_ajuste.cget("text") == ""
+    assert editor._texto.get("1.0", "end-1c").split()[0] == nova
+    assert editor._janela.texto_dentro().split()[0] == nova  # a tabela mostra a correção também
+    assert editor.mover_frase("fim", 1)  # e acrescentar uma frase não a perde
+    assert editor._cortes[editor._atual].legenda.startswith(nova)
+
+
+@pytest.mark.gui
+def test_a_correcao_de_uma_palavra_que_sai_do_corte_e_descartada_e_avisa(editor):
+    editor.selecionar(editor._ordem[0])
+    corrigir_a_primeira_palavra(editor)
+    assert editor.mover("inicio", 3)  # a palavra corrigida saiu do começo do corte
     corte = editor._cortes[editor._atual]
     assert corte.legenda == ""
-    assert "correções da legenda foram descartadas" in editor._rotulo_ajuste.cget("text")
+    assert "eram de palavras que saíram do corte" in editor._rotulo_ajuste.cget("text")
 
 
 @pytest.mark.gui
@@ -348,22 +371,29 @@ def test_uma_caixa_so_mostra_o_corte_inteiro_e_o_que_ha_antes_e_depois(editor):
     assert "▶ COMEÇA AQUI ▶" in texto and "◀ TERMINA AQUI ◀" in texto
     antes, resto = texto.split("▶ COMEÇA AQUI ▶")
     dentro, depois = resto.split("◀ TERMINA AQUI ◀")
-    assert editor._palavras[primeira - 1].texto in antes
-    assert editor._palavras[primeira].texto in dentro
-    assert editor._palavras[ultima].texto in dentro
-    assert editor._palavras[ultima + 1].texto in depois
-    assert len(antes.split()) > 100 and len(depois.split()) > 100
-    assert len(dentro.split()) == ultima - primeira + 1  # o corte inteiro, não só as pontas
+
+    def palavras_do(bloco):  # cada linha é `hora<TAB>frase`
+        return [p for linha in bloco.split("\n") if "\t" in linha for p in linha.split("\t")[1:]]
+
+    def lidas(bloco):
+        return " ".join(palavras_do(bloco)).split()
+
+    assert lidas(antes)[-1] == editor._palavras[primeira - 1].texto
+    assert lidas(dentro)[0] == editor._palavras[primeira].texto
+    assert lidas(dentro)[-1] == editor._palavras[ultima].texto
+    assert lidas(depois)[0] == editor._palavras[ultima + 1].texto
+    assert len(lidas(antes)) > 100 and len(lidas(depois)) > 100
+    assert len(lidas(dentro)) == ultima - primeira + 1  # o corte inteiro, não só as pontas
     caixa = editor._janela._textbox
-    assert caixa.tag_ranges("fora") and caixa.tag_ranges("dentro")
+    assert caixa.tag_ranges("fora") and caixa.tag_ranges("dentro") and caixa.tag_ranges("hora")
 
 
 @pytest.mark.gui
-def test_os_botoes_do_inicio_e_do_fim_seguem_a_mesma_ordem(editor):
+def test_os_botoes_do_inicio_e_do_fim_tem_a_ordem_pedida(editor):
     def rotulos(ponta):
         return [b.cget("text") for b in editor._botoes_das_pontas[ponta]]
 
-    assert rotulos("inicio") == ["−palavra ▶", "−frase ▶", "◀ +frase", "◀ +palavra"]
+    assert rotulos("inicio") == ["◀ +palavra", "◀ +frase", "−frase ▶", "−palavra ▶"]
     assert rotulos("fim") == ["◀ −palavra", "◀ −frase", "+frase ▶", "+palavra ▶"]
 
 
@@ -374,9 +404,9 @@ def test_cada_botao_do_inicio_e_do_fim_move_para_o_lado_certo(editor):
     palavras = editor._palavras
     primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
     inicio, fim = editor._botoes_das_pontas["inicio"], editor._botoes_das_pontas["fim"]
-    inicio[0].invoke()  # −palavra: o começo anda para a direita
+    inicio[3].invoke()  # −palavra: o começo anda para a direita
     assert indices_das_palavras(palavras, editor._cortes[i])[0] == primeira + 1
-    inicio[3].invoke()  # +palavra: volta
+    inicio[0].invoke()  # +palavra: volta
     assert indices_das_palavras(palavras, editor._cortes[i])[0] == primeira
     fim[0].invoke()  # −palavra: o fim anda para a esquerda
     assert indices_das_palavras(palavras, editor._cortes[i])[1] == ultima - 1
@@ -384,30 +414,37 @@ def test_cada_botao_do_inicio_e_do_fim_move_para_o_lado_certo(editor):
     assert indices_das_palavras(palavras, editor._cortes[i])[1] == ultima
     fim[2].invoke()  # +frase: o fim vai ao fim de uma frase mais adiante
     assert indices_das_palavras(palavras, editor._cortes[i])[1] > ultima
-    inicio[2].invoke()  # +frase: o começo vai ao começo de uma frase mais atrás
+    inicio[1].invoke()  # +frase: o começo vai ao começo de uma frase mais atrás
     assert indices_das_palavras(palavras, editor._cortes[i])[0] < primeira
+    inicio[2].invoke()  # −frase: o começo volta para a frente
+    assert indices_das_palavras(palavras, editor._cortes[i])[0] == primeira
 
 
 @pytest.mark.gui
-def test_as_frases_ficam_uma_por_linha_na_janela(editor):
+def test_as_frases_ficam_uma_por_linha_na_tabela_com_a_hora_ao_lado(editor):
     editor.selecionar(editor._ordem[0])
     texto = editor._janela.get("1.0", "end-1c")
     linhas = [linha for linha in texto.split("\n") if linha.strip()]
     assert len(linhas) > 10
-    assert all(linha.rstrip().endswith((".", "?", "!")) or "AQUI" in linha for linha in linhas[:-1])
+    for linha in linhas[:-1]:
+        if "AQUI" in linha:
+            continue
+        hora, frase = linha.split("\t")
+        assert re.fullmatch(r"(\d+:)?\d{1,2}:\d{2}", hora)
+        assert frase.rstrip().endswith((".", "?", "!"))
 
 
-def clique_na_palavra(editor, indice):
-    """Simula o duplo clique sobre a palavra `indice` da caixa."""
-    caixa = editor._janela._textbox
-    inicio = str(caixa.tag_ranges(f"pal_{indice}")[0])
-    # a janela de teste está escondida (sem medidas de tela): o índice sob o clique é dado direto
-    original = caixa.index
-    caixa.index = lambda ref: inicio if str(ref).startswith("@") else original(ref)
+def clique_na_palavra(editor, indice, *, x=1, y=1):
+    """Simula o duplo clique sobre a palavra `indice` da tabela."""
+    tabela = editor._janela
+    linha, coluna = (int(n) for n in tabela.posicao_da_palavra(indice).split("."))
+    # a janela de teste está escondida (sem medidas de tela): a posição sob o clique é dada direto
+    original = tabela._posicao
+    tabela._posicao = lambda ref: (linha, coluna + 1) if str(ref).startswith("@") else original(ref)
     try:
-        return editor._duplo_clique(type("Evento", (), {"x": 1, "y": 1})())
+        return tabela._duplo_clique(type("Evento", (), {"x": x, "y": y})())
     finally:
-        del caixa.index
+        del tabela._posicao
 
 
 @pytest.mark.gui
@@ -431,14 +468,24 @@ def test_duplo_clique_no_cinza_depois_do_corte_termina_o_corte_nela(editor):
 
 
 @pytest.mark.gui
-def test_duplo_clique_dentro_do_corte_vai_para_a_ponta_mais_perto(editor):
+def test_duplo_clique_dentro_do_corte_so_seleciona_a_palavra_para_editar(editor):
     editor.selecionar(editor._ordem[0])
     i = editor._atual
     palavras = editor._palavras
     primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
-    clique_na_palavra(editor, primeira + 5)  # perto do começo: tira 5 palavras de lá
+    assert clique_na_palavra(editor, primeira + 5) is None  # o gesto normal do Tk vale
+    assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira, ultima)
+
+
+@pytest.mark.gui
+def test_o_menu_de_uma_palavra_comeca_ou_termina_o_corte_nela(editor):
+    editor.selecionar(editor._ordem[0])
+    i = editor._atual
+    palavras = editor._palavras
+    primeira, ultima = indices_das_palavras(palavras, editor._cortes[i])
+    editor._janela._ao_menu(primeira + 5, "inicio")  # o que o botão direito escolhe
     assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira + 5, ultima)
-    clique_na_palavra(editor, ultima - 5)  # perto do fim: tira 5 palavras de lá
+    editor._janela._ao_menu(ultima - 5, "fim")
     assert indices_das_palavras(palavras, editor._cortes[i]) == (primeira + 5, ultima - 5)
 
 

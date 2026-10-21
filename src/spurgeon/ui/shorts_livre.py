@@ -1,15 +1,24 @@
-"""Aba "Shorts livre" do Studio: escolher a dedo um trecho do sermão para virar Short.
+"""Aba "Shorts livre" do Studio: escolher a dedo o que vira Short.
 
 À esquerda está o texto inteiro da transcrição (uma frase por linha, com a hora); à direita, a
 busca (por palavras parecidas ou por tema) e o trecho escolhido. A pessoa marca o começo e o fim
 (arrastando o mouse no texto, ou clicando numa palavra e usando "Começar aqui" / "Terminar aqui"),
 afina com os botões de palavra e de frase e manda criar: a IA avalia o trecho, dá a nota e escreve
 título, descrição e hashtags, e o corte vai para a lista do Studio como "gerado manualmente".
+
+Três ferramentas do mouse mudam o gesto no texto: a seta (o de sempre), o marca-texto (pinta,
+palavra por palavra, o que entra no Short) e a borracha (apaga o que sai). Com elas dá para montar
+um Short de pedaços separados, "frase 1 + frase 3": o que fica no meio vira um salto.
+
+O texto é "vivo": a margem esquerda de cada frase tem a cor da categoria que a IA achou no melhor
+trecho que a cobre, e as palavras que já viraram Short ficam sublinhadas (com um losango na
+margem). A legenda de cores, logo acima do texto, leva à próxima ocorrência de cada categoria.
 """
 
 from __future__ import annotations
 
 import contextlib
+from collections import Counter
 from collections.abc import Callable, Sequence
 from tkinter import TclError
 
@@ -25,7 +34,8 @@ from spurgeon.shorts.busca import (
     procurar_palavras,
     procurar_tema,
 )
-from spurgeon.shorts.dados import Corte, Frase
+from spurgeon.shorts.dados import CATEGORIAS, Corte, Frase, cor_da_categoria, rotulo_da_categoria
+from spurgeon.shorts.edicao import faixas_de
 from spurgeon.shorts.etapas import nome_do_sermao
 from spurgeon.shorts.livre import (
     ContextoDaIA,
@@ -38,22 +48,53 @@ from spurgeon.shorts.livre import (
     proximo_id,
     resumo_das_pontas,
 )
+from spurgeon.shorts.marcas import (
+    Detectado,
+    ShortFeito,
+    categoria_de_cada_frase,
+    short_de_cada_palavra,
+    shorts_feitos,
+    trechos_detectados,
+)
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 from spurgeon.ui import dialogos
+from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
+from spurgeon.ui.dicas import dica
+from spurgeon.ui.ferramentas_de_marca import FerramentasDeMarca
+from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA_SETA, Pincel
 
 _COR_SUAVE = "gray60"
 _COR_OK = "#4caf72"
 _COR_ALERTA = "#e0a030"
 _COR_ERRO = "#e05555"
+_COR_FEITO = "#c9a227"
 BUSCA_PALAVRAS = "Palavras parecidas"
 BUSCA_TEMA = "Tema"
+CHAVE_FEITOS = "feitos"  # o "tipo" da legenda que leva aos Shorts que já existem
 _AJUDA = {
     BUSCA_PALAVRAS: "Acha as frases com palavras parecidas, mesmo com erro de digitação, sem "
     "acento ou em outra forma (perdoar, perdoou…).",
     BUSCA_TEMA: "Acha trechos que falam do assunto, mesmo sem a palavra exata (perdão acha "
     "misericórdia e culpa). É uma aproximação: confira lendo.",
 }
+_AJUDA_DA_BUSCA = {
+    BUSCA_PALAVRAS: "Procura as frases que têm a palavra digitada ou uma parecida (com erro de "
+    "digitação, sem acento ou em outra forma). Rápido, e não precisa da IA.",
+    BUSCA_TEMA: "Procura trechos que falam do assunto, mesmo sem a palavra exata. Na primeira "
+    "vez carrega um modelo de português, o que leva alguns segundos.",
+}
+_TEXTO_DA_FERRAMENTA = {
+    FERRAMENTA_SETA: "Arraste no texto para escolher do começo ao fim, ou clique numa palavra "
+    "e use “Começar aqui” e “Terminar aqui”.",
+    FERRAMENTA_MARCA: "Arraste sobre as palavras para pintá-las: elas entram no Short, mesmo "
+    "longe das outras. Pinte a frase 1 e a frase 3 para montar “1 + 3”.",
+    FERRAMENTA_BORRACHA: "Arraste sobre as palavras já escolhidas para tirá-las: o Short pula "
+    "essa parte e continua logo depois.",
+}
+_PREFIXO = 3  # a margem de cada linha: a barra da categoria, o losango do Short e um espaço
+_BARRA = "▌"
+_LOSANGO = "◆"
 
 
 class PainelShortsLivre(ctk.CTkFrame):
@@ -82,6 +123,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         ] = []  # por palavra: linha, coluna inicial e final
         self._primeira: int | None = None
         self._ultima: int | None = None
+        self._fora: frozenset[int] = frozenset()  # palavras de dentro do trecho que ficam de fora
         self._clique: int | None = None  # a última palavra em que a pessoa clicou
         self._achados: list[Achado] = []
         self._achado: Achado | None = None
@@ -90,6 +132,15 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._andamento = {"texto": ""}
         self._bloqueado: str | None = None
         self._botoes_do_trecho: list[ctk.CTkButton] = []
+        self._detectados: list[Detectado] = []
+        self._categoria_da_frase: dict[int, Detectado] = {}  # posição da frase → trecho detectado
+        self._feitos: list[ShortFeito] = []
+        self._por_palavra: dict[int, ShortFeito] = {}
+        self._chips: dict[str, ctk.CTkButton] = {}
+        self._grupos: dict[str, list[int]] = {}  # tipo da legenda → linhas onde cada trecho abre
+        self._proximo_salto: dict[str, int] = {}
+        self._largura_da_legenda = 0
+        self._linha_da_dica = 0
 
         self._montar()
         self.carregar()
@@ -103,17 +154,18 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._corpo = corpo
         corpo.columnconfigure(0, weight=3, minsize=380)
         corpo.columnconfigure(1, weight=2, minsize=340)
-        corpo.rowconfigure(2, weight=1)
+        corpo.rowconfigure(4, weight=1)
 
         self._intro = ctk.CTkLabel(
             corpo,
             anchor="w",
             justify="left",
             wraplength=1000,
-            text="Escolha você mesmo onde um Short começa e termina. Procure uma palavra ou um "
-            "assunto, ou role o texto; marque o começo e o fim arrastando o mouse sobre as "
-            "palavras. Ao criar, a IA dá a nota e escreve título, descrição e hashtags, como nos "
-            "cortes automáticos.",
+            text="Escolha você mesmo o que vira Short. Procure uma palavra ou um assunto, ou role "
+            "o texto; marque o começo e o fim arrastando o mouse, ou pinte só as frases que quer "
+            "com o marca-texto (a 1 e a 3, sem a 2). As cores à esquerda mostram o que a IA "
+            "detectou em cada trecho; o losango, o que já virou Short. Ao criar, a IA dá a nota e "
+            "escreve título, descrição e hashtags, como nos cortes automáticos.",
         )
         self._intro.grid(row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=(12, 6))
         corpo.bind(
@@ -133,12 +185,20 @@ class PainelShortsLivre(ctk.CTkFrame):
         )
         entrada.pack(side="left")
         entrada.bind("<Return>", lambda _e: self.buscar())
+        dica(
+            entrada,
+            "O que procurar no sermão: uma palavra, uma frase curta ou um assunto. Enter também "
+            "busca.",
+        )
         self._modo = ctk.CTkSegmentedButton(
             busca, values=[BUSCA_PALAVRAS, BUSCA_TEMA], command=lambda _v: self._mudou_modo()
         )
         self._modo.set(BUSCA_PALAVRAS)
         self._modo.pack(side="left", padx=8)
-        ctk.CTkButton(busca, text="Buscar", width=80, command=self.buscar).pack(side="left")
+        dica_do_seletor(self._modo, _AJUDA_DA_BUSCA)
+        botao_buscar = ctk.CTkButton(busca, text="Buscar", width=80, command=self.buscar)
+        botao_buscar.pack(side="left")
+        dica(botao_buscar, "Procura no texto do sermão e lista os achados à direita.")
         self._situacao_busca = ctk.CTkLabel(busca, text="", text_color=_COR_SUAVE, anchor="w")
         self._situacao_busca.pack(side="left", padx=10)
         self._ajuda_da_busca = ctk.CTkLabel(
@@ -147,20 +207,49 @@ class PainelShortsLivre(ctk.CTkFrame):
         )  # fmt: skip
         self._ajuda_da_busca.pack(anchor="w", pady=(3, 0))
 
+        ferramentas = ctk.CTkFrame(corpo, fg_color="transparent")
+        ferramentas.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 4))
+        ctk.CTkLabel(ferramentas, text="Mouse no texto:", text_color=_COR_SUAVE).pack(
+            side="left", padx=(0, 8)
+        )
+        self._ferramentas = FerramentasDeMarca(ferramentas, ao_trocar=self._trocou_a_ferramenta)
+        self._ferramentas.pack(side="left")
+        self._rotulo_ferramenta = ctk.CTkLabel(
+            ferramentas, text=_TEXTO_DA_FERRAMENTA[FERRAMENTA_SETA], text_color=_COR_SUAVE,
+            anchor="w", font=ctk.CTkFont(size=12),
+        )  # fmt: skip
+        self._rotulo_ferramenta.pack(side="left", padx=10)
+
+        self._legenda = ctk.CTkFrame(corpo, fg_color="transparent", height=1)
+        self._legenda.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 4))
+        self._legenda.bind("<Configure>", self._legenda_mudou_de_largura)
+
         self._caixa = ctk.CTkTextbox(
             corpo, wrap="word", font=ctk.CTkFont(size=14), state="disabled"
         )
-        self._caixa.grid(row=2, column=0, sticky="nsew", padx=(14, 7), pady=(0, 6))
+        self._caixa.grid(row=4, column=0, sticky="nsew", padx=(14, 7), pady=(0, 2))
         texto = self._caixa._textbox
         texto.tag_config("hora", foreground="#7f7f7f", font=("Consolas", 10))
         texto.tag_config("achado", background="#5a4a12")
         texto.tag_config("palavra_achada", background="#9a7b10", foreground="#ffffff")
         texto.tag_config("escolhido", background="#1f4f7f", foreground="#ffffff")
+        texto.tag_config("pulado", foreground="#a07070", overstrike=True)
+        self._configurar_marcas_de_categoria(texto)
+        texto.tag_raise("pulado")
         texto.tag_raise("escolhido")
-        texto.bind("<ButtonRelease-1>", self._soltou_o_mouse)
+        self._pincel = Pincel(
+            texto, palavra_em=self._palavra_sob, onde=self._onde_esta, ao_pintar=self._pintou
+        )
+        texto.bind("<ButtonRelease-1>", self._soltou_o_mouse, add="+")
+        texto.bind("<Motion>", self._mouse_passou, add="+")
+        self._info = ctk.CTkLabel(
+            corpo, text="", anchor="w", justify="left", wraplength=600, text_color=_COR_SUAVE,
+            font=ctk.CTkFont(size=12),
+        )  # fmt: skip
+        self._info.grid(row=5, column=0, sticky="ew", padx=(16, 7), pady=(0, 6))
 
         lado = ctk.CTkFrame(corpo, fg_color="transparent")
-        lado.grid(row=2, column=1, sticky="nsew", padx=(7, 14), pady=(0, 6))
+        lado.grid(row=4, column=1, rowspan=2, sticky="nsew", padx=(7, 14), pady=(0, 6))
         lado.columnconfigure(0, weight=1)
         lado.rowconfigure(1, weight=1)
         ctk.CTkLabel(
@@ -176,13 +265,29 @@ class PainelShortsLivre(ctk.CTkFrame):
             fg_color=("gray70", "gray30"), command=self._comecar_no_achado, state="disabled",
         )  # fmt: skip
         self._botao_comecar_no_achado.pack(side="left")
+        dica(
+            self._botao_comecar_no_achado,
+            "O Short começa no achado escolhido (o fim do trecho continua como está).",
+        )
         self._botao_usar_achado = ctk.CTkButton(
             linha_achado, text="Usar o achado todo", width=130, height=26,
             fg_color=("gray70", "gray30"), command=self._usar_o_achado, state="disabled",
         )  # fmt: skip
         self._botao_usar_achado.pack(side="left", padx=6)
+        dica(self._botao_usar_achado, "O trecho escolhido passa a ser exatamente o achado.")
 
         self._montar_trecho(lado, 3)
+
+    def _configurar_marcas_de_categoria(self, texto) -> None:
+        """Uma etiqueta de cor por categoria: a barra da margem, o losango e o sublinhado."""
+        for chave in CATEGORIAS:
+            cor = cor_da_categoria(chave)
+            texto.tag_config(f"cat_{chave}", foreground=cor)
+            texto.tag_config(f"feito_{chave}", foreground=cor)
+            try:
+                texto.tag_config(f"sub_{chave}", underline=True, underlinefg=cor)
+            except TclError:  # Tk antigo, sem cor própria no sublinhado
+                texto.tag_config(f"sub_{chave}", underline=True)
 
     def _montar_trecho(self, lado, linha: int) -> None:
         quadro = ctk.CTkFrame(lado)
@@ -203,17 +308,25 @@ class PainelShortsLivre(ctk.CTkFrame):
 
         marcar = ctk.CTkFrame(quadro, fg_color="transparent")
         marcar.grid(row=3, column=0, sticky="ew", padx=10, pady=(6, 0))
-        for texto, comando in (
-            ("↥ Começar aqui", self._marcar_inicio),
-            ("↧ Terminar aqui", self._marcar_fim),
+        for texto, comando, ajuda in (
+            (
+                "↥ Começar aqui",
+                self._marcar_inicio,
+                "O Short começa na palavra em que você clicou por último no texto.",
+            ),
+            (
+                "↧ Terminar aqui",
+                self._marcar_fim,
+                "O Short termina na palavra em que você clicou por último no texto.",
+            ),
         ):
-            ctk.CTkButton(marcar, text=texto, width=120, height=26, command=comando).pack(
-                side="left", padx=(0, 6)
-            )
+            botao = ctk.CTkButton(marcar, text=texto, width=120, height=26, command=comando)
+            botao.pack(side="left", padx=(0, 6))
+            dica(botao, ajuda)
         ctk.CTkLabel(
             quadro,
-            text="Clique numa palavra do texto e use um dos botões, ou arraste o mouse sobre o "
-            "trecho todo.",
+            text="Clique numa palavra do texto e use um dos botões, arraste o mouse sobre o "
+            "trecho todo ou pinte com o marca-texto.",
             anchor="w", justify="left", wraplength=320, text_color=_COR_SUAVE,
             font=ctk.CTkFont(size=12),
         ).grid(row=4, column=0, sticky="ew", padx=10)  # fmt: skip
@@ -235,12 +348,27 @@ class PainelShortsLivre(ctk.CTkFrame):
                 lambda p=ponta, s=sinal: self._mover(p, -s, True),
                 lambda p=ponta, s=sinal: self._mover(p, -s, False),
             )
-            for rotulo, comando in zip(rotulos, comandos, strict=True):
+            if ponta == "fim":
+                ajudas = (
+                    "Tira uma palavra: o Short termina uma palavra antes.",
+                    "Tira uma frase: o Short termina na frase anterior.",
+                    "Acrescenta uma frase: o Short termina na frase seguinte.",
+                    "Acrescenta uma palavra: o Short termina uma palavra depois.",
+                )
+            else:
+                ajudas = (
+                    "Tira uma palavra: o Short começa uma palavra depois.",
+                    "Tira uma frase: o Short começa na frase seguinte.",
+                    "Acrescenta uma frase: o Short começa na frase anterior.",
+                    "Acrescenta uma palavra: o Short começa uma palavra antes.",
+                )
+            for rotulo, comando, ajuda in zip(rotulos, comandos, ajudas, strict=True):
                 botao = ctk.CTkButton(
                     linha_ponta, text=rotulo, width=70, height=24, fg_color=("gray70", "gray30"),
                     command=comando, state="disabled",
                 )  # fmt: skip
                 botao.pack(side="left", padx=(0, 3))
+                dica(botao, ajuda)
                 self._botoes_do_trecho.append(botao)
 
         acoes = ctk.CTkFrame(quadro, fg_color="transparent")
@@ -250,10 +378,18 @@ class PainelShortsLivre(ctk.CTkFrame):
             command=self.criar, state="disabled",
         )  # fmt: skip
         self._botao_criar.pack(side="left")
-        ctk.CTkButton(
+        dica(
+            self._botao_criar,
+            "A IA avalia o trecho (categoria, nota e risco de contexto) e escreve o título, a "
+            "descrição e as hashtags. O Short entra na lista do Studio, marcado para renderizar. "
+            "Leva cerca de 2 minutos na CPU.",
+        )
+        limpar = ctk.CTkButton(
             acoes, text="Limpar", width=70, height=34, fg_color=("gray70", "gray30"),
             command=self.limpar_trecho,
-        ).pack(side="left", padx=6)  # fmt: skip
+        )  # fmt: skip
+        limpar.pack(side="left", padx=6)
+        dica(limpar, "Desfaz a escolha do trecho para começar de novo.")
         self._situacao = ctk.CTkLabel(
             quadro, anchor="w", justify="left", wraplength=320, text="", text_color=_COR_SUAVE
         )
@@ -276,6 +412,9 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._frases = separar_frases(self._palavras) if self._palavras else []
         self.limpar_trecho()
         self._preencher_texto()
+        self._detectados = trechos_detectados(self._pastas, self._palavras)
+        self._categoria_da_frase = categoria_de_cada_frase(self._detectados, self._frases)
+        self.atualizar_marcas()
 
     def _preencher_texto(self) -> None:
         texto = self._caixa._textbox
@@ -286,8 +425,9 @@ class PainelShortsLivre(ctk.CTkFrame):
             texto.insert("1.0", "Este projeto ainda não tem a transcrição do sermão.")
         for numero, frase in enumerate(self._frases, start=1):
             hora = f"{segundos_para_rotulo(frase.inicio)}  "
+            texto.insert("end", " " * _PREFIXO)
             texto.insert("end", hora, "hora")
-            coluna = len(hora)
+            coluna = _PREFIXO + len(hora)
             partes = []
             for k in range(frase.primeira, frase.ultima + 1):
                 palavra = self._palavras[k].texto
@@ -313,7 +453,231 @@ class PainelShortsLivre(ctk.CTkFrame):
                 return k
         return frase.ultima
 
+    # --- o texto "vivo": categorias detectadas e Shorts já feitos -------------------------------
+    def atualizar_marcas(self) -> None:
+        """Refaz as marcas do texto e a legenda a partir dos Shorts que existem agora."""
+        self._feitos = shorts_feitos(self._palavras, self._cortes_existentes())
+        self._por_palavra = short_de_cada_palavra(self._feitos)
+        self._desenhar_marcas()
+        self._montar_legenda()
+        self._atualizar_trecho()  # as marcas mexeram na margem: o azul do trecho se refaz
+
+    def _desenhar_marcas(self) -> None:
+        texto = self._caixa._textbox
+        texto.configure(state="normal")
+        for tag in texto.tag_names():
+            if tag.startswith(("cat_", "feito_", "sub_")):
+                texto.tag_remove(tag, "1.0", "end")
+        for numero, frase in enumerate(self._frases, start=1):
+            detectado = self._categoria_da_frase.get(numero - 1)
+            feitos = self._shorts_da_frase(frase)
+            margem = (_BARRA if detectado else " ") + (_LOSANGO if feitos else " ")
+            if texto.get(f"{numero}.0", f"{numero}.2") != margem:  # só mexe no que mudou
+                texto.delete(f"{numero}.0", f"{numero}.2")
+                texto.insert(f"{numero}.0", margem, ())
+            if detectado:
+                texto.tag_add(f"cat_{detectado.categoria}", f"{numero}.0", f"{numero}.1")
+            if feitos:
+                texto.tag_add(f"feito_{feitos[0].categoria}", f"{numero}.1", f"{numero}.2")
+            self._sublinhar_o_que_virou_short(texto, frase)
+        texto.configure(state="disabled")
+
+    def _shorts_da_frase(self, frase: Frase) -> list[ShortFeito]:
+        """Os Shorts que falam alguma palavra desta frase (sem repetir, na ordem da lista)."""
+        achados: list[ShortFeito] = []
+        for k in range(frase.primeira, frase.ultima + 1):
+            feito = self._por_palavra.get(k)
+            if feito is not None and feito not in achados:
+                achados.append(feito)
+        return achados
+
+    def _sublinhar_o_que_virou_short(self, texto, frase: Frase) -> None:
+        """Sublinha, com a cor do Short, cada sequência de palavras da frase que ele fala."""
+        inicio = None
+        for k in range(frase.primeira, frase.ultima + 2):
+            feito = self._por_palavra.get(k) if k <= frase.ultima else None
+            if inicio is not None and (feito is None or feito is not self._por_palavra.get(inicio)):
+                texto.tag_add(
+                    f"sub_{self._por_palavra[inicio].categoria}",
+                    self._indice_da_palavra(inicio),
+                    self._indice_da_palavra(k - 1, fim=True),
+                )
+                inicio = None
+            if feito is not None and inicio is None:
+                inicio = k
+
+    def descrever_linha(self, numero: int) -> str:
+        """O que se sabe da frase na linha `numero`: hora, categoria detectada e Shorts dela."""
+        if not 1 <= numero <= len(self._frases):
+            return ""
+        frase = self._frases[numero - 1]
+        partes = [f"Frase {numero} · {segundos_para_rotulo(frase.inicio)}"]
+        detectado = self._categoria_da_frase.get(numero - 1)
+        if detectado is not None:
+            partes.append(
+                f"a IA viu aqui: {rotulo_da_categoria(detectado.categoria)} "
+                f"(nota {detectado.nota} de 10)"
+            )
+        feitos = self._shorts_da_frase(frase)
+        if feitos:
+            titulos = "; ".join(f"“{f.titulo or 'sem título'}”" for f in feitos)
+            partes.append(
+                f"já é parte de {'um Short' if len(feitos) == 1 else 'Shorts'}: {titulos}"
+            )
+        return " · ".join(partes)
+
+    def _mouse_passou(self, evento) -> None:
+        try:
+            linha = int(self._caixa._textbox.index(f"@{evento.x},{evento.y}").split(".")[0])
+        except (TclError, ValueError):
+            return
+        if linha != self._linha_da_dica:
+            self._linha_da_dica = linha
+            self._info.configure(text=self.descrever_linha(linha))
+
+    # --- a legenda de cores ---------------------------------------------------------------------
+    def _montar_legenda(self) -> None:
+        for chip in self._chips.values():
+            chip.destroy()
+        self._chips, self._grupos, self._proximo_salto = {}, {}, {}
+        contagem = Counter(d.categoria for d in self._categoria_da_frase.values())
+        por_categoria: dict[str, list[int]] = {}
+        for posicao in sorted(self._categoria_da_frase):
+            por_categoria.setdefault(self._categoria_da_frase[posicao].categoria, []).append(
+                posicao + 1
+            )
+        for chave in [c for c in CATEGORIAS if contagem[c]]:
+            self._grupos[chave] = self._inicios_dos_grupos(por_categoria[chave])
+            rotulo = rotulo_da_categoria(chave)
+            cor = cor_da_categoria(chave)
+            self._chips[chave] = self._novo_chip(
+                f"{rotulo} · {contagem[chave]}",
+                cor,
+                "white",
+                chave,
+                f"Frases em que a IA viu “{rotulo}”. Clique para ir ao próximo trecho assim.",
+            )
+        linhas_dos_feitos = [
+            n for n, frase in enumerate(self._frases, start=1) if self._shorts_da_frase(frase)
+        ]
+        if linhas_dos_feitos:
+            self._grupos[CHAVE_FEITOS] = self._inicios_dos_grupos(linhas_dos_feitos)
+            self._chips[CHAVE_FEITOS] = self._novo_chip(
+                f"{_LOSANGO} Já virou Short · {len(self._feitos)}",
+                _COR_FEITO,
+                "#101010",
+                CHAVE_FEITOS,
+                "As frases sublinhadas (e com o losango na margem) já estão em algum Short da "
+                "lista. Clique para ir à próxima.",
+            )
+        if self._chips:
+            self._legenda.grid()
+            self._arrumar_legenda()
+        else:
+            self._legenda.grid_remove()
+
+    @staticmethod
+    def _inicios_dos_grupos(linhas: Sequence[int]) -> list[int]:
+        """`[3, 4, 5, 9, 10]` → `[3, 9]`: a primeira linha de cada sequência de frases seguidas."""
+        return [de for de, _ate in faixas_de(linhas)]
+
+    def _novo_chip(self, texto: str, cor: str, cor_do_texto: str, chave: str, ajuda: str):
+        fonte = ctk.CTkFont(size=11, weight="bold")
+        chip = ctk.CTkButton(
+            self._legenda, text=texto, font=fonte, height=22, corner_radius=6, fg_color=cor,
+            hover_color=cor, text_color=cor_do_texto, width=fonte.measure(texto) + 22,
+            command=lambda: self.ir_para(chave),
+        )  # fmt: skip
+        dica(chip, ajuda)
+        return chip
+
+    def _legenda_mudou_de_largura(self, evento) -> None:
+        if evento.width != self._largura_da_legenda:
+            self._largura_da_legenda = evento.width
+            self._arrumar_legenda()
+
+    def _arrumar_legenda(self) -> None:
+        """Põe os chips um depois do outro, passando para a linha de baixo quando não cabem."""
+        limite = self._largura_da_legenda if self._largura_da_legenda > 1 else 10**6
+        x = linha = coluna = 0
+        for chip in self._chips.values():
+            largura = chip.winfo_reqwidth() + 6
+            if coluna and x + largura > limite:
+                linha, coluna, x = linha + 1, 0, 0
+            chip.grid(row=linha, column=coluna, padx=(0, 6), pady=2, sticky="w")
+            x += largura
+            coluna += 1
+
+    def ir_para(self, chave: str) -> int | None:
+        """Leva o texto ao próximo trecho da categoria (ou dos Shorts feitos); devolve a linha."""
+        linhas = self._grupos.get(chave)
+        if not linhas:
+            return None
+        posicao = (self._proximo_salto.get(chave, -1) + 1) % len(linhas)
+        self._proximo_salto[chave] = posicao
+        linha = linhas[posicao]
+        texto = self._caixa._textbox
+        texto.yview(f"{linha}.0")
+        self._linha_da_dica = linha
+        self._info.configure(text=self.descrever_linha(linha))
+        return linha
+
     # --- marcar o trecho ----------------------------------------------------------------------
+    def _trocou_a_ferramenta(self, nome: str) -> None:
+        self._pincel.definir(nome)
+        self._rotulo_ferramenta.configure(text=_TEXTO_DA_FERRAMENTA[nome])
+
+    def _onde_esta(self, k: int) -> tuple[int, int, int] | None:
+        if not 0 <= k < len(self._posicoes) or self._posicoes[k][0] == 0:
+            return None
+        linha, de, ate = self._posicoes[k]
+        return linha, de, ate - de
+
+    def _palavra_sob(self, x: int, y: int) -> int | None:
+        """A palavra sob o ponto do texto (None na margem, na hora ou fora do texto)."""
+        if not self._frases:
+            return None
+        try:
+            linha, coluna = (int(n) for n in self._caixa._textbox.index(f"@{x},{y}").split("."))
+        except (TclError, ValueError):
+            return None
+        if not 1 <= linha <= len(self._frases):
+            return None
+        if coluna < self._posicoes[self._frases[linha - 1].primeira][1]:
+            return None
+        return self._palavra_no_indice(f"{linha}.{coluna}")
+
+    def _pintou(self, indices: list[int], ferramenta: str) -> None:
+        """O marca-texto soma estas palavras ao trecho; a borracha as tira dele."""
+        if (
+            self._bloqueado
+            or self._criando
+            or ferramenta
+            not in (
+                FERRAMENTA_MARCA,
+                FERRAMENTA_BORRACHA,
+            )
+        ):
+            return
+        atual = self.trecho()
+        if atual is not None:
+            base = set(atual.indices)
+        else:  # só uma ponta marcada: ela já conta
+            base = {i for i in (self._primeira, self._ultima) if i is not None}
+        self.definir_palavras(
+            base | set(indices) if ferramenta == FERRAMENTA_MARCA else base - set(indices)
+        )
+
+    def definir_palavras(self, indices) -> None:
+        """O trecho passa a ser exatamente estas palavras (pedaços separados viram saltos)."""
+        trecho = Trecho.de_indices(indices)
+        if trecho is None:
+            self._primeira = self._ultima = None
+            self._fora = frozenset()
+        else:
+            self._primeira, self._ultima, self._fora = trecho.primeira, trecho.ultima, trecho.fora
+        self._atualizar_trecho()
+
     def _soltou_o_mouse(self, evento) -> None:
         texto = self._caixa._textbox
         clicada = self._palavra_no_indice(texto.index(f"@{evento.x},{evento.y}"))
@@ -331,7 +695,7 @@ class PainelShortsLivre(ctk.CTkFrame):
             self._clique = primeira if primeira is not None else clicada
             return
         self._clique = primeira
-        self._primeira, self._ultima = primeira, ultima
+        self._primeira, self._ultima, self._fora = primeira, ultima, frozenset()
         self._atualizar_trecho()
 
     def _marcar_inicio(self) -> None:
@@ -343,6 +707,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._primeira = self._clique
         if self._ultima is not None and self._ultima < self._primeira:
             self._ultima = None
+        self._fora = frozenset(i for i in self._fora if i > self._primeira)
         self._atualizar_trecho()
 
     def _marcar_fim(self) -> None:
@@ -354,19 +719,21 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._ultima = self._clique
         if self._primeira is not None and self._primeira > self._ultima:
             self._primeira = None
+        self._fora = frozenset(i for i in self._fora if i < self._ultima)
         self._atualizar_trecho()
 
     def limpar_trecho(self) -> None:
         self._primeira = self._ultima = None
+        self._fora = frozenset()
         self._atualizar_trecho()
 
     def trecho(self) -> Trecho | None:
         if self._primeira is None or self._ultima is None or self._primeira > self._ultima:
             return None
-        return Trecho(self._primeira, self._ultima)
+        return Trecho(self._primeira, self._ultima, self._fora)
 
     def definir_trecho(self, primeira: int, ultima: int) -> None:
-        self._primeira, self._ultima = primeira, ultima
+        self._primeira, self._ultima, self._fora = primeira, ultima, frozenset()
         self._atualizar_trecho()
 
     def _mover(self, ponta: str, sentido: int, por_frase: bool) -> None:
@@ -374,12 +741,13 @@ class PainelShortsLivre(ctk.CTkFrame):
         if atual is None:
             return
         novo = mover_ponta(self._palavras, self._frases, atual, ponta, sentido, por_frase=por_frase)
-        self._primeira, self._ultima = novo.primeira, novo.ultima
+        self._primeira, self._ultima, self._fora = novo.primeira, novo.ultima, novo.fora
         self._atualizar_trecho(rolar_para=ponta)
 
     def _atualizar_trecho(self, rolar_para: str | None = None) -> None:
         texto = self._caixa._textbox
-        texto.tag_remove("escolhido", "1.0", "end")
+        for tag in ("escolhido", "pulado"):
+            texto.tag_remove(tag, "1.0", "end")
         trecho = self.trecho()
         for botao in self._botoes_do_trecho:
             botao.configure(state="normal" if trecho and not self._criando else "disabled")
@@ -389,12 +757,13 @@ class PainelShortsLivre(ctk.CTkFrame):
             self._botao_criar.configure(state="disabled")
             return
         if trecho is None:
-            if self._primeira is not None:
-                texto.tag_add(
-                    "escolhido",
-                    self._indice_da_palavra(self._primeira),
-                    self._indice_da_palavra(self._primeira, fim=True),
-                )
+            for ponta in (self._primeira, self._ultima):
+                if ponta is not None:
+                    texto.tag_add(
+                        "escolhido",
+                        self._indice_da_palavra(ponta),
+                        self._indice_da_palavra(ponta, fim=True),
+                    )
             falta = "o fim" if self._primeira is not None else "o começo e o fim"
             self._rotulo_trecho.configure(
                 text=f"Marque {falta} do trecho no texto.", text_color=_COR_SUAVE
@@ -402,24 +771,33 @@ class PainelShortsLivre(ctk.CTkFrame):
             self._rotulo_pontas.configure(text="")
             self._botao_criar.configure(state="disabled")
             return
-        texto.tag_add(
-            "escolhido",
-            self._indice_da_palavra(trecho.primeira),
-            self._indice_da_palavra(trecho.ultima, fim=True),
-        )
+        pedacos = trecho.pedacos
+        for de, ate in pedacos:
+            texto.tag_add(
+                "escolhido", self._indice_da_palavra(de), self._indice_da_palavra(ate, fim=True)
+            )
+        for de, ate in faixas_de(trecho.fora):
+            texto.tag_add(
+                "pulado", self._indice_da_palavra(de), self._indice_da_palavra(ate, fim=True)
+            )
         problema = problema_do_trecho(self._palavras, trecho)
         duracao = duracao_do_trecho(self._palavras, trecho)
         inicio = self._palavras[trecho.primeira].inicio
         fim = self._palavras[trecho.ultima].fim
         resumo = (
             f"{segundos_para_rotulo(inicio)} a {segundos_para_rotulo(fim)} · {duracao:.0f} s · "
-            f"{trecho.ultima - trecho.primeira + 1} palavras"
+            f"{len(trecho.indices)} palavras"
         )
+        if len(pedacos) > 1:
+            resumo += f" · {len(pedacos)} pedaços"
         self._rotulo_trecho.configure(
             text=resumo + (f"\n⚠ {problema}" if problema else ""),
             text_color=_COR_ALERTA if problema else _COR_OK,
         )
-        self._rotulo_pontas.configure(text=resumo_das_pontas(self._palavras, trecho))
+        pontas = resumo_das_pontas(self._palavras, trecho)
+        if trecho.fora:
+            pontas += f" Pula {len(trecho.fora)} palavras no meio (o corte aparece riscado)."
+        self._rotulo_pontas.configure(text=pontas)
         self._botao_criar.configure(
             state="normal"
             if problema is None and not self._criando and not self._bloqueado
@@ -494,6 +872,11 @@ class PainelShortsLivre(ctk.CTkFrame):
                 command=lambda a=achado: self._abrir_achado(a),
             )
             botao.grid(row=posicao, column=0, sticky="ew", pady=1)
+            dica(
+                botao,
+                "Um achado da busca: a hora e a nota de parecença, e o texto. Clique para ver "
+                "onde ele está no sermão.",
+            )
         self._abrir_achado(achados[0])
 
     def _abrir_achado(self, achado: Achado) -> None:
@@ -521,6 +904,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._primeira = self._achado.primeira
         if self._ultima is not None and self._ultima < self._primeira:
             self._ultima = None
+        self._fora = frozenset(i for i in self._fora if i > self._primeira)
         self._atualizar_trecho()
 
     def _usar_o_achado(self) -> None:
@@ -602,6 +986,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         )
         self.limpar_trecho()
         self._ao_criar(corte)
+        self.atualizar_marcas()  # o novo Short já aparece sublinhado no texto
 
     def _falhou(self, erro: Exception) -> None:
         if not self.winfo_exists() or isinstance(erro, Cancelado):

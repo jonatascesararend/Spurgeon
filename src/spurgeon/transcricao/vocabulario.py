@@ -57,6 +57,30 @@ def acrescentar_ao_vocabulario(caminho: Path, termo: str) -> bool:
     return True
 
 
+def remover_do_vocabulario(caminho: Path, termos: str | list[str]) -> int:
+    """Tira do arquivo as linhas dos termos (sem olhar maiúsculas); os comentários ficam.
+
+    Devolve quantas linhas saíram. É o que a pessoa faz ao se arrepender de ter guardado uma
+    palavra errada no vocabulário.
+    """
+    caminho = Path(caminho)
+    if not caminho.is_file():
+        return 0
+    alvos = {t.strip().casefold() for t in ([termos] if isinstance(termos, str) else termos)}
+    alvos.discard("")
+    mantidas: list[str] = []
+    removidas = 0
+    for linha in caminho.read_text(encoding="utf-8").splitlines():
+        termo = linha.strip()
+        if termo and not termo.startswith("#") and termo.casefold() in alvos:
+            removidas += 1
+            continue
+        mantidas.append(linha)
+    if removidas:
+        caminho.write_text("\n".join(mantidas) + "\n", encoding="utf-8")
+    return removidas
+
+
 def montar_dicas(termos: list[str], limite: int = LIMITE_DICAS_CARACTERES) -> str:
     """Os termos do topo da lista, separados por vírgula, até caber no limite."""
     partes: list[str] = []

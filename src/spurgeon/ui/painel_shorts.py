@@ -18,6 +18,7 @@ from PIL import Image, ImageTk
 from spurgeon.core.aparencia import Enquadramento
 from spurgeon.core.config import OpcoesProcessamento
 from spurgeon.render import previa
+from spurgeon.ui import dicas
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.composicao import ajustar_ao_tamanho
 from spurgeon.ui.formulario import ValoresFormulario
@@ -106,6 +107,11 @@ class PainelShorts(ctk.CTkFrame):
         self._imagem_na_tela = self._tela.create_image(0, 0, anchor="nw")
         self._tela.bind("<Button-1>", self._clicou)
         self._tela.bind("<B1-Motion>", self._clicou)
+        dicas.dica(
+            self._tela,
+            "Clique ou arraste no quadro para pôr a legenda na altura que quiser (de 30% a 90% "
+            "da altura do Short, contada de cima).",
+        )
         self.mostrar_youtube = ctk.BooleanVar(value=True)
         linha_youtube = ctk.CTkFrame(self, fg_color="transparent")
         linha_youtube.pack(fill="x", padx=12, pady=(0, 2))
@@ -117,6 +123,16 @@ class PainelShorts(ctk.CTkFrame):
             command=self._alternar_youtube,
         )
         self._botao_youtube.pack(side="left")
+        dicas.dica(
+            self._botao_youtube,
+            lambda: (
+                "Esconde os botões, o nome do canal e o título que o YouTube desenha por "
+                "cima do Short, para ver a imagem limpa."
+                if self.mostrar_youtube.get()
+                else "Mostra de novo os botões, o nome do canal e o título do YouTube, para "
+                "conferir o que a legenda pode encobrir."
+            ),
+        )
         self._conflito = ctk.CTkLabel(
             self, text="", anchor="w", justify="left", wraplength=430, font=ctk.CTkFont(size=12)
         )
@@ -143,11 +159,25 @@ class PainelShorts(ctk.CTkFrame):
         campo.bind("<FocusOut>", lambda _e: self._digitou_zoom())
         ctk.CTkLabel(linha_zoom, text="%").pack(side="left", padx=(2, 0))
         self._filhos += [slider, campo]
+        dicas.dica(
+            slider,
+            "Aproxima a imagem só nos Shorts, além do zoom do vídeo. O recorte vertical já é uma "
+            "ampliação: acima de 125% a imagem perde bastante nitidez.",
+        )
+        dicas.dica(campo, "Digite o zoom do Short (de 100 a 200) e aperte Enter.")
 
-        for rotulo, variavel in (
-            ("Posição horizontal", self.centro_x),
-            ("Posição vertical", self.centro_y),
-        ):
+        for rotulo, variavel, ajuda in (
+            (
+                "Posição horizontal", self.centro_x,
+                "Move o zoom do Short para a esquerda ou para a direita (50% é o meio). Só tem "
+                "efeito com zoom acima de 100%.",
+            ),
+            (
+                "Posição vertical", self.centro_y,
+                "Move o zoom do Short para cima ou para baixo (50% é o meio). Só tem efeito com "
+                "zoom acima de 100%.",
+            ),
+        ):  # fmt: skip
             linha = ctk.CTkFrame(self, fg_color="transparent")
             linha.pack(fill="x", padx=12, pady=(2, 0))
             ctk.CTkLabel(linha, text=rotulo, width=130, anchor="w").pack(side="left")
@@ -156,6 +186,7 @@ class PainelShorts(ctk.CTkFrame):
                 command=lambda _v: self._moveu_posicao(),
             )  # fmt: skip
             controle.pack(side="left", padx=6)
+            dicas.dica(controle, ajuda)
             self._filhos.append(controle)
 
         linha_legenda = ctk.CTkFrame(self, fg_color="transparent")
@@ -171,6 +202,12 @@ class PainelShorts(ctk.CTkFrame):
         controle.pack(side="left", padx=6)
         self._rotulo_legenda = ctk.CTkLabel(linha_legenda, text="", width=44, anchor="w")
         self._rotulo_legenda.pack(side="left")
+        dicas.dica(
+            controle,
+            "A altura da legenda em todos os Shorts, em % da altura, contada de cima. Mais "
+            "baixo é um número maior. Confira na prévia que ela não fica atrás dos botões do "
+            "YouTube.",
+        )
         self._filhos.append(controle)
         ctk.CTkLabel(
             self,
@@ -191,13 +228,23 @@ class PainelShorts(ctk.CTkFrame):
 
         botoes = ctk.CTkFrame(self, fg_color="transparent")
         botoes.pack(fill="x", padx=12, pady=(4, 8))
-        for texto, comando, largura in (
-            ("Outro quadro", self.outro_quadro, 110),
-            ("Sem zoom", self.zerar_zoom, 90),
-            ("Legenda a 62%", self.legenda_padrao, 120),
-        ):
+        for texto, comando, largura, ajuda in (
+            (
+                "Outro quadro", self.outro_quadro, 110,
+                "Mostra outro quadro do vídeo na prévia, para ver o Short em outros momentos.",
+            ),
+            (
+                "Sem zoom", self.zerar_zoom, 90,
+                "Volta o zoom do Short para 100% e centraliza a posição.",
+            ),
+            (
+                "Legenda a 62%", self.legenda_padrao, 120,
+                "Volta a legenda para a altura padrão do programa.",
+            ),
+        ):  # fmt: skip
             botao = ctk.CTkButton(botoes, text=texto, width=largura, command=comando)
             botao.pack(side="left", padx=(0, 6))
+            dicas.dica(botao, ajuda)
             self._filhos.append(botao)
 
     # --- valores ------------------------------------------------------------------------------
@@ -278,6 +325,12 @@ class PainelShorts(ctk.CTkFrame):
             self.centro_y.set(50)
         finally:
             self._aplicando = False
+        self._depois_de_mexer()
+
+    def definir_legenda(self, percentual: float) -> None:
+        """Põe a legenda nesta altura (% da altura do Short, de cima), como se a pessoa clicasse
+        no quadro. O Studio Shorts acerta a altura olhando a prévia do Short."""
+        self.legenda.set(min(max(round(percentual), _LEGENDA_MINIMA), _LEGENDA_MAXIMA))
         self._depois_de_mexer()
 
     def legenda_padrao(self) -> None:

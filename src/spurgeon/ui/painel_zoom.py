@@ -14,7 +14,7 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from spurgeon.core.aparencia import Enquadramento
-from spurgeon.ui import dialogos
+from spurgeon.ui import dialogos, dicas
 from spurgeon.ui.composicao import ajustar_ao_tamanho, centro_pelo_clique, sombrear_fora_do_zoom
 from spurgeon.ui.formulario import ValoresFormulario
 from spurgeon.ui.presets import RepositorioDePresets
@@ -91,6 +91,11 @@ class PainelZoom(ctk.CTkFrame):
         self._imagem_na_tela = self._tela.create_image(0, 0, anchor="nw")
         self._tela.bind("<Button-1>", self._clicou)
         self._tela.bind("<B1-Motion>", self._clicou)
+        dicas.dica(
+            self._tela,
+            "Clique ou arraste no quadro para centrar o zoom no pregador. A área escura é "
+            "cortada; o que fica dentro da moldura é ampliado.",
+        )
 
         linha_zoom = ctk.CTkFrame(self, fg_color="transparent")
         linha_zoom.pack(fill="x", padx=12, pady=(2, 0))
@@ -106,11 +111,25 @@ class PainelZoom(ctk.CTkFrame):
         campo.bind("<FocusOut>", lambda _e: self._digitou_zoom())
         ctk.CTkLabel(linha_zoom, text="%").pack(side="left", padx=(2, 0))
         self._filhos += [slider, campo]
+        dicas.dica(
+            slider,
+            "Aproxima a câmera: 100% é o quadro inteiro e 130% corta as bordas e amplia o centro. "
+            "Acima de 150% a imagem perde nitidez.",
+        )
+        dicas.dica(campo, "Digite o zoom (de 100 a 200) e aperte Enter.")
 
-        for rotulo, variavel in (
-            ("Posição horizontal", self.centro_x),
-            ("Posição vertical", self.centro_y),
-        ):
+        for rotulo, variavel, ajuda in (
+            (
+                "Posição horizontal", self.centro_x,
+                "Move a área ampliada para a esquerda ou para a direita (50% é o meio). "
+                "Dá no mesmo que clicar no quadro.",
+            ),
+            (
+                "Posição vertical", self.centro_y,
+                "Move a área ampliada para cima ou para baixo (50% é o meio). "
+                "Dá no mesmo que clicar no quadro.",
+            ),
+        ):  # fmt: skip
             linha = ctk.CTkFrame(self, fg_color="transparent")
             linha.pack(fill="x", padx=12, pady=(2, 0))
             ctk.CTkLabel(linha, text=rotulo, width=110, anchor="w").pack(side="left")
@@ -119,6 +138,7 @@ class PainelZoom(ctk.CTkFrame):
                 command=lambda _v: self._moveu_centro(),
             )  # fmt: skip
             controle.pack(side="left", padx=6)
+            dicas.dica(controle, ajuda)
             self._filhos.append(controle)
 
         self._info = ctk.CTkLabel(
@@ -128,12 +148,20 @@ class PainelZoom(ctk.CTkFrame):
 
         botoes = ctk.CTkFrame(self, fg_color="transparent")
         botoes.pack(fill="x", padx=12, pady=(4, 0))
-        for texto, comando, largura in (
-            ("Outro quadro", self.outro_quadro, 110),
-            ("Sem zoom", self.zerar, 90),
-        ):
+        for texto, comando, largura, ajuda in (
+            (
+                "Outro quadro", self.outro_quadro, 110,
+                "Mostra outro quadro do vídeo, para conferir o enquadramento em momentos "
+                "diferentes do sermão.",
+            ),
+            (
+                "Sem zoom", self.zerar, 90,
+                "Volta o zoom para 100% e centraliza a posição (nada é cortado).",
+            ),
+        ):  # fmt: skip
             botao = ctk.CTkButton(botoes, text=texto, width=largura, command=comando)
             botao.pack(side="left", padx=(0, 6))
+            dicas.dica(botao, ajuda)
             self._filhos.append(botao)
 
         linha_preset = ctk.CTkFrame(self, fg_color="transparent")
@@ -145,15 +173,28 @@ class PainelZoom(ctk.CTkFrame):
         )  # fmt: skip
         self._menu_preset.pack(side="left", padx=6)
         self._filhos.append(self._menu_preset)
-        for texto, comando, largura in (
-            ("Salvar preset…", self.salvar_preset, 110),
-            ("Excluir", self.excluir_preset, 64),
-        ):
+        dicas.dica(
+            self._menu_preset,
+            "Escolha um enquadramento que você salvou antes (por exemplo, o da câmera de uma "
+            "igreja): o zoom e a posição são aplicados na hora.",
+        )
+        for texto, comando, largura, ajuda in (
+            (
+                "Salvar preset…", self.salvar_preset, 110,
+                "Guarda o zoom e a posição atuais com um nome, para reaproveitar nos próximos "
+                "sermões. Se o nome já existe, o preset é substituído.",
+            ),
+            (
+                "Excluir", self.excluir_preset, 64,
+                "Apaga da lista o preset escolhido. Os vídeos já gerados não mudam.",
+            ),
+        ):  # fmt: skip
             botao = ctk.CTkButton(
                 linha_preset, text=texto, width=largura, fg_color=("gray70", "gray30"),
                 command=comando,
             )  # fmt: skip
             botao.pack(side="left", padx=(0, 4))
+            dicas.dica(botao, ajuda)
             self._filhos.append(botao)
         ctk.CTkLabel(
             self,
@@ -169,6 +210,11 @@ class PainelZoom(ctk.CTkFrame):
             self, text="Aplicar também aos Shorts", variable=self.nos_shorts, command=self._mudou
         )
         self._check_shorts.pack(anchor="w", padx=12, pady=(8, 0))
+        dicas.dica(
+            self._check_shorts,
+            "Marcado: o recorte vertical (9:16) dos Shorts sai de dentro da área ampliada. "
+            "Desmarcado: só o vídeo longo recebe o zoom.",
+        )
         ctk.CTkLabel(
             self,
             text="Nos Shorts o recorte vertical (9:16) sai de dentro desta área, e o “Deslocamento "

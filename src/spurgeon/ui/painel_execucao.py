@@ -8,6 +8,8 @@ from enum import StrEnum
 
 import customtkinter as ctk
 
+from spurgeon.ui import dicas
+
 _COR_AVISO = "#e0a030"
 _COR_ERRO = "#e05555"
 _COR_OK = "#4caf72"
@@ -79,6 +81,11 @@ class PainelExecucao(ctk.CTkFrame):
         self._barra = ctk.CTkProgressBar(linha_barra, height=14)
         self._barra.grid(row=0, column=0, sticky="ew")
         self._barra.set(0)
+        dicas.dica(
+            self._barra,
+            "O andamento de todo o processamento (todas as etapas). O tempo restante é uma "
+            "estimativa e melhora conforme o trabalho avança.",
+        )
         self._pct = ctk.CTkLabel(linha_barra, text="0%", width=52, anchor="e")
         self._pct.grid(row=0, column=1, padx=(8, 0))
 
@@ -89,6 +96,7 @@ class PainelExecucao(ctk.CTkFrame):
 
         botoes = ctk.CTkFrame(self, fg_color="transparent")
         botoes.grid(row=5, column=0, sticky="ew", pady=10)
+        self.faixa_de_botoes = botoes
         self.botao_iniciar = ctk.CTkButton(
             botoes,
             text="Iniciar processamento",
@@ -97,6 +105,7 @@ class PainelExecucao(ctk.CTkFrame):
             command=ao_iniciar,
         )
         self.botao_iniciar.pack(side="left")
+        dicas.dica(self.botao_iniciar, self._dica_de_iniciar)
         self.botao_pausar = ctk.CTkButton(
             botoes,
             text="Pausar",
@@ -106,6 +115,7 @@ class PainelExecucao(ctk.CTkFrame):
             fg_color=("gray70", "gray30"),
         )
         self.botao_pausar.pack(side="left", padx=(8, 0))
+        dicas.dica(self.botao_pausar, self._dica_de_pausar)
         self.botao_cancelar = ctk.CTkButton(
             botoes,
             text="Cancelar",
@@ -115,6 +125,11 @@ class PainelExecucao(ctk.CTkFrame):
             fg_color=("gray70", "gray30"),
         )
         self.botao_cancelar.pack(side="left", padx=(8, 0))
+        dicas.dica(
+            self.botao_cancelar,
+            "Para o processamento. O projeto fica salvo e pode ser retomado depois, a partir do "
+            "ponto em que parou.",
+        )
         self.botao_pasta = ctk.CTkButton(
             botoes,
             text="Abrir pasta do projeto",
@@ -124,6 +139,11 @@ class PainelExecucao(ctk.CTkFrame):
             border_width=1,
         )
         self.botao_pasta.pack(side="right")
+        dicas.dica(
+            self.botao_pasta,
+            "Abre no Explorador de Arquivos a pasta do projeto: o vídeo final, as legendas (.srt) "
+            "e a pasta dos Shorts ficam lá.",
+        )
 
         self._banner = ctk.CTkFrame(self, border_width=1, border_color=_COR_AVISO)
         self._texto_banner = ctk.CTkLabel(
@@ -132,22 +152,69 @@ class PainelExecucao(ctk.CTkFrame):
         self._texto_banner.pack(fill="x", padx=12, pady=(10, 6))
         linha = ctk.CTkFrame(self._banner, fg_color="transparent")
         linha.pack(fill="x", padx=12, pady=(0, 10))
-        ctk.CTkButton(linha, text="Abrir revisão", command=ao_abrir_revisao, width=120).pack(
-            side="left"
+        self.botao_abrir_revisao = ctk.CTkButton(
+            linha, text="Abrir revisão", command=ao_abrir_revisao, width=120
         )
-        ctk.CTkButton(linha, text="Aprovar e continuar", command=ao_aprovar, width=150).pack(
-            side="left", padx=8
+        self.botao_abrir_revisao.pack(side="left")
+        dicas.dica(
+            self.botao_abrir_revisao,
+            "Abre o painel para conferir e corrigir o que esta etapa produziu (a transcrição ou "
+            "os cortes dos Shorts) antes de continuar.",
         )
-        ctk.CTkButton(
+        self.botao_aprovar = ctk.CTkButton(
+            linha, text="Aprovar e continuar", command=ao_aprovar, width=150
+        )
+        self.botao_aprovar.pack(side="left", padx=8)
+        dicas.dica(
+            self.botao_aprovar,
+            "Dá a revisão por feita e o processamento segue daqui. Você pode aprovar sem "
+            "mudar nada.",
+        )
+        self.botao_fechar_revisao = ctk.CTkButton(
             linha, text="Fechar", command=ao_fechar_revisao, width=80, fg_color=("gray70", "gray30")
-        ).pack(side="left")
+        )
+        self.botao_fechar_revisao.pack(side="left")
+        dicas.dica(
+            self.botao_fechar_revisao,
+            "Fecha este aviso sem continuar. O projeto fica salvo: você pode editar os cortes no "
+            "Studio Shorts ou retomar depois.",
+        )
 
         self._log = ctk.CTkTextbox(self, wrap="word", font=ctk.CTkFont(family="Consolas", size=12))
         self._log.grid(row=6, column=0, sticky="nsew")
+        dicas.dica(
+            self._log,
+            "O registro do que o programa está fazendo. Se algo der errado, o mesmo texto fica "
+            "no arquivo processamento.log, dentro da pasta do projeto.",
+        )
         self._log.configure(state="disabled")
         self._log._textbox.tag_config("aviso", foreground=_COR_AVISO)
         self._log._textbox.tag_config("erro", foreground=_COR_ERRO)
         self.definir_estado(EstadoUI.OCIOSO)
+
+    @property
+    def barra(self) -> ctk.CTkProgressBar:
+        return self._barra
+
+    # --- dicas que mudam com o estado ---------------------------------------------------------
+    def _dica_de_iniciar(self) -> str:
+        if self._estado in _RETOMAVEL:
+            return (
+                "Continua o processamento do ponto em que parou: o que já foi feito é "
+                "aproveitado, não é refeito."
+            )
+        return (
+            "Confere o ambiente e começa a processar com o que está marcado nas opções. Dá para "
+            "pausar ou cancelar a qualquer hora."
+        )
+
+    def _dica_de_pausar(self) -> str:
+        if self._estado in (EstadoUI.PAUSANDO, EstadoUI.PAUSADO):
+            return "Continua o processamento de onde ele parou."
+        return (
+            "Suspende o processamento no próximo ponto seguro (pode levar alguns segundos). "
+            "Retomar continua de onde parou."
+        )
 
     # --- estado -------------------------------------------------------------------------------
     @property

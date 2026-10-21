@@ -244,7 +244,7 @@ def test_fade_escurece_a_emenda_com_a_introducao_e_a_vinheta(
 ):
     preparar_longo(
         contexto, video_com_pausas, audio_com_pausas, introducao=True, vinheta_final=True,
-        fade_vinhetas=True, fade_vinhetas_s=0.6,
+        fade_vinhetas=True, fade_vinhetas_s=0.6, fade_estilo="preto",
     )  # fmt: skip
     escrever_json_atomico(contexto.pastas.cortes, {"trechos": [[10.0, 16.0]]})
     contexto.config.pastas.recursos.mkdir(parents=True, exist_ok=True)

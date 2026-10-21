@@ -103,6 +103,8 @@ def _processar(args: argparse.Namespace) -> int:
     if args.fade:
         valores.fade_vinhetas = True
         valores.fade_vinhetas_s = args.fade
+    if args.fade_estilo:
+        valores.fade_estilo = args.fade_estilo
     if args.inicio:
         valores.video_inicio = args.inicio
     if args.fim:
@@ -314,6 +316,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     processar.add_argument(
         "--fade", help="liga o fade entre a introdução/vinheta e o vídeo, em s (0,5)"
+    )
+    processar.add_argument(
+        "--fade-estilo",
+        choices=("mesclar", "preto"),
+        help="como o fade acontece: mesclar (as duas pontas se fundem; o padrão) ou preto",
     )
     processar.add_argument("--inicio", help="onde o vídeo começa, ex.: 0:07 (o antes é ignorado)")
     processar.add_argument(

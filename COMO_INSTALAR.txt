@@ -1,0 +1,114 @@
+STUDIO SPURGEON - COMO INSTALAR (versão simples)
+=================================================
+
+O que é: programa para Windows que transforma um sermão longo em vídeo limpo,
+legendas e Shorts. Tudo roda no seu computador, sem enviar nada para a internet.
+
+Você precisa de:
+  - Windows 10 ou 11
+  - uns 20 GB livres no disco (programas e modelos) + uns 6 GB para cada sermão
+  - internet só na instalação e na primeira vez que usar cada recurso
+    (depois funciona offline)
+
+
+PASSO 1 - Instalar os programas (uma vez só)
+--------------------------------------------
+Clique no menu Iniciar, digite "PowerShell", abra e cole esta linha inteira:
+
+    winget install Python.Python.3.11 astral-sh.uv Gyan.FFmpeg Ollama.Ollama
+
+Aperte Enter e aceite o que o Windows perguntar. Quando terminar, FECHE o
+PowerShell (isso é importante, para o Windows enxergar os programas novos).
+
+Se o "winget" não existir no seu Windows, instale um por um:
+  Python 3.11 ..... https://www.python.org/downloads/release/python-3119/
+  uv .............. https://docs.astral.sh/uv/getting-started/installation/
+  FFmpeg .......... https://www.gyan.dev/ffmpeg/builds/  (versão "full")
+  Ollama .......... https://ollama.com/download
+
+
+PASSO 2 - Pôr a pasta do Studio Spurgeon no computador
+------------------------------------------------------
+Copie a pasta "Spurgeon" inteira para um lugar fácil, por exemplo:
+
+    C:\Users\SeuNome\Documents\Spurgeon
+
+Evite pastas dentro do OneDrive ou do "Arquivos de Programas".
+
+
+PASSO 3 - Instalar o Studio Spurgeon
+------------------------------------
+Dentro da pasta Spurgeon, dê DOIS CLIQUES em:
+
+    instalar.bat
+
+Uma janela preta vai baixar e montar tudo (leva alguns minutos). No final ela
+confere o ambiente. Procure estas linhas:
+
+    [OK]     tudo certo
+    [AVISO]  não impede de usar (por exemplo: "Ollama: modelo ainda não baixado")
+    [ERRO]   precisa corrigir antes de continuar (a própria linha diz o quê)
+
+Quando aparecer "Ambiente pronto", aperte uma tecla para fechar.
+
+
+PASSO 4 - Abrir o programa
+--------------------------
+Dê DOIS CLIQUES em:
+
+    iniciar.bat
+
+Pode criar um atalho dele na Área de Trabalho (botão direito > Enviar para >
+Área de trabalho).
+
+
+COMO USAR (resumo)
+------------------
+1. Na aba da esquerda "1 · Vídeo e geração", clique em "Escolher vídeo..." e
+   escolha o sermão. Confira o nome e a data.
+2. Em "O que gerar", marque o que quer: vídeo completo sem silêncios, Shorts etc.
+3. Clique em "Iniciar processamento" (à direita).
+4. O programa pausa em dois pontos para você revisar a transcrição e aprovar os
+   cortes dos Shorts. Depois continua sozinho.
+5. O resultado fica em  Spurgeon\Projetos\AAAA-MM-DD_NomeDoSermao
+
+Dica: a qualidade "Máxima" é lenta (horas). Para testar, escolha "Rápido" na
+aba "3 · Revisão e opções".
+
+
+PRIMEIRA VEZ (downloads automáticos)
+------------------------------------
+Na primeira vez que usar cada recurso, o programa baixa sozinho (precisa de
+internet e demora):
+  - modelo de transcrição (Whisper) .......... cerca de 1,6 GB
+  - modelo da IA dos Shorts (Ollama) ......... cerca de 5 GB
+  - filtro de limpeza de áudio ............... cerca de 26 MB
+
+Se preferir baixar a IA antes, abra o PowerShell e rode:  ollama pull qwen3:8b
+
+
+OPCIONAL - Introdução e vinheta
+-------------------------------
+Para usar introdução e vinheta final, ponha seus vídeos na pasta "recursos" com
+os nomes:
+
+    introducao.mp4
+    vinheta_final.mp4
+
+(ou escolha outros arquivos direto na tela, em "Introdução e vinheta final").
+
+
+SE ALGO DEU ERRADO
+------------------
+- "uv não foi encontrado": faltou fechar e abrir o terminal depois do Passo 1.
+  Feche tudo e rode o instalar.bat de novo.
+- Ollama: abra o programa Ollama pelo menu Iniciar e deixe-o rodando.
+- Pouco espaço em disco: libere espaço ou escolha outra "Pasta de projetos".
+- O processamento parou ou o PC desligou: abra o programa, escolha o mesmo vídeo
+  (ou use "Abrir projeto...") e clique em Iniciar: ele continua de onde parou.
+- Para ver o que aconteceu, abra o arquivo "processamento.log" dentro da pasta
+  do projeto.
+- Para conferir o ambiente a qualquer hora: abra o PowerShell na pasta Spurgeon e
+  rode:  uv run spurgeon doctor
+
+Mais detalhes: README.md e Projeto.md.

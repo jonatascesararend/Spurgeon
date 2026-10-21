@@ -112,6 +112,67 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   parecidas e tema) e `ui/shorts_livre.py`. `Corte.origem` é `automatico` ou `manual`; manuais têm id
   >= `ID_BASE_DOS_MANUAIS` e `SelecionarShorts` os mantém ao refazer a seleção. A prévia do Studio leva
   SEMPRE a legenda (`com_legenda=True`), mesmo com "Legendas dinâmicas" desligado.
+- Fade da introdução e da vinheta: `fade_estilo` = `mesclar` (padrão; sobreposição com `xfade` e `acrossfade`,
+  dentro da primeira e da última parte do vídeo; o vídeo fica mais curto pela sobreposição) ou `preto`.
+  Quem soma tempos (legenda, conferência) usa `render/mescla.py`. "Só vinhetas" nunca mescla.
+- Testes nunca tocam o `config.toml` do usuário: o `conftest.py` isola `platformdirs.user_config_path`.
+  Não crie fixture que escreva fora de `tmp_path`.
+- Studio Shorts é uma aba que ocupa a janela toda (`JanelaPrincipal._trocar_aba`): a faixa das abas é a linha 0
+  da janela; a coluna de opções (`_coluna`) e o andamento (`_direita`) saem de cena e `studio` é filho da
+  janela (não da coluna da direita). A altura da legenda dos Shorts é opção GLOBAL que o Studio acerta por
+  `definir_ajustes(legenda=…)` (`JanelaPrincipal._definir_ajustes_do_short`); o valor atual vem de
+  `origem_da_previa().opcoes`. O corte das pausas NÃO é opção global: é de cada Short (`Corte.pausa_s`).
+- Tabela de frases (`ui/tabela_de_frases.py`, `EditorDeCortes._janela`): uma frase por linha, com a hora. O widget
+  troca o comando Tcl do `Text` por um filtro: só o texto das linhas do corte aceita inserir e apagar, e tudo o
+  que o código escreve passa por `mostrar()`/`mostrar_aviso()` (flag `_interno`). Nunca escreva na tabela por
+  fora disso. A legenda tem DOIS lugares de edição (a tabela e a caixa "Legenda do Short"): a caixa é a que
+  `_guardar_detalhe` lê, e `_levar_a_tabela_para_a_legenda` / `_levar_a_legenda_para_a_tabela` os mantêm iguais.
+- Mexer nas pontas (`EditorDeCortes._ajustar`) NÃO refaz a lista: use `_atualizar_linha` e `_reposicionar`
+  (`_reordenar` destrói e recria todas as linhas; só para ordem trocada, corte novo ou projeto recarregado). A
+  legenda corrigida acompanha as pontas por `shorts/edicao.legenda_preservada`.
+- Refazer título, descrição e hashtags: `ClienteLLM.refazer(campo, …)` (um pedido por campo, a partir do texto
+  da legenda do Short, não do trecho original); o modelo fica na memória 3 min (`manter_na_memoria`).
+- Pausas e saltos do Short (`shorts/pausas.py`): cada Short tem `Corte.pausa_s` (0 = não corta; de 0,1 a 10 s)
+  e `Corte.saltos` (`[[de, ate], …]` em segundos do vídeo: pedaços tirados de dentro dele). `trechos_mantidos`
+  junta os dois; vídeo e som usam os MESMOS trechos (`recortes_de_quadros` + `atrim`) e a legenda é remapeada por
+  `remapear_palavras`. `Corte.duracao` é a duração LÍQUIDA (sem os saltos); a janela de leitura é `janela_s`.
+  Assinaturas e registro só levam `saltos` e `pausa_s` quando existem (Shorts já renderizados continuam valendo).
+- Modelo de edição por conjunto de palavras (`shorts/edicao.py`): `indices_incluidos`, `faixas_de`,
+  `corte_com_indices`, `incluir_palavras` (marca-texto), `tirar_palavras` (borracha). O que fica entre duas faixas
+  vira salto, e cada ponta de faixa leva o respiro de costume (`respiro_nas_pontas`).
+- Desfazer e refazer (Ctrl+Z/Ctrl+Y e os botões) vivem no `EditorDeCortes`: uma história por id de corte
+  (`_registrar_no_historico`, fotos de `_CAMPOS_DO_HISTORICO`); as caixas de texto têm o `undo` do Tk desligado
+  para haver uma história só. Mudança nova apaga o "refazer". "Descartar alterações" (`descartar_alteracoes`)
+  relê o arquivo e esquece a história.
+- Marca-texto e borracha: `ui/pincel.Pincel` (o arrasto sobre as palavras de um `Text`, usado pela tabela e pelo
+  Shorts livre; `ui/ferramentas_de_marca.FerramentasDeMarca` são os três botões seta/marca-texto/borracha).
+  A seta é o gesto antigo; com as outras duas o Pincel devolve "break" nos eventos do mouse.
+- Categorias dos Shorts: 17 chaves em `shorts/dados.CATEGORIAS` (rótulo e cor únicos por categoria; a IA só pode
+  responder uma delas, o esquema leva o enum). Mudar a lista exige mexer em `ROTULOS_CATEGORIA`,
+  `COR_DA_CATEGORIA` e `DEFINICOES_DAS_CATEGORIAS` juntos (`tests/test_categorias.py` confere).
+- Shorts livre "vivo" (`ui/shorts_livre.py`): a margem de 3 caracteres de cada linha (`_PREFIXO`) leva a barra
+  da categoria detectada (`shorts/marcas.trechos_detectados` lê `candidatos.json` + `avaliacoes.json`) e o losango
+  dos Shorts que já existem; `Trecho.fora` guarda as palavras puladas (pedaços separados) e `gerar_corte_livre`
+  as transforma em saltos. `atualizar_marcas()` roda ao abrir o painel e depois de criar um Short.
+- Dicionário personalizado (`ui/dicionario.py`, botão "Dicionário…" do Studio): edita
+  `recursos/vocabulario_teologico.txt`; remover usa `transcricao/vocabulario.remover_do_vocabulario` e avisa o
+  verificador (`atualizar_vocabulario_compartilhado`). Testes NUNCA tocam esse arquivo: o `conftest.py` o
+  restaura e reprova o teste que o mexer; `Pastas(raiz=…)` não existe (o pydantic ignora o argumento e usa as
+  pastas de verdade): use `Pastas(recursos=tmp_path / "recursos", …)`.
+- Dicas de ferramenta e "?": `ui/dicas.dica(widget, texto)` em TODO botão, caixa e campo; `CTkSegmentedButton`
+  não aceita `bind`, use `ui/ajuda.dica_do_seletor`. O título de cada cartão é um `ui/ajuda.CabecalhoDeEtapa`
+  (com o "?"). Os testes (`tests/test_tutorial_e_ajuda.py`, `test_studio_ferramentas.py`) falham se um controle
+  novo ficar sem dica.
+- Passo a passo (`ui/tutorial.py`: `PASSOS`, `Tutorial`, `Destaque`, `OfertaDoTutorial`): a janela o liga em
+  `JanelaPrincipal.abrir_tutorial`. `executar()` reabre `ConfigApp.ultimo_projeto` e oferece o passo a passo se
+  `tutorial_ao_abrir`; `JanelaPrincipal(config)` sozinha não faz nenhum dos dois (os testes dependem disso).
+  Mudou um recurso que o passo a passo explica? Ajuste o texto em `PASSOS`.
+- Menos "piscar": `ui/estabilidade.py` troca o `configure` das classes do CustomTkinter por um que não faz nada se
+  nada mudou (compara com `cget`); `RotuloQueSome` não ocupa linha enquanto está vazio (um `CTkLabel` vazio ainda
+  pede 28 px) e `CTkScrollbar`/`CTkFrame` pedem 200 px por padrão (passe `height` pequeno em quadros que devem
+  encolher). O painel de português do Studio é `compacto=True`.
+- Scripts Python escritos por heredoc: `\n` e `\t` dentro de aspas viram caracteres de verdade no arquivo gerado.
+  Escreva o script com a ferramenta de escrita (ou use `\\n`) e rode com `uv run python -I -X utf8 script.py`.
 - Testes de render usam vídeos sintéticos; o de sincronia usa quadros numerados em binário e ruído
   branco. `tests/test_render.py` leva ~2 min; a suíte inteira ~25 min (os testes de janela são lentos).
 - Commits: o hook do pre-commit chama `uv`; no Git Bash ponha a pasta do winget do uv no PATH.

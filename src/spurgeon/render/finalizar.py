@@ -15,6 +15,7 @@ from spurgeon.core.ffmpeg import sondar
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.render.filtros import ALTURA_SHORT, LARGURA_SHORT
+from spurgeon.render.mescla import mescla_em_s
 from spurgeon.render.shorts import DURACAO_MAXIMA_S, planejar_shorts
 from spurgeon.shorts.etapas import carregar_cortes
 
@@ -95,6 +96,7 @@ class Finalizar(Etapa):
             esperado = float(ler_json(ctx.pastas.cortes)["duracao_editada_s"])
         except (OSError, KeyError, ValueError):
             return None
+        principal = esperado
         for ligado, caminho in (
             (
                 ctx.opcoes.introducao,
@@ -106,7 +108,10 @@ class Finalizar(Etapa):
             ),
         ):
             if ligado and caminho.exists():
-                esperado += sondar(caminho).duracao_s
+                duracao = sondar(caminho).duracao_s
+                esperado += duracao
+                if ctx.opcoes.fade_mesclado:  # a mescla sobrepõe o clipe ao vídeo
+                    esperado -= mescla_em_s(ctx.opcoes.fade_vinhetas_s, duracao, principal)
         return esperado
 
     def _legendas(self, ctx, duracao_video: float, problemas, avisos, resumo) -> None:

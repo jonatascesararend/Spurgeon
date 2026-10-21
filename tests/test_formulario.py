@@ -424,3 +424,25 @@ def test_listar_modelos_instalados_lida_com_servidor_fora_do_ar(monkeypatch):
     corpo = json.dumps({"models": [{"name": "b:1"}, {"name": "a:2"}, {"x": 1}]}).encode()
     monkeypatch.setattr(ollama_mod.urllib.request, "urlopen", lambda *_a, **_k: Resposta(corpo))
     assert ollama_mod.listar_modelos_instalados() == ["a:2", "b:1"]
+
+
+def test_estilo_do_fade_vai_do_formulario_as_opcoes_e_volta():
+    v = ValoresFormulario(introducao=True, fade_vinhetas=True, fade_estilo="preto")
+    assert para_opcoes(v).fade_estilo == "preto"
+    assert ValoresFormulario.de_opcoes(para_opcoes(v)).fade_estilo == "preto"
+    assert (
+        para_opcoes(ValoresFormulario(introducao=True, fade_vinhetas=True)).fade_estilo == "mesclar"
+    )
+    assert para_opcoes(ValoresFormulario(fade_estilo="lixo")).fade_estilo == "mesclar"
+
+
+def test_o_estilo_do_fade_so_habilita_com_fade_no_video_longo():
+    sem = calcular_habilitacoes(ValoresFormulario(), introducao_existe=True, vinheta_existe=True)
+    assert not sem.fade_estilo
+    v = ValoresFormulario(introducao=True, fade_vinhetas=True)
+    assert calcular_habilitacoes(v, introducao_existe=True, vinheta_existe=True).fade_estilo
+    so_vinhetas = ValoresFormulario(
+        introducao=True, fade_vinhetas=True, modo="so_vinhetas"
+    )  # ali o fade sempre passa pelo preto
+    h = calcular_habilitacoes(so_vinhetas, introducao_existe=True, vinheta_existe=True)
+    assert h.fade_vinhetas and not h.fade_estilo

@@ -34,6 +34,10 @@ _LIMITE_DESLOCAMENTO = (-30.0, 30.0)
 _LIMITE_POSICAO = (30.0, 90.0)
 _LIMITE_MARCA = (3.0, 50.0)
 
+ROTULOS_FADE = {
+    "mesclar": "Mesclar",
+    "preto": "Pelo preto",
+}
 ROTULOS_MODO = {
     "completo": "Tudo",
     "so_shorts": "Só Shorts",
@@ -116,6 +120,7 @@ class ValoresFormulario:
     vinheta_arquivo: str = ""
     fade_vinhetas: bool = False
     fade_vinhetas_s: str = "0,5"
+    fade_estilo: str = "mesclar"
     gerar_shorts: bool = False
     legendas_dinamicas: bool = False
     # Onde o vídeo começa e termina ("" = do começo / até o fim)
@@ -182,6 +187,7 @@ class ValoresFormulario:
             vinheta_arquivo=o.vinheta_arquivo,
             fade_vinhetas=o.fade_vinhetas,
             fade_vinhetas_s=_texto_decimal(o.fade_vinhetas_s),
+            fade_estilo=o.fade_estilo,
             gerar_shorts=o.gerar_shorts,
             legendas_dinamicas=o.legendas_dinamicas,
             video_inicio=_tempo_do_campo(o.video_inicio_s),
@@ -240,6 +246,7 @@ class Habilitacoes:
     escolher_vinheta: bool
     fade_vinhetas: bool
     fade_vinhetas_s: bool
+    fade_estilo: bool
     aparar: bool
     zoom: bool
     zoom_nos_shorts: bool
@@ -285,6 +292,8 @@ def calcular_habilitacoes(
         escolher_vinheta=vinhetas_valem,
         fade_vinhetas=vinhetas_valem and (v.introducao or v.vinheta_final),
         fade_vinhetas_s=vinhetas_valem and v.fade_vinhetas and (v.introducao or v.vinheta_final),
+        # no Só vinhetas o fade sempre passa pelo preto: não há o que escolher
+        fade_estilo=longo and v.fade_vinhetas and (v.introducao or v.vinheta_final),
         aparar=not so_vinhetas,
         zoom=not so_vinhetas,
         zoom_nos_shorts=not so_vinhetas and shorts,
@@ -325,6 +334,7 @@ def para_opcoes(
         "introducao_arquivo": v.introducao_arquivo.strip(),
         "vinheta_arquivo": v.vinheta_arquivo.strip(),
         "fade_vinhetas": v.fade_vinhetas and (longo or so_vinhetas),
+        "fade_estilo": v.fade_estilo if v.fade_estilo in ROTULOS_FADE else "mesclar",
         "zoom_nos_shorts": v.zoom_nos_shorts,
         "tratamento_nos_shorts": v.tratamento_nos_shorts,
         "tratamento_ativo": v.tratamento_ativo and not so_vinhetas,

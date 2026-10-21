@@ -18,7 +18,8 @@ from PIL import Image, ImageTk
 from spurgeon.core.aparencia import AJUSTES_DO_TRATAMENTO, TratamentoImagem
 from spurgeon.render import previa
 from spurgeon.render.imagem import sugerir_tratamento
-from spurgeon.ui import dialogos
+from spurgeon.ui import dialogos, dicas
+from spurgeon.ui.ajuda import CabecalhoDeEtapa
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.composicao import ajustar_ao_tamanho, compor_antes_depois
 from spurgeon.ui.formulario import ValoresFormulario
@@ -30,6 +31,11 @@ _COR_ERRO = "#e05555"
 _LARGURA_DA_PREVIA = 440
 _ATRASO_DA_PREVIA_MS = 160
 _SEM_PRESET = "(nenhum preset)"
+AJUDA_DA_ETAPA = (
+    "Corrige a cor e a luz quando a imagem saiu escura, lavada ou amarelada. A sugestão "
+    "automática mede o vídeo e propõe um ponto de partida; a divisória mostra o antes e o depois "
+    "com os mesmos filtros do arquivo final. Se a imagem já está boa, deixe desligado."
+)
 
 
 class PainelTratamento(ctk.CTkFrame):
@@ -69,9 +75,8 @@ class PainelTratamento(ctk.CTkFrame):
         self._filhos: list[ctk.CTkBaseClass] = []
         self._rotulos_valor: dict[str, ctk.CTkLabel] = {}
 
-        ctk.CTkLabel(
-            self, text="4. Tratamento de imagem", font=ctk.CTkFont(size=15, weight="bold")
-        ).pack(anchor="w", padx=12, pady=(10, 4))
+        self.cabecalho = CabecalhoDeEtapa(self, "4. Tratamento de imagem", AJUDA_DA_ETAPA)
+        self.cabecalho.pack(fill="x", padx=12, pady=(10, 4))
         self._check_ativo = ctk.CTkCheckBox(
             self,
             text="Aplicar um tratamento de cor e luz ao vídeo",
@@ -79,6 +84,11 @@ class PainelTratamento(ctk.CTkFrame):
             command=self._mudou,
         )
         self._check_ativo.pack(anchor="w", padx=12, pady=3)
+        dicas.dica(
+            self._check_ativo,
+            "Liga ou desliga o tratamento. Desligado, a cor e a luz do vídeo ficam como foram "
+            "gravadas. Mexer em qualquer ajuste liga sozinho.",
+        )
         self._corpo = ctk.CTkFrame(self, fg_color="transparent")
         self._corpo.pack(fill="x")
         self._montar_corpo(self._corpo)
@@ -107,6 +117,11 @@ class PainelTratamento(ctk.CTkFrame):
         self._imagem_na_tela = self._tela.create_image(0, 0, anchor="nw")
         self._tela.bind("<Button-1>", self._arrastar)
         self._tela.bind("<B1-Motion>", self._arrastar)
+        dicas.dica(
+            self._tela,
+            "Clique ou arraste para mover a linha branca: à esquerda está o quadro original e à "
+            "direita o mesmo quadro com os ajustes.",
+        )
         legenda = ctk.CTkFrame(c, fg_color="transparent")
         legenda.pack(fill="x", padx=12)
         ctk.CTkLabel(legenda, text="◀ original", text_color=_COR_DICA).pack(side="left")
@@ -121,13 +136,25 @@ class PainelTratamento(ctk.CTkFrame):
 
         botoes = ctk.CTkFrame(c, fg_color="transparent")
         botoes.pack(fill="x", padx=12, pady=(6, 2))
-        for texto, comando, largura in (
-            ("✨ Sugestão automática", self.sugerir, 170),
-            ("Outro quadro", self.outro_quadro, 110),
-            ("Zerar", self.zerar, 70),
-        ):
+        for texto, comando, largura, ajuda in (
+            (
+                "✨ Sugestão automática", self.sugerir, 170,
+                "Mede alguns quadros do vídeo e propõe brilho, contraste e cor para equilibrar a "
+                "imagem. É um ponto de partida: ajuste a seu gosto depois.",
+            ),
+            (
+                "Outro quadro", self.outro_quadro, 110,
+                "Mostra outro quadro do vídeo no antes e depois, para você ver o efeito em "
+                "cenas diferentes.",
+            ),
+            (
+                "Zerar", self.zerar, 70,
+                "Volta os sete ajustes para 0 (sem tratamento). O preset escolhido não é apagado.",
+            ),
+        ):  # fmt: skip
             botao = ctk.CTkButton(botoes, text=texto, width=largura, command=comando)
             botao.pack(side="left", padx=(0, 6))
+            dicas.dica(botao, ajuda)
             self._filhos.append(botao)
 
         for nome, (rotulo, ajuda) in AJUSTES_DO_TRATAMENTO.items():
@@ -139,6 +166,11 @@ class PainelTratamento(ctk.CTkFrame):
                 width=190, command=lambda _v, n=nome: self._moveu(n),
             )  # fmt: skip
             controle.pack(side="left", padx=6)
+            dicas.dica(
+                controle,
+                f"{rotulo}: arraste para a direita para aumentar e para a esquerda para diminuir. "
+                "No 0, nada muda.",
+            )
             self._filhos.append(controle)
             valor = ctk.CTkLabel(linha, text="0", width=36, anchor="e")
             valor.pack(side="left")
@@ -157,15 +189,27 @@ class PainelTratamento(ctk.CTkFrame):
         )  # fmt: skip
         self._menu_preset.pack(side="left", padx=6)
         self._filhos.append(self._menu_preset)
-        for texto, comando, largura in (
-            ("Salvar preset…", self.salvar_preset, 110),
-            ("Excluir", self.excluir_preset, 64),
-        ):
+        dicas.dica(
+            self._menu_preset,
+            "Escolha um estilo que você salvou antes: os sete ajustes são aplicados na hora.",
+        )
+        for texto, comando, largura, ajuda in (
+            (
+                "Salvar preset…", self.salvar_preset, 110,
+                "Guarda os sete ajustes atuais com um nome, para repetir o estilo nos próximos "
+                "vídeos. Se o nome já existe, o preset é substituído.",
+            ),
+            (
+                "Excluir", self.excluir_preset, 64,
+                "Apaga da lista o preset escolhido. Os vídeos já gerados não mudam.",
+            ),
+        ):  # fmt: skip
             botao = ctk.CTkButton(
                 linha_preset, text=texto, width=largura, fg_color=("gray70", "gray30"),
                 command=comando,
             )  # fmt: skip
             botao.pack(side="left", padx=(0, 4))
+            dicas.dica(botao, ajuda)
             self._filhos.append(botao)
         ctk.CTkLabel(
             c,
@@ -181,6 +225,10 @@ class PainelTratamento(ctk.CTkFrame):
             c, text="Aplicar também aos Shorts", variable=self.nos_shorts, command=self._mudou
         )
         self._check_shorts.pack(anchor="w", padx=12, pady=(8, 4))
+        dicas.dica(
+            self._check_shorts,
+            "Marcado: os Shorts também recebem o tratamento. Desmarcado: só o vídeo longo.",
+        )
         self._filhos.append(self._check_shorts)
         ctk.CTkLabel(
             c,

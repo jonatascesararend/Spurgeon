@@ -1,17 +1,19 @@
 """Short livre: o corte que a pessoa escolhe a dedo no texto do sermão.
 
 A análise automática propõe janelas de frases inteiras; aqui quem manda é a pessoa, que marca da
-palavra A à palavra B (em qualquer lugar, até no meio de uma frase). Depois o sistema faz o mesmo
-que faz com os cortes automáticos: a IA avalia o trecho (categoria, retenção, alerta de contexto), a
-nota sai da mesma conta (`calcular_nota`), as pontas se ajustam ao silêncio de verdade e a IA cria
-título, descrição e hashtags. O corte entra no Studio marcado como `gerado manualmente`.
+palavra A à palavra B (em qualquer lugar, até no meio de uma frase) ou pinta só os pedaços que quer
+(a frase 1 e a frase 3, sem a 2: o que fica no meio vira um salto, como no Studio). Depois o
+sistema faz o mesmo que faz com os cortes automáticos: a IA avalia o trecho (categoria, retenção,
+alerta de contexto), a nota sai da mesma conta (`calcular_nota`), as pontas se ajustam ao
+silêncio de verdade e a IA cria título, descrição e hashtags. O corte entra no Studio marcado
+como `gerado manualmente`.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, replace
 
 from spurgeon.core.config import DURACAO_MAXIMA_SHORT_S
 from spurgeon.core.erros import ErroFerramenta
@@ -25,7 +27,7 @@ from spurgeon.shorts.dados import (
     Corte,
     Frase,
 )
-from spurgeon.shorts.edicao import DURACAO_MINIMA_S
+from spurgeon.shorts.edicao import DURACAO_MINIMA_S, corte_com_indices, faixas_de
 from spurgeon.shorts.llm import ClienteLLM
 from spurgeon.shorts.pontuacao import calcular_nota
 from spurgeon.shorts.selecao import com_respiro, nome_de_arquivo
@@ -48,14 +50,41 @@ class ContextoDaIA:
 
 @dataclass(frozen=True)
 class Trecho:
-    """O que a pessoa marcou: da palavra `primeira` à `ultima` (índices, inclusive)."""
+    """O que a pessoa marcou: da palavra `primeira` à `ultima` (índices, inclusive).
+
+    `fora` são as palavras de dentro desse intervalo que ela deixou de fora (a frase do meio que
+    não quer): o Short pula esses pedaços e continua logo depois.
+    """
 
     primeira: int
     ultima: int
+    fora: frozenset[int] = frozenset()
+
+    @classmethod
+    def de_indices(cls, indices: Iterable[int]) -> Trecho | None:
+        """O trecho que tem exatamente estas palavras (None se não há nenhuma)."""
+        conjunto = set(indices)
+        if not conjunto:
+            return None
+        primeira, ultima = min(conjunto), max(conjunto)
+        return cls(primeira, ultima, frozenset(set(range(primeira, ultima + 1)) - conjunto))
+
+    @property
+    def indices(self) -> list[int]:
+        """As palavras que o Short junta, em ordem."""
+        return [i for i in range(self.primeira, self.ultima + 1) if i not in self.fora]
+
+    @property
+    def pedacos(self) -> list[tuple[int, int]]:
+        """As sequências de palavras seguidas (uma só, se nada ficou de fora)."""
+        return faixas_de(self.indices)
 
 
 def duracao_do_trecho(palavras: Sequence[Palavra], trecho: Trecho) -> float:
-    return palavras[trecho.ultima].fim - palavras[trecho.primeira].inicio
+    """Quanto o Short dura: da primeira à última palavra, sem os pedaços que ficaram de fora."""
+    if not trecho.fora:
+        return palavras[trecho.ultima].fim - palavras[trecho.primeira].inicio
+    return sum(palavras[b].fim - palavras[a].inicio for a, b in trecho.pedacos)
 
 
 def problema_do_trecho(palavras: Sequence[Palavra], trecho: Trecho | None) -> str | None:
@@ -101,10 +130,12 @@ def mover_ponta(
     else:
         novo = atual + sentido
     novo = max(0, min(len(palavras) - 1, novo))
+    while novo in trecho.fora:  # a ponta cai numa palavra que ficou de fora: vai à próxima
+        novo += sentido
     primeira, ultima = (novo, trecho.ultima) if ponta == "inicio" else (trecho.primeira, novo)
-    if primeira > ultima:
+    if primeira > ultima or not 0 <= novo < len(palavras):
         return trecho
-    return Trecho(primeira, ultima)
+    return Trecho(primeira, ultima, frozenset(i for i in trecho.fora if primeira < i < ultima))
 
 
 def proximo_id(cortes: Sequence[Corte]) -> int:
@@ -112,17 +143,22 @@ def proximo_id(cortes: Sequence[Corte]) -> int:
     return max(ids, default=ID_BASE_DOS_MANUAIS - 1) + 1
 
 
-def preparar_cliente(modelo: str, *, threads: int, usar_gpu: bool) -> ClienteLLM:
+def preparar_cliente(
+    modelo: str, *, threads: int, usar_gpu: bool, manter_na_memoria: str = "30m"
+) -> ClienteLLM:
     """O cliente do Ollama, conferindo antes que o servidor responde e que o modelo existe.
 
     Aqui não se baixa o modelo sozinho (são vários GB): quem não o tem é avisado do que fazer.
+    `manter_na_memoria` é quanto o Ollama guarda o modelo carregado depois do último pedido.
     """
     if not garantir_servidor():
         raise ErroFerramenta(
             "O Ollama não está respondendo e não foi possível abri-lo sozinho. Abra o aplicativo "
             "Ollama e tente de novo."
         )
-    cliente = ClienteLLM(modelo, threads=threads, usar_gpu=usar_gpu)
+    cliente = ClienteLLM(
+        modelo, threads=threads, usar_gpu=usar_gpu, manter_na_memoria=manter_na_memoria
+    )
     if not cliente.modelo_instalado():
         raise ErroFerramenta(
             f"O modelo {modelo} ainda não está instalado no Ollama. Ele é baixado na primeira vez "
@@ -172,24 +208,36 @@ def gerar_corte_livre(
     candidato: Candidato = candidato_do_trecho(
         id_, palavras, frases, trecho.primeira, trecho.ultima
     )
+    sem_os_pulados = candidato  # o que a IA lê e o que dá a nota: só o que o Short fala
+    if trecho.fora:
+        sem_os_pulados = replace(
+            candidato,
+            texto=" ".join(palavras[i].texto for i in trecho.indices),
+            fim=candidato.inicio + duracao_do_trecho(palavras, trecho),
+        )
     antes, depois = _contexto(palavras, trecho)
     andamento("A IA está avaliando o trecho (categoria, retenção e risco de contexto)…")
-    avaliacao = cliente.avaliar(antes, candidato.texto, depois, candidato.duracao)
-    nota, detalhe = calcular_nota(candidato, avaliacao)
+    avaliacao = cliente.avaliar(antes, sem_os_pulados.texto, depois, sem_os_pulados.duracao)
+    nota, detalhe = calcular_nota(sem_os_pulados, avaliacao)
     if niveis is None:
         inicio, fim = com_respiro(candidato)
     else:
         inicio, fim = refinar_bordas(candidato, *niveis, maximo_s=DURACAO_MAXIMA_SHORT_S)
     andamento("A IA está criando o título, a descrição e as hashtags…")
     meta = criar_metadados(
-        cliente, sermao, candidato.texto, avaliacao.categoria, candidato.duracao, titulos_usados
+        cliente,
+        sermao,
+        sem_os_pulados.texto,
+        avaliacao.categoria,
+        sem_os_pulados.duracao,
+        titulos_usados,
     )
     titulo = meta.titulo.strip()
-    return Corte(
+    corte = Corte(
         id=id_,
         inicio=inicio,
         fim=fim,
-        texto=candidato.texto,
+        texto=sem_os_pulados.texto,
         categoria=avaliacao.categoria,
         nota=nota,
         detalhe=detalhe,
@@ -204,6 +252,14 @@ def gerar_corte_livre(
         editado=False,
         origem=ORIGEM_MANUAL,
     )
+    if trecho.fora:  # os pedaços de fora viram saltos (as pontas continuam as do silêncio)
+        corte = replace(
+            corte_com_indices(palavras, corte, trecho.indices),
+            inicio=inicio,
+            fim=fim,
+            editado=False,
+        )
+    return corte
 
 
 def resumo_das_pontas(palavras: Sequence[Palavra], trecho: Trecho, quantas: int = 7) -> str:

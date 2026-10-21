@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -39,6 +39,7 @@ from spurgeon.render.marca import (
     montar_marca,
     trecho_do_filtro,
 )
+from spurgeon.render.mescla import mescla_em_quadros
 
 DURACAO_DA_PARTE_S = 600.0
 VERSAO_DO_RENDER = 2
@@ -147,7 +148,8 @@ def script_da_parte(
     parte: Parte, inicio_da_leitura: float, info: InfoMidia, fps: Fraction,
     marca: MarcaDagua | None = None, *, enquadramento: Enquadramento | None = None,
     tratamento: TratamentoImagem | None = None, fade_entrada_s: float = 0.0,
-    fade_saida_s: float = 0.0,
+    fade_saida_s: float = 0.0, mescla_entrada: Mescla | None = None,
+    mescla_saida: Mescla | None = None,
 ) -> str:  # fmt: skip
     """O filtro (para `-/filter_complex`) que monta uma parte a partir do vídeo original.
 
@@ -158,6 +160,10 @@ def script_da_parte(
     Depois dos cortes vêm, nesta ordem: o recorte do zoom, a conversão para SDR, a ampliação do
     zoom de volta ao tamanho do vídeo, o tratamento de imagem e os fades de entrada e de saída
     (do vídeo que vem depois da introdução e do que vai para a vinheta).
+
+    preto o vídeo se funde com o fim da introdução e com o começo da vinheta (`xfade`): cada uma
+    entra como uma entrada extra do FFmpeg, e a parte já sai com a sobreposição, sem perder quadro.
+    uma entrada extra do FFmpeg, e a parte já sai com a sobreposição, sem perder nenhum quadro.
     """
     taxa = f.texto_fps(fps)
     relativos = [(a - inicio_da_leitura, b - inicio_da_leitura) for a, b in parte.pedacos]
@@ -201,7 +207,9 @@ def script_da_parte(
         fades.append(fade_ffmpeg("out", duracao_da_parte - saida, saida))
     final = ",".join([*fades, "tpad=stop_mode=clone:stop_duration=2"])
     sdr = "[bruto]" + ",".join(cadeia)
-    if marca is None:
+    if mescla_entrada or mescla_saida:
+        linhas += _linhas_da_mescla(parte, fps, sdr, marca, mescla_entrada, mescla_saida)
+    elif marca is None:
         linhas.append(f"{sdr},{final}[vout]")
     else:  # a marca (entrada 1) entra depois da conversão para SDR, para não ser tonemapada
         linhas.append(f"{sdr}[base]")
@@ -210,14 +218,97 @@ def script_da_parte(
     return ";\n".join(linhas)
 
 
+@dataclass(frozen=True)
+class Mescla:
+    """Uma ponta de clipe que se funde com o vídeo dentro de uma parte.
+
+    `entrada` é o número da entrada do FFmpeg onde o arquivo do clipe foi posto; `de` e `ate` são
+    os quadros do clipe que entram na fusão (o fim da introdução, o começo da vinheta).
+    """
+
+    entrada: int
+    info: InfoMidia
+    largura: int
+    altura: int
+    de: int
+    ate: int
+
+    @property
+    def quadros(self) -> int:
+        return self.ate - self.de
+
+    def filtro(self, fps: Fraction) -> str:
+        return cadeia_de_clipe(self.info, self.largura, self.altura, fps, de=self.de, ate=self.ate)
+
+
+def _linhas_da_mescla(
+    parte: Parte, fps: Fraction, sdr: str, marca: MarcaDagua | None,
+    entrada: Mescla | None, saida: Mescla | None,
+) -> list[str]:  # fmt: skip
+    """As linhas do filtro que fundem o vídeo da parte com o clipe de antes e/ou o de depois.
+
+    O vídeo vai até o último quadro da parte (`tpad` cobre um quadro que falte por arredondamento
+    e `trim` tira o que sobra), porque o `xfade` mede o instante da fusão pela duração real.
+    Com a introdução, a fusão ocupa os primeiros quadros da parte (`offset=0`: a introdução já só
+    tem os quadros da fusão); com a vinheta, os últimos.
+    """
+    linhas = []
+    if marca is None:
+        linhas.append(f"{sdr}[vbase]")
+    else:  # a marca entra depois da conversão para SDR, como no caminho sem mescla
+        linhas.append(f"{sdr}[base]")
+        linhas.append(trecho_do_filtro(marca, base="base", entrada="1:v", saida="vbase"))
+    linhas.append(
+        "[vbase]format=yuv420p,setsar=1,tpad=stop_mode=clone:stop_duration=2,"
+        f"trim=end_frame={parte.quadros},setpts=PTS-STARTPTS[m0]"
+    )
+    atual = "m0"
+    if entrada:
+        linhas.append(f"[{entrada.entrada}:v]{entrada.filtro(fps)},setpts=PTS-STARTPTS[ini]")
+        duracao = _n(float(Fraction(entrada.quadros) / fps))
+        destino = "vout" if saida is None else "m1"
+        linhas.append(f"[ini][{atual}]xfade=transition=fade:duration={duracao}:offset=0[{destino}]")
+        atual = destino
+    if saida:
+        linhas.append(f"[{saida.entrada}:v]{saida.filtro(fps)},setpts=PTS-STARTPTS[fim]")
+        duracao = _n(float(Fraction(saida.quadros) / fps))
+        inicio = _n(float(Fraction(parte.quadros - saida.quadros) / fps))
+        linhas.append(
+            f"[{atual}][fim]xfade=transition=fade:duration={duracao}:offset={inicio}[vout]"
+        )
+    return linhas
+
+
+def cadeia_de_clipe(
+    info: InfoMidia, largura: int, altura: int, fps: Fraction, *, de: int = 0,
+    ate: int | None = None,
+) -> str:  # fmt: skip
+    """O filtro que padroniza a introdução ou a vinheta (taxa de quadros, SDR, tamanho e formato).
+
+    `de` e `ate` ficam com os quadros [de, ate) do clipe (contados depois da taxa padrão): é como a
+    mescla pega o fim da introdução ou o começo da vinheta.
+    """
+    corte = ""
+    if de or ate is not None:
+        limites = f"start_frame={de}" + (f":end_frame={ate}" if ate is not None else "")
+        corte = f",trim={limites},setpts=PTS-STARTPTS"
+    return (
+        f"fps={f.texto_fps(fps)}{corte},{f.cadeia_para_sdr(info)},"
+        f"scale={largura}:{altura}:force_original_aspect_ratio=decrease:flags=lanczos,"
+        f"pad={largura}:{altura}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p"
+    )
+
+
 def script_de_clipe(
     info: InfoMidia, largura: int, altura: int, fps: Fraction, *, quadros: int = 0,
-    fade_entrada_s: float = 0.0, fade_saida_s: float = 0.0,
+    fade_entrada_s: float = 0.0, fade_saida_s: float = 0.0, pular_quadros: int = 0,
 ) -> str:  # fmt: skip
     """Padroniza a introdução ou a vinheta (tamanho, taxa de quadros, formato e SDR).
 
     Os fades (quando pedidos) passam pelo preto: a vinheta final entra de dentro dele e a
     introdução sai para ele. `quadros` é o tamanho exato do clipe, para o fade de saída cair no fim.
+    Com `pular_quadros`, o clipe começa nesse quadro (a vinheta mesclada: o começo dela já foi
+    para dentro da última parte do vídeo).
     """
     duracao = float(Fraction(quadros) / fps) if quadros else 0.0
     fades = []
@@ -228,9 +319,7 @@ def script_de_clipe(
     if saida:
         fades.append(fade_ffmpeg("out", duracao - saida, saida))
     return (
-        f"[0:v]fps={f.texto_fps(fps)},{f.cadeia_para_sdr(info)},"
-        f"scale={largura}:{altura}:force_original_aspect_ratio=decrease:flags=lanczos,"
-        f"pad={largura}:{altura}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p,"
+        f"[0:v]{cadeia_de_clipe(info, largura, altura, fps, de=pular_quadros)},"
         + "".join(f"{x}," for x in fades)
         + "tpad=stop_mode=clone:stop_duration=2[vout]"
     )
@@ -239,7 +328,8 @@ def script_de_clipe(
 def script_do_audio(
     trechos: list[Trecho], *, intro: Clipe | None, vinheta: Clipe | None,
     quadros_principais: int, fps: Fraction, canais: int | None, normalizar: bool, lufs: float,
-    compensar_mono: bool = False, fade_s: float = 0.0,
+    compensar_mono: bool = False, fade_s: float = 0.0, mescla_entrada_s: float = 0.0,
+    mescla_saida_s: float = 0.0,
 ) -> str:  # fmt: skip
     """Junta, em estéreo de 48 kHz, o áudio da introdução, do vídeo (só nos trechos mantidos) e
     da vinheta.
@@ -249,6 +339,10 @@ def script_do_audio(
 
     Com `fade_s`, o som sai da introdução para o silêncio e o do vídeo entra dele (e o inverso na
     vinheta final), no mesmo ponto em que a imagem passa pelo preto.
+
+    Com `mescla_entrada_s` e `mescla_saida_s`, em vez de passar pelo silêncio o som da introdução se
+    funde com o do vídeo (e o do vídeo com o da vinheta) por `acrossfade`, com a mesma duração da
+    fusão das imagens (potência constante, para o volume não afundar no meio).
     """
 
     def exato(quadros: int) -> str:
@@ -304,22 +398,44 @@ def script_do_audio(
             f"asetpts=PTS-STARTPTS{fade}[{nome}]"
         )
     if intro:
-        ordem.append("[ai]")
-    ordem.append("[am]")
+        ordem.append("ai")
+    ordem.append("am")
     if vinheta:
-        ordem.append("[av]")
-    linhas.append(f"{''.join(ordem)}concat=n={len(ordem)}:v=0:a=1[aout]")
+        ordem.append("av")
+    if mescla_entrada_s <= 0 and mescla_saida_s <= 0:  # sem sobreposição: um concat só, como sempre
+        encadeadas = "".join(f"[{nome}]" for nome in ordem)
+        linhas.append(f"{encadeadas}concat=n={len(ordem)}:v=0:a=1[aout]")
+        return ";\n".join(linhas)
+    atual = ordem[0]
+    for posicao, nome in enumerate(ordem[1:], start=1):
+        destino = "aout" if posicao == len(ordem) - 1 else f"j{posicao}"
+        sobreposicao = mescla_entrada_s if nome == "am" else mescla_saida_s
+        if sobreposicao > 0:
+            juncao = f"acrossfade=d={_n(sobreposicao)}:c1=qsin:c2=qsin"
+        else:
+            juncao = "concat=n=2:v=0:a=1"
+        linhas.append(f"[{atual}][{nome}]{juncao}[{destino}]")
+        atual = destino
     return ";\n".join(linhas)
 
 
 @dataclass(frozen=True)
 class Clipe:
-    """Introdução ou vinheta: o arquivo, o que o FFmpeg sabe dele e quantos quadros ocupa."""
+    """Introdução ou vinheta: o arquivo, o que o FFmpeg sabe dele e quantos quadros ocupa.
+
+    `sobreposicao` são os quadros que se fundem com o vídeo (mescla): ficam dentro da primeira ou da
+    última parte, e não no arquivo do clipe, que tem só `quadros_no_arquivo`.
+    """
 
     caminho: Path
     info: InfoMidia
     quadros: int
     arquivo: str
+    sobreposicao: int = 0
+
+    @property
+    def quadros_no_arquivo(self) -> int:
+        return self.quadros - self.sobreposicao
 
 
 # --- a etapa ---------------------------------------------------------------------------------
@@ -345,6 +461,7 @@ class RenderizarVideoLongo(Etapa):
         "vinheta_arquivo",
         "fade_vinhetas",
         "fade_vinhetas_s",
+        "fade_estilo",
         "zoom_pct",
         "zoom_centro_x_pct",
         "zoom_centro_y_pct",
@@ -407,7 +524,8 @@ class RenderizarVideoLongo(Etapa):
         marca = self._marca(ctx, largura)
         partes = planejar_partes(trechos, fps, DURACAO_DA_PARTE_S)
         principais = sum(p.quadros for p in partes)
-        total_quadros = principais + sum(c.quadros for c in (intro, vinheta) if c)
+        intro, vinheta = self._mesclar(ctx, fps, intro, vinheta, partes)
+        total_quadros = principais + sum(c.quadros_no_arquivo for c in (intro, vinheta) if c)
         duracao_total = float(Fraction(total_quadros) / fps)
         preset = ctx.opcoes.preset_qualidade()
 
@@ -436,7 +554,7 @@ class RenderizarVideoLongo(Etapa):
             feito = self._clipe_pronto(
                 ctx, pasta, intro, largura, altura, fps, argumentos_codec, pesos, feito
             )
-            sequencia.append((intro.arquivo, float(Fraction(intro.quadros) / fps)))
+            sequencia.append((intro.arquivo, float(Fraction(intro.quadros_no_arquivo) / fps)))
         for parte in partes:
             ctx.ponto_seguro()
             feito = self._parte(
@@ -453,15 +571,46 @@ class RenderizarVideoLongo(Etapa):
                 intro_antes=intro is not None,
                 vinheta_depois=vinheta is not None,
                 ultima=len(partes) - 1,
+                intro=intro,
+                vinheta=vinheta,
+                tamanho=(largura, altura),
             )
             sequencia.append((parte.arquivo, float(Fraction(parte.quadros) / fps)))
         if vinheta:
             feito = self._clipe_pronto(
                 ctx, pasta, vinheta, largura, altura, fps, argumentos_codec, pesos, feito
             )
-            sequencia.append((vinheta.arquivo, float(Fraction(vinheta.quadros) / fps)))
+            sequencia.append((vinheta.arquivo, float(Fraction(vinheta.quadros_no_arquivo) / fps)))
         self._unir(ctx, pasta, sequencia, duracao_total, feito, economico=economico)
         shutil.rmtree(pasta, ignore_errors=True)
+
+    def _mesclar(self, ctx: ContextoProjeto, fps: Fraction, intro, vinheta, partes: list[Parte]):
+        """Marca quantos quadros da introdução e da vinheta se fundem com o vídeo (mescla).
+
+        Só vale com o estilo "mesclar" e o fade ligado. A introdução se funde com o começo da
+        primeira parte e a vinheta com o fim da última; o fade nunca passa de metade do clipe.
+        """
+        if not ctx.opcoes.fade_mesclado:
+            return intro, vinheta
+        fade = ctx.opcoes.fade_vinhetas_s
+        if intro:
+            intro = replace(
+                intro, sobreposicao=mescla_em_quadros(fade, fps, intro.quadros, partes[0].quadros)
+            )
+        if vinheta:
+            vinheta = replace(
+                vinheta,
+                sobreposicao=mescla_em_quadros(fade, fps, vinheta.quadros, partes[-1].quadros),
+            )
+        for nome, clipe in (("a introdução", intro), ("a vinheta", vinheta)):
+            if clipe and clipe.sobreposicao:
+                ctx.log.info(
+                    "Mescla: %s se funde com o vídeo por %.2f s (imagem e som); o vídeo final fica "
+                    "essa duração mais curto que a soma das partes.",
+                    nome,
+                    float(Fraction(clipe.sobreposicao) / fps),
+                )
+        return intro, vinheta
 
     def _marca(self, ctx: ContextoProjeto, largura_do_video: int) -> MarcaDagua | None:
         """A marca d'água do vídeo longo, já em PNG com transparência (ou None se não vale)."""
@@ -532,11 +681,11 @@ class RenderizarVideoLongo(Etapa):
         reservado = 0.02 + 0.03  # montar o áudio e juntar tudo no final
         pesos = {"audio": 0.02, "uniao": 0.03}
         if intro:
-            pesos[intro.arquivo] = (1 - reservado) * intro.quadros / total_quadros
+            pesos[intro.arquivo] = (1 - reservado) * intro.quadros_no_arquivo / total_quadros
         for p in partes:
             pesos[p.arquivo] = (1 - reservado) * p.quadros / total_quadros
         if vinheta:
-            pesos[vinheta.arquivo] = (1 - reservado) * vinheta.quadros / total_quadros
+            pesos[vinheta.arquivo] = (1 - reservado) * vinheta.quadros_no_arquivo / total_quadros
         return pesos
 
     def _assinatura(self, ctx, info, fps, trechos, audio, intro, vinheta, marca=None) -> str:
@@ -560,6 +709,16 @@ class RenderizarVideoLongo(Etapa):
             "duracao_da_parte": DURACAO_DA_PARTE_S,
             "marca": assinatura_da_marca(marca.arquivo, marca) if marca else None,
             "fade": ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0,
+            **(
+                {
+                    "mescla": [
+                        intro.sobreposicao if intro else 0,
+                        vinheta.sobreposicao if vinheta else 0,
+                    ]
+                }
+                if (intro and intro.sobreposicao) or (vinheta and vinheta.sobreposicao)
+                else {}
+            ),
             "zoom": ctx.opcoes.enquadramento.model_dump(),
             "tratamento": ctx.opcoes.tratamento.model_dump(),
         }
@@ -597,6 +756,7 @@ class RenderizarVideoLongo(Etapa):
             ctx.progresso(depois)
             return depois
         script = pasta / "audio.filter"
+        fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
         canais = sondar(audio).canais_audio
         script.write_text(
             script_do_audio(
@@ -609,7 +769,9 @@ class RenderizarVideoLongo(Etapa):
                 normalizar=ctx.opcoes.normalizar_volume,
                 lufs=ctx.opcoes.lufs_video_longo,
                 compensar_mono=ctx.opcoes.normalizar_volume,
-                fade_s=ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0,
+                fade_s=0.0 if ctx.opcoes.fade_mesclado else fade,
+                mescla_entrada_s=float(Fraction(intro.sobreposicao) / fps) if intro else 0.0,
+                mescla_saida_s=float(Fraction(vinheta.sobreposicao) / fps) if vinheta else 0.0,
             ),
             encoding="utf-8",
         )
@@ -642,6 +804,9 @@ class RenderizarVideoLongo(Etapa):
         intro_antes: bool = False,
         vinheta_depois: bool = False,
         ultima: int = 0,
+        intro: Clipe | None = None,
+        vinheta: Clipe | None = None,
+        tamanho: tuple[int, int] = (0, 0),
     ):
         destino = pasta / parte.arquivo
         faixa, depois = self._andamento(ctx, pesos, parte.arquivo, feito)
@@ -652,12 +817,27 @@ class RenderizarVideoLongo(Etapa):
         fim = parte.pedacos[-1][1] + _MARGEM_DE_LEITURA_S
         script = pasta / f"{destino.stem}.filter"
         fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
+        extras: list[str | Path] = []  # entradas além do vídeo (0) e da marca d'água
+        proxima = 2 if marca else 1
+        mescla_entrada = mescla_saida = None
+        if intro and intro.sobreposicao and intro_antes and parte.indice == 0:
+            mescla_entrada = Mescla(
+                proxima, intro.info, *tamanho, de=intro.quadros_no_arquivo, ate=intro.quadros
+            )
+            extras += ["-i", intro.caminho]
+            proxima += 1
+        if vinheta and vinheta.sobreposicao and vinheta_depois and parte.indice == ultima:
+            mescla_saida = Mescla(proxima, vinheta.info, *tamanho, de=0, ate=vinheta.sobreposicao)
+            extras += ["-i", vinheta.caminho]
+        if ctx.opcoes.fade_mesclado:
+            fade = 0.0  # a ponta que se funde não passa pelo preto
         script.write_text(
             script_da_parte(
                 parte, inicio, info, fps, marca,
                 enquadramento=ctx.opcoes.enquadramento, tratamento=ctx.opcoes.tratamento,
                 fade_entrada_s=fade if intro_antes and parte.indice == 0 else 0.0,
                 fade_saida_s=fade if vinheta_depois and parte.indice == ultima else 0.0,
+                mescla_entrada=mescla_entrada, mescla_saida=mescla_saida,
             ),
             encoding="utf-8",
         )  # fmt: skip
@@ -665,7 +845,7 @@ class RenderizarVideoLongo(Etapa):
         ctx.log.info("Renderizando a parte %d (%d quadros)…", parte.indice + 1, parte.quadros)
         ctx.ffmpeg(
             ["-y", "-ss", _n(inicio), "-t", _n(fim - inicio), "-i", video,
-             *(["-i", marca.arquivo] if marca else []),
+             *(["-i", marca.arquivo] if marca else []), *extras,
              "-/filter_complex", script, "-map", "[vout]", "-an",
              "-frames:v", str(parte.quadros), *codec, "-f", "mp4", parcial],
             duracao_s=float(Fraction(parte.quadros) / fps), faixa=faixa,
@@ -683,19 +863,22 @@ class RenderizarVideoLongo(Etapa):
             return depois
         script = pasta / f"{destino.stem}.filter"
         fade = ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
+        if ctx.opcoes.fade_mesclado:
+            fade = 0.0  # a mescla é feita dentro da primeira e da última parte do vídeo
         script.write_text(
             script_de_clipe(
-                clipe.info, largura, altura, fps, quadros=clipe.quadros,
+                clipe.info, largura, altura, fps, quadros=clipe.quadros_no_arquivo,
                 fade_entrada_s=fade if clipe.arquivo == "parte_vinheta.mp4" else 0.0,
                 fade_saida_s=fade if clipe.arquivo == "parte_intro.mp4" else 0.0,
+                pular_quadros=clipe.sobreposicao if clipe.arquivo == "parte_vinheta.mp4" else 0,
             ),
             encoding="utf-8",
         )  # fmt: skip
         parcial = destino.with_name(destino.name + ".parcial")
         ctx.ffmpeg(
             ["-y", "-i", clipe.caminho, "-/filter_complex", script, "-map", "[vout]",
-             "-an", "-frames:v", str(clipe.quadros), *codec, "-f", "mp4", parcial],
-            duracao_s=float(Fraction(clipe.quadros) / fps), faixa=faixa,
+             "-an", "-frames:v", str(clipe.quadros_no_arquivo), *codec, "-f", "mp4", parcial],
+            duracao_s=float(Fraction(clipe.quadros_no_arquivo) / fps), faixa=faixa,
         )  # fmt: skip
         parcial.replace(destino)
         return depois
@@ -744,6 +927,7 @@ class RenderizarVideoLongo(Etapa):
                 "introducao": ctx.opcoes.introducao,
                 "vinheta_final": ctx.opcoes.vinheta_final,
                 "fade": ctx.opcoes.fade_vinhetas,
+                "fade_mesclado": ctx.opcoes.fade_mesclado,
                 "preset": preset.preset,
                 "crf": preset.crf,
                 "duracao_s": round(resultado.duracao_s, 3),

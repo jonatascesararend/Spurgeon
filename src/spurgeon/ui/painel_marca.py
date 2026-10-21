@@ -26,6 +26,8 @@ from spurgeon.render.marca import (
     posicao_em_pixels,
     preparar_imagem,
 )
+from spurgeon.ui import dicas
+from spurgeon.ui.ajuda import CabecalhoDeEtapa
 from spurgeon.ui.formulario import ValoresFormulario
 
 _COR_DICA = "gray60"
@@ -36,6 +38,11 @@ _TAMANHO_PREVIA = (192, 108)
 _PNG_SUFIXOS = " ".join(f"*{e}" for e in EXTENSOES)
 _MAIOR_LADO_DA_PREVIA = (
     320  # a prévia é feita numa cópia pequena: remover o fundo é lento em 1200 px
+)
+AJUDA_DA_ETAPA = (
+    "Coloca o logotipo da igreja num canto do vídeo. O ideal é um PNG com fundo transparente "
+    "(vale como está); com outra imagem, dá para pedir que um fundo liso seja removido. Escolha o "
+    "canto, o tamanho e se a marca vai no vídeo longo, nos Shorts ou nos dois."
 )
 
 
@@ -120,9 +127,8 @@ class PainelMarca(ctk.CTkFrame):
         self.nos_shorts = ctk.BooleanVar(value=valores.marca_nos_shorts)
         self._filhos: list[ctk.CTkBaseClass] = []
 
-        ctk.CTkLabel(self, text="5. Marca d'água", font=ctk.CTkFont(size=15, weight="bold")).pack(
-            anchor="w", padx=12, pady=(10, 4)
-        )
+        self.cabecalho = CabecalhoDeEtapa(self, "5. Marca d'água", AJUDA_DA_ETAPA)
+        self.cabecalho.pack(fill="x", padx=12, pady=(10, 4))
         self._check_ativa = ctk.CTkCheckBox(
             self,
             text="Colocar uma marca d'água (logotipo) no vídeo",
@@ -130,6 +136,11 @@ class PainelMarca(ctk.CTkFrame):
             command=self._mudou,
         )
         self._check_ativa.pack(anchor="w", padx=12, pady=3)
+        dicas.dica(
+            self._check_ativa,
+            "Liga a marca d'água. Ela é gravada na imagem do vídeo, por isso o que já foi "
+            "renderizado sem ela é refeito.",
+        )
         self._corpo = ctk.CTkFrame(self, fg_color="transparent")
         self._montar_corpo(self._corpo)
         self._corpo.pack(fill="x")
@@ -143,6 +154,11 @@ class PainelMarca(ctk.CTkFrame):
             linha, text="Escolher imagem…", width=130, command=self.escolher_imagem
         )
         self._botao_imagem.pack(side="left")
+        dicas.dica(
+            self._botao_imagem,
+            "Escolhe o arquivo do logotipo (PNG, JPG, WebP…). O melhor é um PNG com fundo "
+            "transparente.",
+        )
         self._filhos.append(self._botao_imagem)
         self._nome = ctk.CTkLabel(linha, text="", anchor="w", text_color=_COR_DICA)
         self._nome.pack(side="left", padx=8)
@@ -161,6 +177,11 @@ class PainelMarca(ctk.CTkFrame):
             texto, text="Remover o fundo da imagem", variable=self.remover, command=self._mudou
         )
         self._check_remover.pack(anchor="w", pady=(4, 0))
+        dicas.dica(
+            self._check_remover,
+            "Tira o fundo liso da imagem (por exemplo, o branco de um logotipo em JPG), deixando "
+            "só o desenho. Só vale para imagens sem transparência.",
+        )
         self._filhos.append(self._check_remover)
 
         posicao = ctk.CTkFrame(c, fg_color="transparent")
@@ -171,9 +192,11 @@ class PainelMarca(ctk.CTkFrame):
                 posicao, text=rotulo, variable=self.canto, value=canto, command=self._mudou
             )
             botao.grid(row=1 + k, column=0, sticky="w", padx=(0, 14), pady=2)
+            dicas.dica(botao, f"Põe a marca no canto {rotulo.lower()} do vídeo.")
             self._filhos.append(botao)
         self._previa = ctk.CTkLabel(posicao, text="")
         self._previa.grid(row=0, column=1, rowspan=5, padx=(10, 0))
+        dicas.dica(self._previa, "Como a marca fica no vídeo, no canto e no tamanho escolhidos.")
 
         tamanho = ctk.CTkFrame(c, fg_color="transparent")
         tamanho.pack(anchor="w", fill="x", padx=(40, 12), pady=(6, 3))
@@ -183,6 +206,11 @@ class PainelMarca(ctk.CTkFrame):
             command=lambda _v: self._mudou(),
         )  # fmt: skip
         self._slider.pack(side="left", padx=10)
+        dicas.dica(
+            self._slider,
+            "Largura da marca em % da largura do vídeo (a padrão é 15%). Uma marca pequena e "
+            "discreta costuma ficar melhor; confira na prévia ao lado.",
+        )
         self._filhos.append(self._slider)
         self._rotulo_tamanho = ctk.CTkLabel(tamanho, text="", anchor="w", text_color=_COR_DICA)
         self._rotulo_tamanho.pack(side="left")
@@ -198,6 +226,8 @@ class PainelMarca(ctk.CTkFrame):
             onde, text="Shorts", variable=self.nos_shorts, command=self._mudou, width=80
         )
         self._check_shorts.pack(side="left")
+        dicas.dica(self._check_longo, "Põe a marca no vídeo longo (o sermão inteiro).")
+        dicas.dica(self._check_shorts, "Põe a marca nos Shorts verticais (precisa gerar Shorts).")
         self._filhos += [self._check_longo, self._check_shorts]
         self._dica = ctk.CTkLabel(
             c,

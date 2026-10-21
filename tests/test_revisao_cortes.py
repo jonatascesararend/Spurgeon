@@ -259,3 +259,11 @@ def test_a_lista_mostra_inicio_e_fim_de_cada_corte(aberto):
 
     coletar(aberto.editor._lista)
     assert any("–" in t and " s" in t for t in textos if isinstance(t, str))
+
+
+@pytest.mark.gui
+def test_todo_botao_da_aprovacao_dos_cortes_tem_dica(aberto):
+    from tests.test_studio_ferramentas import _sem_dica
+
+    faltam = _sem_dica(aberto)
+    assert not faltam, ", ".join(faltam)

@@ -21,6 +21,7 @@ from spurgeon.shorts.etapas import cortes_manuais_guardados, gravar_cortes
 from spurgeon.shorts.livre import (
     DURACAO_MAXIMA_LIVRE_S,
     Trecho,
+    duracao_do_trecho,
     gerar_corte_livre,
     mover_ponta,
     problema_do_trecho,
@@ -263,3 +264,88 @@ def test_busca_por_tema_acha_o_assunto_sem_a_palavra_exata():
     faixas = [(a.primeira, a.ultima) for a in achados]  # as janelas escolhidas não se sobrepõem
     for i, (de, ate) in enumerate(faixas):
         assert all(ate < d or de > a for j, (d, a) in enumerate(faixas) if j != i)
+
+
+# --- pedaços separados: "frase 1 + frase 3" -----------------------------------------------------
+
+
+def test_trecho_de_indices_guarda_o_que_ficou_de_fora(sermao):
+    _palavras, frases = sermao
+    f1, f3 = frases[1], frases[3]
+    escolhidas = [*range(f1.primeira, f1.ultima + 1), *range(f3.primeira, f3.ultima + 1)]
+    t = Trecho.de_indices(escolhidas)
+    assert (t.primeira, t.ultima) == (f1.primeira, f3.ultima)
+    assert t.fora == frozenset(range(frases[2].primeira, frases[2].ultima + 1))
+    assert t.indices == escolhidas
+    assert t.pedacos == [(f1.primeira, f1.ultima), (f3.primeira, f3.ultima)]
+    assert Trecho.de_indices([]) is None
+    assert Trecho.de_indices([7, 8, 9]) == Trecho(7, 9)  # sem buracos é o trecho de sempre
+
+
+def test_a_duracao_do_trecho_nao_conta_o_que_ficou_de_fora(sermao):
+    palavras, frases = sermao
+    inteiro = Trecho(frases[1].primeira, frases[5].ultima)
+    sem_a_do_meio = Trecho.de_indices(
+        i for i in inteiro.indices if not frases[3].primeira <= i <= frases[3].ultima
+    )
+    a_frase = frases[3].fim - frases[3].inicio
+    assert duracao_do_trecho(palavras, sem_a_do_meio) < duracao_do_trecho(palavras, inteiro)
+    assert duracao_do_trecho(palavras, inteiro) - duracao_do_trecho(
+        palavras, sem_a_do_meio
+    ) == pytest.approx(a_frase + 2 * 0.6, abs=0.3)  # a frase e as pausas vizinhas
+
+
+def test_mover_ponta_pula_as_palavras_que_ficaram_de_fora(sermao):
+    palavras, frases = sermao
+    t = Trecho(10, 90, frozenset({11, 12}))
+    assert mover_ponta(palavras, frases, t, "inicio", 1, por_frase=False).primeira == 13
+    t = Trecho(10, 90, frozenset({88, 89}))
+    assert mover_ponta(palavras, frases, t, "fim", -1, por_frase=False).ultima == 87
+    longe = mover_ponta(
+        palavras, frases, Trecho(10, 90, frozenset({50})), "fim", -1, por_frase=False
+    )
+    assert longe.fora == frozenset({50})  # o buraco do meio continua
+    curto = mover_ponta(
+        palavras, frases, Trecho(10, 90, frozenset({50})), "inicio", 1, por_frase=False
+    )
+    assert curto.fora == frozenset({50})
+    # encurtar o fim até passar do buraco: o buraco some junto (já está fora do trecho)
+    dentro = Trecho(10, 60, frozenset({50}))
+    passou = mover_ponta(palavras, frases, dentro, "fim", -1, por_frase=True)
+    assert passou.ultima < 60 and all(10 < i < passou.ultima for i in passou.fora)
+
+
+def test_gerar_corte_livre_com_pedaco_de_fora_vira_corte_com_salto(sermao):
+    palavras, frases = sermao
+    cliente, chamadas = _cliente_falso()
+    textos_vistos: list[str] = []
+
+    def metadados(cliente, sermao, texto, categoria, duracao, titulos):
+        textos_vistos.append(texto)
+        return _metadados(cliente, sermao, texto, categoria, duracao, titulos)
+
+    f = frases
+    escolhidas = [i for k in (2, 3, 5, 6) for i in range(f[k].primeira, f[k].ultima + 1)]
+    trecho = Trecho.de_indices(escolhidas)  # as frases 2, 3, 5 e 6: a 4 fica de fora
+    corte = gerar_corte_livre(
+        cliente, palavras=palavras, frases=frases, trecho=trecho, id_=ID_BASE_DOS_MANUAIS,
+        sermao="Sermão de teste", criar_metadados=metadados,
+    )  # fmt: skip
+    assert corte.origem == ORIGEM_MANUAL and not corte.editado
+    assert len(corte.saltos) == 1  # a frase 4 (e só ela) é o salto
+    de, ate = corte.saltos[0]
+    assert f[3].fim <= de < ate <= f[5].inicio
+    sem = palavras[f[4].primeira].texto
+    assert sem not in corte.texto.split() and palavras[f[5].primeira].texto in corte.texto
+    assert textos_vistos == [corte.texto]  # o título é escrito sobre o que o Short fala
+    assert corte.inicio <= palavras[f[2].primeira].inicio and corte.fim >= palavras[f[6].ultima].fim
+    assert corte.duracao == pytest.approx(
+        (corte.fim - corte.inicio) - (ate - de)
+    )  # a duração já desconta o salto
+    assert chamadas == ["avaliar"]
+
+
+def test_pedacos_curtos_demais_juntos_continuam_pedindo_pelo_menos_dez_segundos(sermao):
+    palavras, _frases = sermao
+    t = Trecho.de_indices([*range(0, 6), *range(30, 36)])  # dois pedaços de ~2 s
+    assert "pelo menos" in problema_do_trecho(palavras, t)

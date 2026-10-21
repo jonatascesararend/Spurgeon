@@ -98,3 +98,15 @@ def test_arquivos_de_introducao_e_vinheta_e_fade(monkeypatch, tmp_path, video_fa
 def test_arquivo_de_introducao_que_nao_existe_explica(tmp_path, video_falso, capsys):
     codigo = main([*base(tmp_path, video_falso), "--introducao-arquivo", str(tmp_path / "x.mp4")])
     assert codigo == 2 and "introdução não foi encontrado" in capsys.readouterr().err
+
+
+def test_fade_estilo_pela_linha_de_comando(monkeypatch, tmp_path, video_falso):
+    abertura = tmp_path / "abertura.mp4"
+    abertura.write_bytes(b"x")
+    base_do_fade = [*base(tmp_path, video_falso), "--introducao-arquivo", str(abertura)]
+    padrao = opcoes_capturadas(monkeypatch, [*base_do_fade, "--fade", "0,5"])
+    assert padrao.fade_estilo == "mesclar" and padrao.fade_mesclado
+    preto = opcoes_capturadas(
+        monkeypatch, [*base_do_fade, "--fade", "0,5", "--fade-estilo", "preto"]
+    )
+    assert preto.fade_estilo == "preto" and not preto.fade_mesclado

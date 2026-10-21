@@ -19,6 +19,7 @@ from spurgeon.transcricao.edicao import aplicar_edicoes, separar_pontuacao
 from spurgeon.transcricao.formato import Transcricao, segundos_para_rotulo
 from spurgeon.transcricao.verificador import verificador_compartilhado
 from spurgeon.ui import dialogos
+from spurgeon.ui.dicas import dica
 from spurgeon.ui.verificacao import PainelDePortugues
 
 PROB_BAIXA = 0.5
@@ -155,19 +156,33 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
         self._busca.pack(side="left")
         self._busca.bind("<Return>", lambda _e: self._proximo())
         self._busca.bind("<KeyRelease>", lambda _e: self._marcar_achados())
-        ctk.CTkButton(barra, text="Próximo", width=80, command=self._proximo).pack(
-            side="left", padx=6
-        )
+        dica(self._busca, "Digite o que procurar no texto: os achados ficam marcados (Ctrl+F).")
+        proximo = ctk.CTkButton(barra, text="Próximo", width=80, command=self._proximo)
+        proximo.pack(side="left", padx=6)
+        dica(proximo, "Vai ao próximo achado da busca (F3).")
         self._contagem = ctk.CTkLabel(barra, text="", text_color="gray60", width=90, anchor="w")
         self._contagem.pack(side="left")
         self._troca = ctk.CTkEntry(barra, width=180, placeholder_text="Trocar por…")
         self._troca.pack(side="left", padx=(16, 6))
-        ctk.CTkButton(barra, text="Trocar em tudo", width=120, command=self._trocar_em_tudo).pack(
-            side="left"
+        dica(self._troca, "O texto que entra no lugar do que foi localizado.")
+        trocar = ctk.CTkButton(
+            barra, text="Trocar em tudo", width=120, command=self._trocar_em_tudo
         )
-        ctk.CTkButton(
+        trocar.pack(side="left")
+        dica(
+            trocar,
+            "Troca, no texto todo, o que foi localizado pelo texto de “Trocar por…”. Dá para "
+            "desfazer com Ctrl+Z.",
+        )
+        verificar = ctk.CTkButton(
             barra, text="Verificar português", width=140, command=self._verificar_portugues
-        ).pack(side="right")
+        )
+        verificar.pack(side="right")
+        dica(
+            verificar,
+            "Procura erros de ortografia, repetições e pontuação e sublinha cada um; as "
+            "sugestões aparecem num painel ao lado.",
+        )
 
         self._texto = ctk.CTkTextbox(self, wrap="word", undo=True, font=ctk.CTkFont(size=14))
         self._texto.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 8))
@@ -188,12 +203,18 @@ class PainelRevisaoTranscricao(ctk.CTkToplevel):
 
         rodape = ctk.CTkFrame(self, fg_color="transparent")
         rodape.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 12))
-        ctk.CTkButton(rodape, text="Salvar e fechar", command=self.salvar_e_fechar).pack(
-            side="right"
+        salvar = ctk.CTkButton(rodape, text="Salvar e fechar", command=self.salvar_e_fechar)
+        salvar.pack(side="right")
+        dica(
+            salvar,
+            "Grava o texto corrigido e fecha a janela. Depois, clique em “Aprovar e continuar” na "
+            "janela principal (Ctrl+S).",
         )
-        ctk.CTkButton(
+        cancelar = ctk.CTkButton(
             rodape, text="Cancelar", width=90, fg_color=("gray70", "gray30"), command=self._cancelar
-        ).pack(side="right", padx=8)
+        )
+        cancelar.pack(side="right", padx=8)
+        dica(cancelar, "Fecha sem gravar o que você mudou.")
         ctk.CTkLabel(
             rodape,
             text="Ctrl+S salva · Ctrl+F busca · F3 próximo achado · F8 próximo aviso de português",

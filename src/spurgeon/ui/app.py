@@ -41,8 +41,9 @@ from spurgeon.core.projeto import (
 )
 from spurgeon.render.shorts import assinatura_visual
 from spurgeon.shorts.livre import ContextoDaIA
-from spurgeon.ui import dialogos
-from spurgeon.ui.aba_studio import AbaStudioShorts
+from spurgeon.ui import dialogos, dicas
+from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
+from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.estimativa import (
     EstimadorTempo,
@@ -68,11 +69,29 @@ from spurgeon.ui.quadros import FonteDeQuadros
 from spurgeon.ui.revisao import abrir_revisao
 from spurgeon.ui.rolagem import QuadroRolavel
 from spurgeon.ui.studio_shorts import OrigemDaPrevia
+from spurgeon.ui.tutorial import (
+    PASSOS,
+    VISTA_LIVRE,
+    VISTA_STUDIO,
+    Destino,
+    OfertaDoTutorial,
+    Passo,
+    Tutorial,
+)
 
 _INTERVALO_MS = 100
 _CICLOS_POR_SEGUNDO = 1000 // _INTERVALO_MS
 ABA_PROCESSAMENTO = "Processamento"
 ABA_STUDIO = "Studio Shorts"
+_ABERTURA_MS = 600  # a janela monta e aparece antes da reabertura e da oferta do passo a passo
+_ENTRE_REABRIR_E_OFERTAR_MS = 300
+_NOTA_SEM_STUDIO = (
+    "Esta tela só aparece quando o projeto tem Shorts calculados. Para vê-la de verdade, abra um "
+    "projeto que já tenha Shorts (“Abrir projeto…”) ou processe um vídeo."
+)
+_NOTA_ESCONDIDO = (
+    "Esta parte da tela está escondida no modo escolhido. Troque o modo para “Tudo” para vê-la."
+)
 _ESTADOS_OCUPADOS = (
     EstadoUI.VERIFICANDO,
     EstadoUI.EXECUTANDO,
@@ -82,7 +101,16 @@ _ESTADOS_OCUPADOS = (
 
 
 class JanelaPrincipal(ctk.CTk):
-    def __init__(self, config: ConfigApp | None = None):
+    def __init__(
+        self,
+        config: ConfigApp | None = None,
+        *,
+        oferecer_tutorial: bool = False,
+        reabrir_ultimo: bool = False,
+    ):
+        """`oferecer_tutorial` e `reabrir_ultimo` valem só na abertura de verdade do programa
+        (`executar`): ao abrir, reabre o último projeto e oferece o passo a passo. Por padrão
+        (testes, janelas escondidas) nenhum dos dois acontece."""
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         super().__init__()
@@ -107,6 +135,11 @@ class JanelaPrincipal(ctk.CTk):
         self._perfil_hardware: PerfilHardware | None = None
         self._chave_do_studio: tuple[str, bool] | None = None
         self._abrindo_projeto = False
+        self.tutorial: Tutorial | None = None
+        self._oferta: OfertaDoTutorial | None = None
+        self._abertura_agendada: str | None = None
+        self._secoes_do_tutorial: set[str] = set()  # seções que o passo a passo abriu
+        self._vista_antes: tuple[str, str] | None = None  # a aba e a página de antes dele
 
         self.title("Studio Spurgeon")
         self._ajustar_tamanho()
@@ -116,6 +149,7 @@ class JanelaPrincipal(ctk.CTk):
         self.after(_INTERVALO_MS, self._ciclo)
         threading.Thread(target=self._detectar_hardware, daemon=True).start()
         self._listar_ollama()
+        self._agendar_abertura(oferecer_tutorial, reabrir_ultimo)
 
     # --- montagem -----------------------------------------------------------------------------
     def _ajustar_tamanho(self) -> None:
@@ -130,15 +164,45 @@ class JanelaPrincipal(ctk.CTk):
     def _montar(self) -> None:
         self.columnconfigure(0, weight=0)
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(0, weight=0)  # a faixa das abas
+        self.rowconfigure(1, weight=1)  # o conteúdo da aba
+
+        # As abas ficam sempre no mesmo lugar, no alto da janela: Processamento mostra as opções à
+        # esquerda e o andamento à direita; o Studio Shorts toma a janela inteira.
+        faixa = ctk.CTkFrame(self, fg_color="transparent")
+        faixa.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 0))
+        self._abas = ctk.CTkSegmentedButton(
+            faixa, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
+        )
+        self._abas.pack(side="left")
+        self._faixa_das_abas = faixa
+        dica_do_seletor(
+            self._abas,
+            {
+                ABA_PROCESSAMENTO: "As opções do sermão, à esquerda, e o andamento do "
+                "processamento, à direita.",
+                ABA_STUDIO: lambda: self._dica_da_aba_studio(),
+            },
+        )
 
         coluna = ctk.CTkFrame(self, fg_color="transparent")
-        coluna.grid(row=0, column=0, sticky="ns", padx=(12, 6), pady=(12, 0))
+        coluna.grid(row=1, column=0, sticky="ns", padx=(12, 6), pady=(8, 0))
+        self._coluna = coluna
         coluna.rowconfigure(1, weight=1)
         self._paginas = ctk.CTkSegmentedButton(
             coluna, values=list(NOMES_DAS_PAGINAS), command=self._trocar_pagina
         )
         self._paginas.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        dica_do_seletor(
+            self._paginas,
+            {
+                NOMES_DAS_PAGINAS[0]: "O vídeo do sermão e o que gerar: etapas 1 e 2.",
+                NOMES_DAS_PAGINAS[1]: "Cortar o começo e o fim, zoom, tratamento de imagem e "
+                "marca d'água: etapas 3 a 5.",
+                NOMES_DAS_PAGINAS[2]: "Pontos de revisão, uso do computador e qualidade, mais as "
+                "opções avançadas: etapas 6 e 7.",
+            },
+        )
         lateral = QuadroRolavel(coluna, width=500, fg_color="transparent")
         lateral.grid(row=1, column=0, sticky="ns")
         self.lateral = lateral
@@ -175,13 +239,10 @@ class JanelaPrincipal(ctk.CTk):
         self.entrada.montar_ajustes(self.opcoes.cartao_ajustes)
 
         direita = ctk.CTkFrame(self, fg_color="transparent")
-        direita.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 0))
+        direita.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(8, 0))
         direita.columnconfigure(0, weight=1)
-        direita.rowconfigure(1, weight=1)
-        self._abas = ctk.CTkSegmentedButton(
-            direita, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
-        )
-        self._abas.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        direita.rowconfigure(0, weight=1)
+        self._direita = direita
         self.execucao = PainelExecucao(
             direita,
             ao_iniciar=self._iniciar,
@@ -192,10 +253,10 @@ class JanelaPrincipal(ctk.CTk):
             ao_aprovar=self._aprovar_revisao,
             ao_fechar_revisao=self._fechar_revisao,
         )
-        self.execucao.grid(row=1, column=0, sticky="nsew")
+        self.execucao.grid(row=0, column=0, sticky="nsew")
         self.execucao.definir_estado(EstadoUI.OCIOSO, tem_projeto=False)
         self.studio = AbaStudioShorts(
-            direita,
+            self,  # filho da janela, não da coluna da direita: a aba ocupa a janela toda
             ao_renderizar=self._renderizar_do_studio,
             pastas_do_app=pastas,
             legenda_queimada=lambda: self.opcoes.valores().legendas_dinamicas,
@@ -204,24 +265,60 @@ class JanelaPrincipal(ctk.CTk):
             tarefas=self.tarefas,
             origem_da_previa=self.origem_da_previa,
             contexto_da_ia=self._contexto_da_ia,
+            definir_ajustes=self._definir_ajustes_do_short,
         )
-        self.studio.grid(row=1, column=0, sticky="nsew")
         self._abas.set(ABA_PROCESSAMENTO)
         self._trocar_aba(ABA_PROCESSAMENTO)
         self._atualizar_aba_studio()
 
+        # o rodapé: o hardware à esquerda e, à direita, os controles do passo a passo
+        self._faixa_do_rodape = ctk.CTkFrame(self, fg_color="transparent")
+        self._faixa_do_rodape.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(4, 8))
+        self._faixa_do_rodape.columnconfigure(0, weight=1)
         self._rodape = ctk.CTkLabel(
-            self,
+            self._faixa_do_rodape,
             text="Detectando o hardware…",
             anchor="w",
             text_color="gray55",
             font=ctk.CTkFont(size=12),
         )
-        self._rodape.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(4, 8))
+        self._rodape.grid(row=0, column=0, sticky="ew")
+        self._var_tutorial = ctk.BooleanVar(value=self.config_app.tutorial_ao_abrir)
+        self._check_tutorial = ctk.CTkCheckBox(
+            self._faixa_do_rodape,
+            text="Mostrar o passo a passo ao abrir",
+            variable=self._var_tutorial,
+            command=self._mudou_tutorial_ao_abrir,
+            font=ctk.CTkFont(size=12),
+            checkbox_width=18,
+            checkbox_height=18,
+        )
+        self._check_tutorial.grid(row=0, column=1, sticky="e", padx=(12, 12))
+        dicas.dica(
+            self._check_tutorial,
+            "Marcado: ao abrir, o programa pergunta se você quer ver o passo a passo. Desmarcado: "
+            "ele não pergunta mais (você ainda pode abri-lo pelo botão “Como usar”).",
+        )
+        self._botao_tutorial = ctk.CTkButton(
+            self._faixa_do_rodape,
+            text="Como usar",
+            width=96,
+            height=26,
+            command=self.abrir_tutorial,
+        )
+        self._botao_tutorial.grid(row=0, column=2, sticky="e")
+        dicas.dica(
+            self._botao_tutorial,
+            "Abre agora o passo a passo que explica cada etapa, da escolha do vídeo até os "
+            "Shorts prontos. Você pode sair dele quando quiser.",
+        )
 
     # --- ciclo principal ----------------------------------------------------------------------
     def destroy(self) -> None:
         self._encerrando = True  # callbacks pendentes não devem mexer em widgets já destruídos
+        tutorial = getattr(self, "tutorial", None)
+        if tutorial is not None:
+            tutorial.fechar()
         super().destroy()
 
     def _ciclo(self) -> None:
@@ -300,6 +397,12 @@ class JanelaPrincipal(ctk.CTk):
             threads=threads_para_uso(perfil, opcoes.uso_cpu_percentual),
             usar_gpu=perfil.cuda_utilizavel,
         )
+
+    def _definir_ajustes_do_short(self, *, legenda: float | None = None) -> None:
+        """A altura da legenda (de 0,3 a 0,9 da altura do Short) que o Studio Shorts acertou olhando
+        a prévia vai para o campo da tela: vale para os Shorts todos e fica como opção salva."""
+        if legenda is not None:
+            self.entrada.shorts.definir_legenda(legenda * 100)
 
     def _assinatura_visual(self) -> str | None:
         """A aparência dos Shorts agora (zoom, cor, recorte, marca), para o Studio comparar."""
@@ -520,7 +623,7 @@ class JanelaPrincipal(ctk.CTk):
             return
 
         self._pastas, self._config_execucao = criado.pastas, config
-        self._lembrar_preferencias(config)
+        self._lembrar_preferencias(config, criado.pastas.raiz)
         self.execucao.separar_log()
         self.execucao.adicionar_log(
             ("Retomando o projeto" if criado.retomado else "Projeto criado")
@@ -541,15 +644,26 @@ class JanelaPrincipal(ctk.CTk):
             update={"modo": "completo", "video_inicio_s": 0.0, "video_fim_s": 0.0}
         )
 
-    def _lembrar_preferencias(self, config: ConfigApp) -> None:
+    def _lembrar_preferencias(self, config: ConfigApp, projeto: Path | None = None) -> None:
         self.config_app.padroes = self._preferencias(config.padroes)
         self.config_app.pastas.projetos = config.pastas.projetos
+        if projeto is not None:
+            self.config_app.ultimo_projeto = str(projeto)  # reaberto na próxima vez
+        self._salvar_config("as preferências")
+
+    def _salvar_config(self, o_que: str) -> None:
+        """Grava o config.toml; se não der, avisa no registro e segue (não é motivo para parar)."""
         try:
             salvar_config(self.config_app)
         except OSError as erro:
-            self.execucao.adicionar_log(
-                f"Não foi possível salvar as preferências: {erro}", logging.WARNING
-            )
+            self.execucao.adicionar_log(f"Não foi possível salvar {o_que}: {erro}", logging.WARNING)
+
+    def _lembrar_ultimo_projeto(self, pasta: Path) -> None:
+        """Guarda a pasta do projeto aberto para o programa reabri-la ao iniciar."""
+        if self.config_app.ultimo_projeto == str(pasta):
+            return
+        self.config_app.ultimo_projeto = str(pasta)
+        self._salvar_config("o último projeto")
 
     def _iniciar_execucao(self, aprovar: str | None = None) -> None:
         self._recebeu_fim = False
@@ -623,7 +737,16 @@ class JanelaPrincipal(ctk.CTk):
 
     # --- projetos abertos e Studio Shorts -----------------------------------------------------
     def _trocar_aba(self, nome: str) -> None:
-        (self.studio if nome == ABA_STUDIO else self.execucao).tkraise()
+        """Processamento: as opções à esquerda e o andamento à direita. Studio Shorts: só ele, na
+        janela inteira (mais espaço para editar as legendas)."""
+        if nome == ABA_STUDIO:
+            self._coluna.grid_remove()
+            self._direita.grid_remove()
+            self.studio.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(8, 0))
+        else:
+            self.studio.grid_remove()
+            self._coluna.grid()
+            self._direita.grid()
 
     def _motivo_do_bloqueio(self) -> str | None:
         estado = self.execucao.estado
@@ -712,9 +835,270 @@ class JanelaPrincipal(ctk.CTk):
         self.execucao.adicionar_log(f"Projeto aberto: {pasta}")
         self.execucao.definir_estado(EstadoUI.OCIOSO, tem_projeto=True)
         self._atualizar_aba_studio(recarregar=True)
+        self._lembrar_ultimo_projeto(pasta)
         if self._pastas.cortes_shorts.exists():
             self._abas.set(ABA_STUDIO)
             self._trocar_aba(ABA_STUDIO)
+
+    # --- a abertura do programa: reabrir o último projeto e oferecer o passo a passo ----------
+    def _agendar_abertura(self, oferecer: bool, reabrir: bool) -> str | None:
+        """Agenda, para depois de a janela estar montada, a reabertura do último projeto e a oferta
+        do passo a passo. Sem nenhum dos dois pedidos, não agenda nada."""
+        if not (oferecer or reabrir):
+            return None
+        self._abertura_agendada = self.after(
+            _ABERTURA_MS, lambda: self._ao_abrir_o_programa(oferecer=oferecer, reabrir=reabrir)
+        )
+        return self._abertura_agendada
+
+    def _ao_abrir_o_programa(self, *, oferecer: bool, reabrir: bool) -> None:
+        """Primeiro o último projeto; só depois o passo a passo, para não haver duas janelas
+        disputando a atenção (nem o projeto abrindo por baixo da pergunta)."""
+        self._abertura_agendada = None
+        if self._encerrando:
+            return
+        if reabrir:
+            self._reabrir_ultimo_projeto()
+        if oferecer and self.config_app.tutorial_ao_abrir and not self._encerrando:
+            self._abertura_agendada = self.after(
+                _ENTRE_REABRIR_E_OFERTAR_MS, self._oferecer_tutorial
+            )
+
+    def _reabrir_ultimo_projeto(self) -> bool:
+        """Abre o projeto que estava aberto da última vez. Em silêncio: se a pasta sumiu ou não é
+        mais um projeto, o campo é esquecido e a janela abre vazia, como na primeira vez."""
+        texto = self.config_app.ultimo_projeto.strip()
+        if not texto:
+            return False
+        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
+            return False
+        pasta = Path(texto)
+        try:
+            valido = (
+                pasta.is_dir()
+                and carregar_estado(pasta) is not None
+                and ler_nome_e_data(pasta) is not None
+            )
+        except (OSError, ValueError, ErroSpurgeon):
+            valido = False
+        if not valido:
+            self.config_app.ultimo_projeto = ""
+            self._salvar_config("o último projeto")
+            return False
+        self._abrir_projeto(pasta)
+        return self._pastas is not None
+
+    def _mudou_tutorial_ao_abrir(self) -> None:
+        self.config_app.tutorial_ao_abrir = bool(self._var_tutorial.get())
+        self._salvar_config("a preferência do passo a passo")
+
+    def _oferecer_tutorial(self) -> None:
+        """A pergunta "Quer ver o passo a passo?" (uma só janela por vez)."""
+        self._abertura_agendada = None
+        if self._encerrando or self._oferta is not None:
+            return
+        if self.tutorial is not None and self.tutorial.aberto:
+            return
+        self._oferta = OfertaDoTutorial(self, ao_responder=self._oferta_respondida)
+
+    def _oferta_respondida(self, ver: bool, nao_mostrar_mais: bool) -> None:
+        self._oferta = None
+        if nao_mostrar_mais:
+            self.config_app.tutorial_ao_abrir = False
+            self._var_tutorial.set(False)
+            self._salvar_config("a preferência do passo a passo")
+        if ver and not self._encerrando:
+            self.abrir_tutorial()
+
+    def abrir_tutorial(self, indice: int = 0) -> None:
+        """Abre o passo a passo no passo `indice` (se já está aberto, só o traz para a frente)."""
+        if self._oferta is not None:
+            self._oferta.escolher(True)  # responde a pergunta; ela mesma abre o passo a passo
+            return
+        if self.tutorial is not None and self.tutorial.aberto:
+            self.tutorial.iniciar(indice)
+            return
+        self._vista_antes = (self._abas.get(), self._paginas.get())
+        self.tutorial = Tutorial(
+            self, PASSOS, ir_para=self._ir_para_passo, ao_fechar=self._tutorial_fechado
+        )
+        self.tutorial.iniciar(indice)
+
+    def _tutorial_fechado(self, _concluido: bool) -> None:
+        """Devolve a tela ao que era antes do passo a passo (aba, página, seções que ele abriu)."""
+        self.tutorial = None
+        for nome in self._secoes_do_tutorial:
+            self.entrada.secoes[nome].definir(False)
+        self._secoes_do_tutorial.clear()
+        if self._vista_antes is None or self._encerrando:
+            return
+        aba, pagina = self._vista_antes
+        self._vista_antes = None
+        if aba == ABA_STUDIO and not self.studio.liberada:
+            aba = ABA_PROCESSAMENTO
+        self._mostrar_aba(aba)
+        if pagina in NOMES_DAS_PAGINAS:
+            self._mostrar_pagina(NOMES_DAS_PAGINAS.index(pagina))
+
+    def _dica_da_aba_studio(self) -> str:
+        if self.studio.liberada:
+            return (
+                "Revise os Shorts sugeridos, corrija a legenda, ajuste o começo e o fim de cada "
+                "um e mande renderizar."
+            )
+        return (
+            "Fica liberada quando o projeto tem Shorts calculados: depois de processar um vídeo, "
+            "ou ao abrir um projeto que já os tenha."
+        )
+
+    def _mostrar_aba(self, nome: str) -> None:
+        if self._abas.get() != nome:
+            self._abas.set(nome)
+        self._trocar_aba(nome)
+
+    def _mostrar_pagina(self, indice: int) -> None:
+        nome = NOMES_DAS_PAGINAS[indice]
+        if self._paginas.get() != nome:
+            self._paginas.set(nome)
+        self._trocar_pagina(nome)
+
+    def _ir_para_passo(self, passo: Passo) -> Destino:
+        """Prepara a tela para um passo do tutorial: mostra a aba e a página, abre a seção, rola
+        até o que será explicado e devolve o que destacar."""
+        nota = ""
+        no_studio = passo.vista in (VISTA_STUDIO, VISTA_LIVRE)
+        if no_studio and self.studio.liberada and self.studio.editor is not None:
+            self._mostrar_aba(ABA_STUDIO)
+            painel = PAINEL_LIVRE if passo.vista == VISTA_LIVRE else PAINEL_CORTES
+            self.studio.mostrar_painel(painel)
+            alvo = self._alvo_do_studio(passo.alvo)
+        elif no_studio:  # sem cortes calculados a aba está desligada: só se mostra onde ela fica
+            self._mostrar_aba(ABA_PROCESSAMENTO)
+            alvo = self._abas._buttons_dict[ABA_STUDIO]
+            nota = _NOTA_SEM_STUDIO
+        else:
+            self._mostrar_aba(ABA_PROCESSAMENTO)
+            if passo.pagina is not None:
+                self._mostrar_pagina(passo.pagina)
+            alvo = self._alvo_do_passo(passo.alvo)
+        self.update_idletasks()
+        self._rolar_ate(alvo)
+        if not nota and alvo is not None and self.winfo_viewable() and not _a_vista(alvo):
+            nota = _NOTA_ESCONDIDO
+        return Destino(alvo, nota)
+
+    def _abrir_secao(self, nome: str) -> ctk.CTkFrame:
+        secao = self.entrada.secoes[nome]
+        if not secao.aberta:
+            secao.definir(True)
+            self._secoes_do_tutorial.add(nome)
+            self.update_idletasks()
+        return secao
+
+    def _alvo_do_passo(self, chave: str):
+        """O widget (ou a lista de widgets) que o passo `chave` explica, na aba Processamento."""
+        o, e, x = self.opcoes, self.entrada, self.execucao
+        alvos = {
+            "como_usar": lambda: self._botao_tutorial,
+            "video_arquivo": lambda: [e.campo_arquivo, e.faixa_de_botoes],
+            "video_dados": lambda: [
+                e.campo_nome,
+                e.campo_data,
+                e.campo_projetos,
+                e.botao_alterar_pasta,
+            ],
+            "modo": lambda: o._seletor_modo,
+            "audio": lambda: o._grupos["audio"],
+            "longo": lambda: o._grupos["longo"],
+            "vinhetas": lambda: o._grupos["vinhetas"],
+            "shorts": lambda: o._grupos["shorts"],
+            "aparar": lambda: self._abrir_secao("aparar"),
+            "zoom": lambda: self._abrir_secao("zoom"),
+            "shorts_zoom": lambda: self._abrir_secao("shorts"),
+            "tratamento": lambda: o.tratamento,
+            "marca": lambda: o.marca,
+            "revisao": lambda: o.cartoes["revisao"],
+            "processamento": lambda: o.cartoes["processamento"],
+            "iniciar": lambda: [x.barra, x.botao_iniciar],
+            "pausar_cancelar": lambda: [x.botao_pausar, x.botao_cancelar],
+            "execucao": lambda: self._direita,
+            "pasta": lambda: x.botao_pasta,
+        }
+        procurar = alvos.get(chave)
+        return procurar() if procurar is not None else None
+
+    def _alvo_do_studio(self, chave: str):
+        """O widget que o passo `chave` explica no Studio Shorts. Se a aba oferece
+        `alvos_do_tutorial()` (chave → widget), vale o que ela disser; senão procura os widgets
+        conhecidos, e o que não achar vira a aba inteira."""
+        estudio = self.studio
+        oferecidos = getattr(estudio, "alvos_do_tutorial", None)
+        if callable(oferecidos):
+            try:
+                achado = (oferecidos() or {}).get(chave)
+            except Exception:
+                logging.getLogger(__name__).exception("A aba Studio não soube dizer o alvo")
+                achado = None
+            if achado is not None:
+                return achado
+        editor = estudio.editor
+        conhecidos = {
+            "aba_studio": lambda: self._abas._buttons_dict[ABA_STUDIO],
+            "studio_lista": lambda: editor._lista,
+            "studio_tabela": lambda: _existentes(editor, "_ferramentas", "_janela"),
+            "studio_edicao": lambda: (
+                [
+                    botao
+                    for botoes in getattr(editor, "_botoes_do_historico", {}).values()
+                    for botao in botoes
+                ]
+                or editor._texto
+            ),
+            "studio_texto": lambda: [
+                editor._campo_titulo,
+                editor._campo_descricao,
+                editor._campo_hashtags,
+            ],
+            "studio_previa": lambda: editor._dica_previa.master,
+            "studio_rodape": lambda: _existentes(
+                estudio, "_botao_descartar", "_botao_salvar", "_botao_renderizar"
+            ),
+            "studio_livre": lambda: estudio._livre,
+        }
+        try:
+            achado = conhecidos[chave]()
+        except (AttributeError, KeyError, TypeError):
+            achado = None
+        return achado if achado is not None else estudio
+
+    def _rolar_ate(self, alvo) -> None:
+        """Rola a área rolável que contém o alvo até ele aparecer (no começo, se não cabe)."""
+        if isinstance(alvo, (list, tuple)):
+            alvo = alvo[0] if alvo else None
+        if alvo is None:
+            return
+        # o quadro rolável que CONTÉM o alvo (um quadro rolável como alvo só rola a si mesmo)
+        quadro = getattr(_visivel_de(alvo), "master", None)
+        while quadro is not None and getattr(quadro, "_parent_canvas", None) is None:
+            quadro = getattr(quadro, "master", None)
+        if quadro is None:
+            return
+        try:
+            tela = quadro._parent_canvas
+            tela.configure(scrollregion=tela.bbox("all"))  # o Tk só o refaz no próximo evento
+            visivel = _visivel_de(alvo)
+            y_na_tela = visivel.winfo_rooty() - tela.winfo_rooty()
+            altura_da_tela = tela.winfo_height()
+            if y_na_tela >= 0 and y_na_tela + min(visivel.winfo_height(), altura_da_tela) <= (
+                altura_da_tela
+            ):
+                return  # já está à vista
+            total = max(1, quadro.winfo_height())
+            y_no_conteudo = visivel.winfo_rooty() - quadro.winfo_rooty()
+            tela.yview_moveto(max(0, y_no_conteudo - 12) / total)
+            tela.update_idletasks()
+        except tkinter.TclError:
+            pass
 
     def _renderizar_do_studio(self) -> None:
         """Renderiza os Shorts marcados que ainda não existem (ou mudaram), sem o resto."""
@@ -898,6 +1282,28 @@ class JanelaPrincipal(ctk.CTk):
         self.destroy()
 
 
+def _visivel_de(widget):
+    """O widget que de fato aparece na tela (num quadro rolável, o quadro externo)."""
+    externo = getattr(widget, "_parent_frame", None)
+    return widget if externo is None else externo
+
+
+def _existentes(objeto, *nomes: str) -> list:
+    """Os atributos de `objeto` com estes nomes que existem (a aba Studio ainda está mudando)."""
+    achados = [getattr(objeto, nome, None) for nome in nomes]
+    return [a for a in achados if a is not None]
+
+
+def _a_vista(alvo) -> bool:
+    """Algum dos widgets está na tela (não escondido por um modo, uma página ou uma aba)?"""
+    alvos = alvo if isinstance(alvo, (list, tuple)) else [alvo]
+    try:
+        return any(_visivel_de(a).winfo_viewable() for a in alvos if a is not None)
+    except tkinter.TclError:
+        return False
+
+
 def executar() -> int:
-    JanelaPrincipal().mainloop()
+    """Abre o programa: reabre o último projeto e oferece o passo a passo (se não dispensado)."""
+    JanelaPrincipal(oferecer_tutorial=True, reabrir_ultimo=True).mainloop()
     return 0

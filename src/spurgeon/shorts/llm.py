@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.ollama import URL_OLLAMA
-from spurgeon.shorts.dados import Avaliacao
+from spurgeon.shorts.dados import CATEGORIAS, Avaliacao
 
 _TENTATIVAS = 3
 TEMPERATURA_PADRAO = 0.1
@@ -24,6 +24,34 @@ SISTEMA = (
     "Você é um editor de vídeos curtos (Shorts) de um canal de sermões da teologia reformada "
     "(calvinista). Seu trabalho é avaliar trechos de sermão e preparar a publicação sem trair o "
     "que o pregador quis dizer. Responda sempre em JSON válido, em português do Brasil."
+)
+
+#: Uma definição curta de cada categoria, para a IA escolher a que melhor descreve a ideia central.
+#: Sem exemplos de frases ou de títulos (a IA os copiaria). Tem de haver uma para cada categoria
+#: de `CATEGORIAS`; o prompt lista todas, na ordem delas.
+DEFINICOES_DAS_CATEGORIAS = {
+    "pergunta_gancho": "abre com uma pergunta que prende a atenção de quem ouve",
+    "citacao_biblica": "gira em torno da leitura ou da explicação de um texto bíblico",
+    "aplicacao_pratica": "aplica a verdade à vida de quem ouve, no dia a dia",
+    "conclusao": "fecha uma ideia ou o sermão",
+    "confronto_de_pecados": "denuncia pecados com franqueza para convencer o ouvinte da sua culpa",
+    "exortacao": "chama o ouvinte a agir, obedecer, perseverar ou mudar de conduta",
+    "apontando_cristo": "mostra como o texto ou a ideia aponta para Cristo e para a sua obra",
+    "necessidade_de_arrependimento": "diz que é preciso se arrepender e voltar-se para Deus",
+    "doutrina_biblica": "ensina uma doutrina bíblica a partir da Escritura (Deus, homem, salvação)",
+    "doutrina_reformada": "ensina um ponto próprio da teologia reformada (soberania de Deus, "
+    "eleição, graça, as solas, confissões)",
+    "fato_historico": "narra um acontecimento histórico, bíblico ou da história da igreja",
+    "oracao": "é uma oração feita pelo pregador, ou ensina a orar",
+    "profecia": "trata de uma profecia: o que Deus anunciou que faria, ou o seu cumprimento",
+    "promessa": "declara uma promessa de Deus ao seu povo",
+    "anuncio_de_salvacao": "anuncia o evangelho: a salvação em Cristo oferecida a quem crê",
+    "esperanca": "consola e anima com a esperança do cristão em meio à dor ou à espera",
+    "outra": "use só se nenhuma das anteriores serve",
+}
+#: o bloco com as definições que entra no prompt (uma categoria por linha)
+BLOCO_DE_CATEGORIAS = "\n".join(
+    f'  "{chave}": {DEFINICOES_DAS_CATEGORIAS[chave]}' for chave in CATEGORIAS
 )
 
 PROMPT_AVALIACAO = """\
@@ -38,9 +66,8 @@ CONTEXTO POSTERIOR (só para você entender; não faz parte do corte):
 
 Avalie o TRECHO como um possível Short de YouTube (de 30 segundos a 3 minutos; o ideal é por \
 volta de 1 minuto, mas uma ideia que precisa de mais tempo pode valer um trecho longo):
-- categoria: "pergunta_gancho" (abre com uma pergunta que prende a atenção), "citacao_biblica" \
-(gira em torno de um texto bíblico), "aplicacao_pratica" (aplica a verdade à vida de quem ouve), \
-"conclusao" (fecha uma ideia ou o sermão) ou "outra".
+- categoria: escolha UMA, a que MELHOR descreve a ideia central do trecho. As opções:
+{categorias}
 - nota: de 0 a 10, o potencial de prender quem assiste. Tem gancho? Desenvolve uma ideia central \
 completa? Termina com sentido? Seja exigente: 10 é raro. Num trecho com mais de 90 segundos a \
 ideia precisa se sustentar o tempo todo, sem enrolação nem desvios; se perde o fio, dê nota baixa.
@@ -73,11 +100,40 @@ _BLOCO_USADOS = (
 )
 _MAXIMO_DE_TITULOS_NO_PROMPT = 12
 
+#: o que a pessoa pode pedir de novo, um por vez, a partir do texto que o Short tem agora
+CAMPOS_REFAZIVEIS = ("titulo", "descricao", "hashtags")
+
+PROMPT_CAMPO = """\
+Sermão: {sermao}
+
+TRECHO ({duracao:.0f} segundos, categoria "{categoria}"):
+{trecho}
+
+{usados}{pedido}"""
+
+_PEDIDOS = {
+    "titulo": (
+        "Crie o título para publicar este trecho como YouTube Short: até 60 caracteres, em "
+        "português do Brasil, uma frase natural e completa (uma pergunta ou uma afirmação direta) "
+        "que desperte curiosidade sobre o ASSUNTO ESPECÍFICO deste trecho, com palavras que "
+        "aparecem nele. Fiel ao que o trecho diz, sem exagero, sem CAIXA ALTA e sem aspas. Não "
+        "escreva um título genérico que serviria para qualquer parte do sermão."
+    ),
+    "descricao": (
+        "Crie a descrição para publicar este trecho como YouTube Short: 1 ou 2 frases (até 220 "
+        "caracteres) em português do Brasil resumindo o trecho, sem inventar nada que não esteja "
+        "nele."
+    ),
+    "hashtags": (
+        "Crie as hashtags para publicar este trecho como YouTube Short: de 4 a 6, em português, "
+        "cada uma começando com # e sem espaços, sobre os assuntos deste trecho; inclua #shorts."
+    ),
+}
+TEMPERATURA_DE_REFAZER = 0.3  # um pouco solta: quem pede de novo quer outra opção
+
 
 class AvaliacaoLLM(BaseModel):
-    categoria: Literal[
-        "pergunta_gancho", "citacao_biblica", "aplicacao_pratica", "conclusao", "outra"
-    ]
+    categoria: Literal[*CATEGORIAS]  # o esquema enviado ao Ollama lista todas como enum
     nota: int = Field(ge=0, le=10)
     autossuficiente: bool
     alerta_contexto: str = ""
@@ -93,6 +149,19 @@ class AvaliacaoLLM(BaseModel):
         )
 
 
+def _hashtags_limpas(valores: list[str]) -> list[str]:
+    limpas: list[str] = []
+    for v in valores:
+        texto = "".join(v.split())
+        if texto and not texto.startswith("#"):
+            texto = "#" + texto
+        if len(texto) > 1 and texto not in limpas:
+            limpas.append(texto)
+    if not limpas:
+        raise ValueError("sem hashtags válidas")
+    return limpas[:8]
+
+
 class MetadadosLLM(BaseModel):
     titulo: str = Field(min_length=3)
     descricao: str = Field(min_length=3)
@@ -102,16 +171,31 @@ class MetadadosLLM(BaseModel):
     @field_validator("hashtags")
     @classmethod
     def _com_cerquilha(cls, valores: list[str]) -> list[str]:
-        limpas = []
-        for v in valores:
-            texto = "".join(v.split())
-            if texto and not texto.startswith("#"):
-                texto = "#" + texto
-            if len(texto) > 1 and texto not in limpas:
-                limpas.append(texto)
-        if not limpas:
-            raise ValueError("sem hashtags válidas")
-        return limpas[:8]
+        return _hashtags_limpas(valores)
+
+
+class TituloLLM(BaseModel):
+    titulo: str = Field(min_length=3)
+
+
+class DescricaoLLM(BaseModel):
+    descricao: str = Field(min_length=3)
+
+
+class HashtagsLLM(BaseModel):
+    hashtags: list[str] = Field(min_length=1)
+
+    @field_validator("hashtags")
+    @classmethod
+    def _com_cerquilha(cls, valores: list[str]) -> list[str]:
+        return _hashtags_limpas(valores)
+
+
+_ESQUEMA_DO_CAMPO: dict[str, type[BaseModel]] = {
+    "titulo": TituloLLM,
+    "descricao": DescricaoLLM,
+    "hashtags": HashtagsLLM,
+}
 
 
 class ErroLLM(ErroFerramenta):
@@ -128,11 +212,13 @@ class ClienteLLM:
         *,
         host: str = URL_OLLAMA,
         threads: int = 0,
-        contexto_tokens: int = 4096,
+        contexto_tokens: int = 6144,  # a lista de 17 categorias aumentou o prompt de avaliação
         usar_gpu: bool = False,
         cliente: Any | None = None,
+        manter_na_memoria: str = "30m",
     ):
         self.modelo = modelo
+        self._manter = manter_na_memoria  # quanto o Ollama guarda o modelo carregado, parado
         self._opcoes: dict[str, Any] = {
             "temperature": TEMPERATURA_PADRAO,
             "num_ctx": contexto_tokens,
@@ -192,6 +278,7 @@ class ClienteLLM:
             trecho=trecho,
             depois=depois or "(fim do sermão)",
             duracao=duracao_s,
+            categorias=BLOCO_DE_CATEGORIAS,
         )
         return self._perguntar(prompt, AvaliacaoLLM).para_avaliacao()
 
@@ -213,6 +300,32 @@ class ClienteLLM:
         )
         return self._perguntar(prompt, MetadadosLLM, temperatura)
 
+    def refazer(
+        self,
+        campo: str,
+        sermao: str,
+        trecho: str,
+        categoria: str,
+        duracao_s: float,
+        titulos_usados: Sequence[str] = (),
+        temperatura: float = TEMPERATURA_DE_REFAZER,
+    ) -> str | list[str]:
+        """Cria de novo só um dado do Short (`titulo`, `descricao` ou `hashtags`), a partir do texto
+        que ele tem agora. Devolve o texto, ou a lista de hashtags."""
+        if campo not in CAMPOS_REFAZIVEIS:
+            raise ValueError(f"campo desconhecido: {campo}")
+        usados = ""
+        if campo == "titulo" and titulos_usados:
+            recentes = list(titulos_usados)[-_MAXIMO_DE_TITULOS_NO_PROMPT:]
+            usados = _BLOCO_USADOS.format(titulos="\n".join(f"- {t}" for t in recentes))
+        prompt = PROMPT_CAMPO.format(
+            sermao=sermao, trecho=trecho, categoria=categoria, duracao=duracao_s,
+            usados=usados, pedido=_PEDIDOS[campo],
+        )  # fmt: skip
+        resposta = self._perguntar(prompt, _ESQUEMA_DO_CAMPO[campo], temperatura)
+        valor = getattr(resposta, campo)
+        return list(valor) if campo == "hashtags" else str(valor).strip()
+
     def _perguntar(
         self, prompt: str, esquema: type[Esquema], temperatura: float = TEMPERATURA_PADRAO
     ) -> Esquema:
@@ -229,7 +342,7 @@ class ClienteLLM:
                     format=esquema.model_json_schema(),
                     options=opcoes,
                     think=False,
-                    keep_alive="30m",
+                    keep_alive=self._manter,
                 )
                 return esquema.model_validate_json(resposta.message.content)
             except ValidationError as erro:  # JSON fora do esquema: tenta de novo

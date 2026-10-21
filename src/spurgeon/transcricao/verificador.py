@@ -171,6 +171,13 @@ class Verificador:
     def aceitar_palavra(self, palavra: str) -> None:
         self._conhecidas.add(palavra.casefold())
 
+    def definir_vocabulario(self, vocabulario: Iterable[str]) -> None:
+        """Troca o vocabulário (a pessoa acrescentou ou tirou termos): o que ela mandou ignorar
+        continua ignorado."""
+        self._termos = [t for t in vocabulario if t.strip()]
+        self._conhecidas = {parte.casefold() for t in self._termos for parte in t.split()}
+        self._nomes = {t.casefold(): t for t in self._termos if " " not in t and t[:1].isupper()}
+
     def _ortografia(self, tokens: list[_Token]) -> list[Problema]:
         ocorrencias = Counter(t.nucleo.casefold() for t in tokens)
         achados = []
@@ -321,6 +328,15 @@ class Verificador:
 
 
 _COMPARTILHADOS: dict[str, Verificador] = {}
+
+
+def atualizar_vocabulario_compartilhado(pastas) -> None:
+    """Faz o verificador do aplicativo enxergar o vocabulário como está no arquivo agora."""
+    from spurgeon.transcricao.vocabulario import carregar_vocabulario
+
+    chave = str(pastas.dicionario_pt_br)
+    if chave in _COMPARTILHADOS:
+        _COMPARTILHADOS[chave].definir_vocabulario(carregar_vocabulario(pastas.vocabulario))
 
 
 def verificador_compartilhado(pastas) -> Verificador:

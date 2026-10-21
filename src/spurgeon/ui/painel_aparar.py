@@ -21,7 +21,7 @@ from PIL import Image
 from spurgeon.core.aparencia import Enquadramento, TratamentoImagem
 from spurgeon.core.formatacao import formatar_duracao, formatar_tempo_preciso
 from spurgeon.render import previa
-from spurgeon.ui import dialogos
+from spurgeon.ui import dialogos, dicas
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.composicao import ajustar_ao_tamanho
 from spurgeon.ui.formulario import ValoresFormulario, ler_tempo_do_video
@@ -79,8 +79,23 @@ class PainelAparar(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             anchor="w",
         ).pack(anchor="w", padx=12)
-        self._montar_ponta("inicio", "Começar em", self.var_inicio, "▶ Ver 15 s do começo")
-        self._montar_ponta("fim", "Terminar em", self.var_fim, "▶ Ver 15 s do fim")
+        self._montar_ponta(
+            "inicio", "Começar em", self.var_inicio, "▶ Ver 15 s do começo",
+            campo_dica="O instante em que o vídeo passa a valer, no formato min:s (por exemplo "
+            "0:07 ou 1:04:56,5). Tudo antes dele é ignorado. Vazio: desde o começo.",
+            botao_dica="Gera 15 segundos a partir do ponto de corte inicial e abre no player do "
+            "Windows, já com o zoom e a cor escolhidos. Serve para conferir se o corte caiu "
+            "no lugar certo.",
+            quadro_dica="O quadro exato onde o vídeo passa a começar.",
+        )  # fmt: skip
+        self._montar_ponta(
+            "fim", "Terminar em", self.var_fim, "▶ Ver 15 s do fim",
+            campo_dica="O instante em que o vídeo termina. Vazio: vai até o fim. Escreva -2:04 "
+            "para tirar os últimos 2 min 04 s.",
+            botao_dica="Gera os 15 segundos que terminam no ponto de corte final e abre no "
+            "player do Windows, para conferir onde o vídeo acaba.",
+            quadro_dica="O último quadro que fica no vídeo.",
+        )  # fmt: skip
         self._resumo = ctk.CTkLabel(
             self, text="", text_color=_COR_DICA, anchor="w", justify="left", wraplength=430
         )
@@ -99,7 +114,17 @@ class PainelAparar(ctk.CTkFrame):
         fonte.ao_mudar_o_video(self._video_mudou)
 
     # --- montagem -----------------------------------------------------------------------------
-    def _montar_ponta(self, ponta: str, titulo: str, variavel: ctk.StringVar, botao: str) -> None:
+    def _montar_ponta(
+        self,
+        ponta: str,
+        titulo: str,
+        variavel: ctk.StringVar,
+        botao: str,
+        *,
+        campo_dica: str = "",
+        botao_dica: str = "",
+        quadro_dica: str = "",
+    ) -> None:
         linha = ctk.CTkFrame(self, fg_color="transparent")
         linha.pack(fill="x", padx=12, pady=(6, 0))
         esquerda = ctk.CTkFrame(linha, fg_color="transparent")
@@ -125,6 +150,9 @@ class PainelAparar(ctk.CTkFrame):
             corner_radius=4,
         )  # fmt: skip
         rotulo.pack(side="right")
+        for widget, texto in ((campo, campo_dica), (ver, botao_dica), (rotulo, quadro_dica)):
+            if texto:
+                dicas.dica(widget, texto)
         self._rotulos_quadro[ponta] = rotulo
 
     # --- valores ------------------------------------------------------------------------------

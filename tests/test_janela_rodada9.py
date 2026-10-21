@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from spurgeon.ui.formulario import ValoresFormulario
 from tests import test_janela as base
 
 pytestmark = pytest.mark.gui
@@ -17,12 +18,21 @@ def _titulos_numerados(widget) -> list[str]:
 
     achados: list[tuple[int, str]] = []
 
+    def y_no_widget(filho) -> int:
+        """A altura do filho dentro de `widget`, somando a de cada pai no caminho (o título de um
+        cartão mora num cabeçalho, que mora no cartão, que mora na página)."""
+        y, atual = 0, filho
+        while atual is not widget:
+            y += atual.winfo_y()
+            atual = atual.master
+        return y
+
     def varrer(pai) -> None:
         for filho in pai.winfo_children():
             if isinstance(filho, ctk.CTkLabel):
                 texto = filho.cget("text")
                 if len(texto) > 3 and texto[0].isdigit() and texto[1:3] == ". ":
-                    achados.append((filho.winfo_y() + pai.winfo_y(), texto))
+                    achados.append((y_no_widget(filho), texto))
             varrer(filho)
 
     varrer(widget)
@@ -124,3 +134,26 @@ def test_o_cartao_do_video_usa_a_largura_toda_e_os_botoes_ficam_em_linha_propria
     assert campo.winfo_width() > 300  # antes ficava com ~150 px, o resto era de botões
     assert entrada.botao_projeto.master is not entrada  # os botões moram numa linha à parte
     assert entrada.rotulo_estimativa.grid_info()["row"] != entrada.rotulo_info.grid_info()["row"]
+
+
+def test_o_estilo_do_fade_tem_seletor_que_so_vale_com_fade_ligado(tela):
+    from spurgeon.ui.formulario import ROTULOS_FADE
+
+    assert tela.opcoes.valores().fade_estilo == "mesclar"  # o padrão
+    assert str(tela.opcoes._seletor_fade.cget("state")) == "disabled"  # sem fade ligado
+    tela.opcoes.bools["introducao"].set(True)
+    tela.opcoes.bools["fade_vinhetas"].set(True)
+    tela.opcoes.definir_modo("completo")
+    tela.opcoes.atualizar_habilitacoes()
+    assert tela.opcoes._seletor_fade.cget("values") == list(ROTULOS_FADE.values())
+    tela.opcoes.fade_estilo.set(ROTULOS_FADE["preto"])
+    assert tela.opcoes.valores().fade_estilo == "preto"
+    tela.opcoes.aplicar_valores(ValoresFormulario(fade_estilo="mesclar"))
+    assert tela.opcoes.fade_estilo.get() == ROTULOS_FADE["mesclar"]
+    tela.opcoes.definir_modo("so_vinhetas")  # ali o fade sempre passa pelo preto
+    tela.opcoes.bools["introducao"].set(True)
+    tela.opcoes.bools["fade_vinhetas"].set(True)
+    tela.opcoes.atualizar_habilitacoes()
+    assert str(tela.opcoes._seletor_fade.cget("state")) == "disabled"
+    tela.opcoes.aplicar_valores(ValoresFormulario())
+    tela.opcoes.definir_modo("completo")

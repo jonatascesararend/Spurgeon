@@ -29,6 +29,9 @@ Qualidade = Literal["maxima", "alta", "equilibrado", "rapido", "personalizado"]
 #: o que o processamento faz: tudo; só os Shorts (aproveitando o que já foi feito); ou só juntar
 #: introdução e vinheta final a um vídeo longo que já está pronto
 Modo = Literal["completo", "so_shorts", "so_vinhetas"]
+#: como a introdução e a vinheta se ligam ao vídeo: `mesclar` funde as duas imagens e os dois sons
+#: (uma sobreposição); `preto` escurece até o preto e volta
+EstiloDoFade = Literal["mesclar", "preto"]
 CantoMarca = Literal["sup_esq", "sup_dir", "inf_esq", "inf_dir"]
 
 # Texto mostrado na lista de modelos da interface (Fase 1).
@@ -119,10 +122,10 @@ CAMPOS_DO_TRATAMENTO = (
     "tratamento_brancos",
     "tratamento_sombras",
 )
-#: campos acrescentados na 1.2 (ver `assinatura`)
+#: campos acrescentados na 1.2 e depois dela (ver `assinatura`)
 CAMPOS_NOVOS_NA_1_2 = frozenset(
     {
-        "introducao_arquivo", "vinheta_arquivo", "fade_vinhetas", "fade_vinhetas_s",
+        "introducao_arquivo", "vinheta_arquivo", "fade_vinhetas", "fade_vinhetas_s", "fade_estilo",
         "video_inicio_s", "video_fim_s", "zoom_pct", "zoom_centro_x_pct", "zoom_centro_y_pct",
         "zoom_nos_shorts", "tratamento_ativo", "tratamento_nos_shorts", *CAMPOS_DO_TRATAMENTO,
         "shorts_zoom_pct", "shorts_zoom_centro_x_pct", "shorts_zoom_centro_y_pct",
@@ -148,9 +151,10 @@ class OpcoesProcessamento(BaseModel):
     #: arquivos escolhidos pela pessoa; vazio = o padrão de `recursos/` (introducao, vinheta_final)
     introducao_arquivo: str = ""
     vinheta_arquivo: str = ""
-    #: fade de imagem e som entre a introdução/vinheta e o vídeo (passando pelo preto)
+    #: fade de imagem e som entre a introdução/vinheta e o vídeo (mesclando ou passando pelo preto)
     fade_vinhetas: bool = False
     fade_vinhetas_s: float = Field(0.5, ge=0.1, le=3.0)
+    fade_estilo: EstiloDoFade = "mesclar"
 
     # Onde o vídeo começa e termina (segundos do original); o resto é ignorado em tudo
     video_inicio_s: float = Field(0.0, ge=0.0)
@@ -301,6 +305,15 @@ class OpcoesProcessamento(BaseModel):
         return self.modo == "so_vinhetas"
 
     @property
+    def fade_mesclado(self) -> bool:
+        """O fade funde a imagem e o som de dois lados (só no vídeo longo renderizado).
+
+        No modo "Só vinhetas" o vídeo pronto é emendado sem recodificar, então ali o fade sempre
+        passa pelo preto, qualquer que seja o estilo escolhido.
+        """
+        return self.fade_vinhetas and self.fade_estilo == "mesclar" and not self.so_vinhetas
+
+    @property
     def processa_video_longo(self) -> bool:
         """Renderiza o vídeo longo (e o que vem antes dele: pausas, cortes e legendas)."""
         return self.modo == "completo" and self.gerar_video_longo
@@ -377,6 +390,8 @@ class OpcoesProcessamento(BaseModel):
             d["vinheta_arquivo"] = ""
         if not (d["introducao"] or d["vinheta_final"]) or not d["fade_vinhetas"]:
             d["fade_vinhetas"], d["fade_vinhetas_s"] = False, 0.5
+        if not d["fade_vinhetas"]:
+            d["fade_estilo"] = OpcoesProcessamento.model_fields["fade_estilo"].default
         return d
 
     def assinatura(self, campos: Iterable[str]) -> str:
@@ -391,6 +406,8 @@ class OpcoesProcessamento(BaseModel):
             for campo in sorted(campos)
             if campo not in CAMPOS_NOVOS_NA_1_2
             or dados[campo] != OpcoesProcessamento.model_fields[campo].default
+            # um fade ligado antes de existir o estilo passava pelo preto; o padrão agora é mesclar
+            or (campo == "fade_estilo" and dados["fade_vinhetas"])
         }
         bruto = json.dumps(recorte, sort_keys=True, ensure_ascii=False)
         return hashlib.sha1(bruto.encode("utf-8")).hexdigest()[:12]
@@ -407,6 +424,10 @@ class ConfigApp(BaseModel):
     #: presets salvos pela pessoa (nome → ajustes), para repetir o estilo nos próximos vídeos
     presets_enquadramento: dict[str, Enquadramento] = Field(default_factory=dict)
     presets_tratamento: dict[str, TratamentoImagem] = Field(default_factory=dict)
+    #: a pasta do último projeto aberto ou processado; o programa a reabre ao iniciar
+    ultimo_projeto: str = ""
+    #: oferece o passo a passo (tutorial) quando o programa abre
+    tutorial_ao_abrir: bool = True
 
     @model_validator(mode="before")
     @classmethod

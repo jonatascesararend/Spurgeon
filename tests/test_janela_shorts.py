@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from spurgeon.ui import app as app_mod
 from spurgeon.ui.formulario import ValoresFormulario, para_opcoes
 from spurgeon.ui.painel_shorts import PainelShorts
 from tests import test_janela as base
@@ -50,3 +51,48 @@ def test_abrir_projeto_poe_o_zoom_e_a_legenda_do_projeto_na_tela(tela):
     assert tela.entrada.valores()["shorts_zoom_pct"] == 125.0
     assert tela.entrada.valores()["posicao_legenda"] == "48"
     tela.entrada.aplicar_valores(ValoresFormulario())
+
+
+# --- o Studio Shorts como aba que ocupa a janela toda ---------------------------------------
+
+
+def test_as_abas_ficam_no_alto_da_janela_sobre_as_duas_colunas(tela):
+    faixa = tela._abas.master.grid_info()
+    assert int(faixa["row"]) == 0 and int(faixa["columnspan"]) == 2
+    assert int(tela._coluna.grid_info()["row"]) == 1 and int(tela._direita.grid_info()["row"]) == 1
+
+
+def test_o_studio_shorts_toma_a_janela_inteira_e_o_processamento_volta(tela):
+    assert tela._coluna.winfo_manager() == "grid" and tela._direita.winfo_manager() == "grid"
+    assert tela.studio.winfo_manager() == ""
+    tela._abas.set(app_mod.ABA_STUDIO)
+    tela._trocar_aba(app_mod.ABA_STUDIO)
+    assert tela._coluna.winfo_manager() == "" and tela._direita.winfo_manager() == ""
+    info = tela.studio.grid_info()
+    assert (int(info["column"]), int(info["columnspan"])) == (0, 2)
+    assert tela._abas.winfo_manager() == "pack"  # a faixa das abas continua no lugar
+    tela._abas.set(app_mod.ABA_PROCESSAMENTO)
+    tela._trocar_aba(app_mod.ABA_PROCESSAMENTO)
+    assert tela.studio.winfo_manager() == ""
+    assert tela._coluna.winfo_manager() == "grid" and tela._direita.winfo_manager() == "grid"
+
+
+# --- as opções que o Studio acerta olhando a prévia ----------------------------------------
+
+
+def test_o_studio_acerta_a_altura_da_legenda_nos_campos_da_tela(tela):
+    tela.opcoes.bools["gerar_shorts"].set(True)
+    tela.opcoes._mudou()
+    tela._definir_ajustes_do_short(legenda=0.58)
+    assert tela.entrada.shorts.posicao_da_legenda() == 58
+    assert tela._opcoes_da_tela().legenda_posicao_vertical == pytest.approx(0.58)
+    assert tela.origem_da_previa() is None  # sem vídeo escolhido não há prévia, mas nada quebra
+
+
+def test_o_corte_das_pausas_do_short_nao_e_mais_uma_opcao_da_tela(tela):
+    """Agora é de cada Short (no Studio): não há caixa global nem campo na coluna esquerda."""
+    assert "shorts_cortar_pausas" not in tela.opcoes._por_nome
+    assert "shorts_pausa" not in tela.opcoes._por_nome
+    opcoes = tela._opcoes_da_tela()
+    assert not hasattr(opcoes, "shorts_cortar_pausas") and not hasattr(opcoes, "shorts_pausa_s")
+    tela.opcoes.aplicar_valores(ValoresFormulario())

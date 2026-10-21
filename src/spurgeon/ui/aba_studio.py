@@ -17,7 +17,9 @@ from spurgeon.core.projeto import PastasProjeto
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.ui import dialogos
+from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
+from spurgeon.ui.dicas import dica
 from spurgeon.ui.shorts_livre import PainelShortsLivre
 from spurgeon.ui.studio_shorts import EditorDeCortes, OrigemDaPrevia
 
@@ -45,10 +47,14 @@ class AbaStudioShorts(ctk.CTkFrame):
         tarefas: Tarefas | None = None,
         origem_da_previa: Callable[[], OrigemDaPrevia | None] | None = None,
         contexto_da_ia: Callable[[], ContextoDaIA | None] | None = None,
+        definir_ajustes: Callable[..., None] | None = None,
     ):
+        """`definir_ajustes(legenda=…)` grava na tela principal a opção dos Shorts que se acerta
+        olhando a prévia (a altura da legenda; o corte das pausas é de cada Short)."""
         super().__init__(master, fg_color="transparent")
         self._tarefas = tarefas
         self._contexto_da_ia = contexto_da_ia or (lambda: None)
+        self._definir_ajustes = definir_ajustes
         self._origem_da_previa = origem_da_previa
         self._ao_renderizar = ao_renderizar
         self._pastas_do_app = pastas_do_app
@@ -70,6 +76,15 @@ class AbaStudioShorts(ctk.CTkFrame):
             self._miolo, values=[PAINEL_CORTES, PAINEL_LIVRE], command=self._trocar_painel
         )
         self._seletor.set(PAINEL_CORTES)
+        dica_do_seletor(
+            self._seletor,
+            {
+                PAINEL_CORTES: "A lista dos Shorts do sermão: confira, ajuste, corrija a legenda e "
+                "escolha o que renderizar.",
+                PAINEL_LIVRE: "Escolha você mesmo um trecho do sermão (buscando por palavra ou "
+                "assunto) para virar um Short.",
+            },
+        )
         self._pilha = ctk.CTkFrame(self._miolo, fg_color="transparent")
         self._pilha.grid(row=1, column=0, sticky="nsew")
         self._pilha.columnconfigure(0, weight=1)
@@ -95,7 +110,25 @@ class AbaStudioShorts(ctk.CTkFrame):
             fg_color=("gray70", "gray30"),
             command=lambda: self.salvar(exigir_ate_o_limite=False),
         )
-        self._botao_salvar.grid(row=0, column=1, padx=(8, 0))
+        self._botao_salvar.grid(row=0, column=2, padx=(8, 0))
+        dica(
+            self._botao_salvar,
+            "Grava no projeto o que você mudou (pontas, palavras cortadas, legenda, títulos, "
+            "pausas…) sem renderizar nada.",
+        )
+        self._botao_descartar = ctk.CTkButton(
+            rodape,
+            text="Descartar alterações",
+            width=150,
+            fg_color=("gray70", "gray30"),
+            command=self.descartar,
+        )
+        self._botao_descartar.grid(row=0, column=1, padx=(8, 0))
+        dica(
+            self._botao_descartar,
+            "Joga fora tudo o que foi mudado desde a última vez que você salvou e volta os Shorts "
+            "ao que está gravado no projeto.",
+        )
         self._botao_renderizar = ctk.CTkButton(
             rodape,
             text="Renderizar",
@@ -103,7 +136,12 @@ class AbaStudioShorts(ctk.CTkFrame):
             font=ctk.CTkFont(weight="bold"),
             command=self._ao_renderizar,
         )
-        self._botao_renderizar.grid(row=0, column=2, padx=(8, 0))
+        self._botao_renderizar.grid(row=0, column=3, padx=(8, 0))
+        dica(
+            self._botao_renderizar,
+            "Renderiza os Shorts marcados que ainda não existem ou que mudaram desde a última "
+            "renderização (os que já estão prontos não são refeitos).",
+        )
         self._atualizar_botoes()
 
     # --- projeto ------------------------------------------------------------------------------
@@ -151,6 +189,8 @@ class AbaStudioShorts(ctk.CTkFrame):
             ao_mudar=self._atualizar_botoes,
             tarefas=self._tarefas,
             origem_da_previa=self._origem_da_previa,
+            definir_ajustes=self._definir_ajustes,
+            contexto_da_ia=self._contexto_da_ia if self._tarefas is not None else None,
         )
         self._editor.grid(row=0, column=0, sticky="nsew")
         self._editor.bloquear(self._motivo_bloqueio)
@@ -173,6 +213,7 @@ class AbaStudioShorts(ctk.CTkFrame):
     def _trocar_painel(self, nome: str) -> None:
         """Mostra a lista de cortes ou o Shorts livre (os dois ficam montados, um sobre o outro)."""
         if nome == PAINEL_LIVRE and self._livre is not None:
+            self._livre.atualizar_marcas()  # os Shorts da lista podem ter mudado desde a última vez
             self._livre.tkraise()
         elif self._editor is not None:
             self._editor.tkraise()
@@ -221,6 +262,23 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._atualizar_botoes()
         return ok
 
+    def descartar(self) -> bool:
+        """Volta os Shorts ao que está gravado (depois de perguntar). False se nada foi."""
+        if self._editor is None or not self._editor.mudou:
+            return False
+        if not dialogos.confirmar(
+            self.winfo_toplevel(),
+            "Descartar alterações",
+            "Voltar tudo ao que foi salvo por último? O que você mudou desde então (cortes, "
+            "legenda, títulos, pausas…) será perdido.",
+            sim="Descartar",
+            nao="Continuar editando",
+        ):
+            return False
+        self._editor.descartar_alteracoes()
+        self._atualizar_botoes()
+        return True
+
     def pendentes(self) -> int:
         return len(self._editor.pendentes()) if self._editor is not None else 0
 
@@ -235,9 +293,9 @@ class AbaStudioShorts(ctk.CTkFrame):
     def _atualizar_botoes(self) -> None:
         editor = self._editor
         livre = editor is not None and self._motivo_bloqueio is None
-        self._botao_salvar.configure(
-            state="normal" if livre and editor.mudou else "disabled",
-        )
+        mudou = livre and editor.mudou
+        self._botao_salvar.configure(state="normal" if mudou else "disabled")
+        self._botao_descartar.configure(state="normal" if mudou else "disabled")
         if not livre:
             self._botao_renderizar.configure(state="disabled", text="Renderizar")
             self._estado.configure(text=self._motivo_bloqueio or "")

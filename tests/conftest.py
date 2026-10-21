@@ -7,6 +7,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
+import platformdirs
 import pytest
 
 from spurgeon.core.config import ConfigApp, OpcoesProcessamento, Pastas, raiz_repositorio
@@ -17,6 +18,41 @@ from spurgeon.core.log import criar_log_projeto, encerrar_log
 from spurgeon.core.pipeline import ContextoProjeto
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.transcricao.formato import Bloco, Palavra, Segmento, Transcricao
+
+
+@pytest.fixture(autouse=True)
+def config_do_usuario_isolada(tmp_path, monkeypatch):
+    """Nenhum teste escreve (nem lê) o `config.toml` de verdade do usuário.
+
+    Os presets de zoom e de cor e as preferências da janela chamam `salvar_config()` sem caminho;
+    sem isto um teste da janela gravava as pastas temporárias dele no arquivo do usuário.
+    """
+    pasta = tmp_path / "config_do_usuario"
+    monkeypatch.setattr(platformdirs, "user_config_path", lambda *_a, **_k: pasta)
+
+
+@pytest.fixture(autouse=True)
+def vocabulario_do_usuario_protegido():
+    """Nenhum teste muda o vocabulário de verdade (`recursos/vocabulario_teologico.txt`).
+
+    Os termos que a pessoa guarda ali são trabalho dela, fora do git. Se um teste mexer no arquivo
+    (por exemplo, por esquecer de apontar as pastas do aplicativo para `tmp_path`), o arquivo
+    volta ao que era e o teste falha.
+    """
+    caminho = Pastas().vocabulario
+    antes = caminho.read_bytes() if caminho.is_file() else None
+    yield
+    depois = caminho.read_bytes() if caminho.is_file() else None
+    if depois != antes:
+        if antes is None:
+            caminho.unlink(missing_ok=True)
+        else:
+            caminho.write_bytes(antes)
+        pytest.fail(
+            "o teste alterou o vocabulário de verdade (recursos/vocabulario_teologico.txt); "
+            "o arquivo foi restaurado. Aponte `Pastas(recursos=tmp_path / ...)` para a pasta "
+            "temporária do teste."
+        )
 
 
 def pytest_collection_modifyitems(items):

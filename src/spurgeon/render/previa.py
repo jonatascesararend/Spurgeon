@@ -11,11 +11,13 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from pathlib import Path
 
 from spurgeon.core.aparencia import Enquadramento, TratamentoImagem
 from spurgeon.core.ffmpeg import InfoMidia, executar_ffmpeg
 from spurgeon.core.sinais import SinalControle
+from spurgeon.core.tempo import MapaTempo
 from spurgeon.render import filtros as f
 from spurgeon.render.imagem import (
     filtro_ampliar_zoom,
@@ -28,8 +30,10 @@ from spurgeon.render.legenda import (
     montar_ass,
     palavras_do_short,
 )
+from spurgeon.render.shorts import linhas_do_audio_cortado, linhas_do_video_cortado
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda
+from spurgeon.shorts.pausas import ha_o_que_cortar, remapear_palavras, trechos_mantidos
 from spurgeon.transcricao.formato import Palavra
 
 LARGURA_DO_QUADRO = 960
@@ -207,10 +211,15 @@ def previa_do_corte(
     a cor: assim a conversão trabalha em 270×480 e a prévia sai em uma fração do tempo do Short.
     O som é o do vídeo original (sem limpeza nem normalização) e vai num `.wav` ao lado do `.mp4`.
     A marca d'água não entra.
+
+    Os saltos do corte (pedaços tirados do meio) e as pausas encurtadas (`corte.pausa_s`, veja
+    `shorts/pausas.py`) saem da prévia, com imagem, som e legenda alinhados, e `duracao_s` é a
+    duração já cortada. Sem nada a cortar o comando é o de sempre.
     """
     pasta = destino.parent
     pasta.mkdir(parents=True, exist_ok=True)
-    duracao = max(0.1, corte.duracao)
+    duracao = max(0.1, corte.janela_s)  # o que se lê do original
+    duracao_da_previa = duracao  # o que a prévia dura
     etapas = [
         f"fps={FPS_DA_PREVIA_DO_SHORT}",
         f.recorte_vertical(info, deslocamento_pct, enquadramento, zoom_do_short),
@@ -223,6 +232,12 @@ def previa_do_corte(
     etapas.append("setsar=1")
     ass = pasta / f"{destino.stem}.ass"
     faladas = palavras_do_short(palavras_com_a_legenda(palavras, corte), corte.inicio, corte.fim)
+    trechos = None
+    mantidos = trechos_mantidos(palavras, corte)
+    if ha_o_que_cortar(mantidos, corte.janela_s):
+        mapa = MapaTempo(mantidos)
+        trechos, duracao_da_previa = mantidos, max(0.1, mapa.duracao_editada)
+        faladas = remapear_palavras(faladas, mapa)
     if com_legenda and faladas:
         if pasta_fontes is not None:
             preparar_fontes_da_previa(pasta_fontes, pasta)
@@ -235,21 +250,35 @@ def previa_do_corte(
     parcial = destino.with_name(destino.name + ".parcial")
     audio = destino.with_suffix(".wav")
     parcial_audio = audio.with_name(audio.name + ".parcial")
+    script = pasta / f"{destino.stem}.filter"
+    if trechos:  # com pausas cortadas o grafo tem duas pontas (imagem e som): vai num roteiro
+        linhas = [
+            *linhas_do_video_cortado(trechos, Fraction(FPS_DA_PREVIA_DO_SHORT)),
+            f"[bruto]{','.join(etapas[1:])}[v]",  # o `fps` já foi no começo do roteiro
+        ]
+        if info.tem_audio:
+            linhas += linhas_do_audio_cortado(trechos, "", entrada="0:a")
+        script.write_text(";\n".join(linhas), encoding="utf-8")
+        mapa_do_video: list[str | Path] = ["-/filter_complex", script.name, "-map", "[v]"]
+        mapa_do_audio: list[str | Path] = ["-map", "[a]"]
+    else:
+        mapa_do_video = ["-map", "0:v:0", "-vf", ",".join(etapas)]
+        mapa_do_audio = ["-map", "0:a:0"]
     saidas: list[str | Path] = [
-        "-map", "0:v:0", "-vf", ",".join(etapas), "-an", "-c:v", "libx264", "-preset", "ultrafast",
+        *mapa_do_video, "-an", "-c:v", "libx264", "-preset", "ultrafast",
         "-crf", "34", "-pix_fmt", "yuv420p", *_COR_BT709, "-movflags", "+faststart", "-f", "mp4",
         parcial,
     ]  # fmt: skip
     if info.tem_audio:
         saidas += [
-            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", str(AUDIO_DA_PREVIA_HZ),
+            *mapa_do_audio, "-vn", "-ac", "1", "-ar", str(AUDIO_DA_PREVIA_HZ),
             "-c:a", "pcm_s16le", "-f", "wav", parcial_audio,
         ]  # fmt: skip
     try:
         executar_ffmpeg(
             ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(duracao),
              "-i", video, *saidas],
-            duracao_s=duracao, ao_progresso=ao_progresso, cancelar=cancelar, cwd=pasta,
+            duracao_s=duracao_da_previa, ao_progresso=ao_progresso, cancelar=cancelar, cwd=pasta,
         )  # fmt: skip
         parcial.replace(destino)
         if info.tem_audio:
@@ -258,9 +287,10 @@ def previa_do_corte(
             audio.unlink(missing_ok=True)
     finally:
         ass.unlink(missing_ok=True)
+        script.unlink(missing_ok=True)
         parcial.unlink(missing_ok=True)
         parcial_audio.unlink(missing_ok=True)
-    return PreviaDoShort(destino, audio if info.tem_audio else None, duracao)
+    return PreviaDoShort(destino, audio if info.tem_audio else None, duracao_da_previa)
 
 
 def gerar_previa(

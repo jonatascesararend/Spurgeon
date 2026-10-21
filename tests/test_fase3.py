@@ -329,3 +329,28 @@ def test_ordem_das_etapas_de_audio_base_continua_valida():
     ids = [e.id for e in etapas_audio_base()]
     assert ids == ["extrair_audio", "limpar_audio", "normalizar_audio", "medir_nivel"]
     assert DetectarPausas.depende_de == ("medir_nivel",)
+
+
+@pytest.mark.ffmpeg
+def test_gerar_srt_com_mescla_antecipa_as_legendas_pela_sobreposicao(contexto):
+    intro = contexto.config.pastas.introducao
+    intro.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            str(localizar_binario("ffmpeg")), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=black:size=64x64:rate=5:duration=4",
+            "-c:v", "libx264", "-preset", "ultrafast", str(intro),
+        ],
+        check=True,
+    )  # fmt: skip
+    contexto.opcoes.introducao = True
+    contexto.opcoes.fade_vinhetas = True
+    contexto.opcoes.fade_vinhetas_s = 0.5
+    transcricao_de_exemplo(contexto, [("Deus é bom", 5.0)])
+    cortes_de_exemplo(contexto, [(0.0, 60.0)])
+    GerarSrt().executar(contexto)
+    # o vídeo começa 0,5 s antes de a introdução acabar: 5 s + (4 s − 0,5 s)
+    assert "00:00:08,500 --> " in contexto.pastas.srt.read_text(encoding="utf-8")
+    contexto.opcoes.fade_estilo = "preto"  # pelo preto não há sobreposição
+    GerarSrt().executar(contexto)
+    assert "00:00:09,000 --> " in contexto.pastas.srt.read_text(encoding="utf-8")

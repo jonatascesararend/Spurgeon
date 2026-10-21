@@ -23,6 +23,7 @@ import customtkinter as ctk
 
 from spurgeon.transcricao.verificador import Problema, Verificador
 from spurgeon.transcricao.vocabulario import acrescentar_ao_vocabulario
+from spurgeon.ui.dicas import dica
 
 ROTULOS = {
     "ortografia": "Ortografia",
@@ -114,6 +115,11 @@ class PainelDePortugues(ctk.CTkFrame):
         ctk.CTkLabel(cabeca, text="Português", font=ctk.CTkFont(weight="bold")).pack(side="left")
         self._botao = ctk.CTkButton(cabeca, text="Verificar", width=84, command=self.verificar)
         self._botao.pack(side="right")
+        dica(
+            self._botao,
+            "Procura erros de ortografia, repetições e pontuação no texto e sublinha cada um. "
+            "Escolha um aviso na lista para ver as sugestões.",
+        )
         self._situacao = ctk.CTkLabel(
             self, text="", anchor="w", justify="left", wraplength=largura - 24, text_color=_SUAVE
         )
@@ -137,7 +143,8 @@ class PainelDePortugues(ctk.CTkFrame):
             height=8,
         )
         self._lista.grid(row=0, column=0, sticky="nsew")
-        rolagem = ctk.CTkScrollbar(moldura, command=self._lista.yview)
+        # a barra pede 200 px de altura por padrão e esticaria a lista mesmo com 2 avisos
+        rolagem = ctk.CTkScrollbar(moldura, command=self._lista.yview, height=8)
         rolagem.grid(row=0, column=1, sticky="ns")
         self._lista.configure(yscrollcommand=rolagem.set)
         self._lista.bind("<<ListboxSelect>>", self._ao_escolher)
@@ -149,21 +156,25 @@ class PainelDePortugues(ctk.CTkFrame):
             self._detalhe, text="", anchor="w", justify="left", wraplength=largura - 24
         )
         self._mensagem.grid(row=0, column=0, sticky="ew")
-        self._quadro_sugestoes = ctk.CTkFrame(self._detalhe, fg_color="transparent")
+        # altura 1: os quadros crescem com os botões que ganham (o padrão pede 200 px)
+        self._quadro_sugestoes = ctk.CTkFrame(self._detalhe, fg_color="transparent", height=1)
         self._quadro_sugestoes.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        self._quadro_acoes = ctk.CTkFrame(self._detalhe, fg_color="transparent")
+        self._quadro_acoes = ctk.CTkFrame(self._detalhe, fg_color="transparent", height=1)
         self._quadro_acoes.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         rodape = ctk.CTkFrame(self, fg_color="transparent")
         rodape.grid(row=4, column=0, sticky="ew", padx=8, pady=(0, 8))
         self._rodape = rodape
-        ctk.CTkButton(rodape, text="◀", width=36, command=lambda: self.proximo(-1)).pack(
-            side="left"
-        )
-        ctk.CTkButton(rodape, text="▶", width=36, command=lambda: self.proximo(1)).pack(
-            side="left", padx=4
-        )
-        ctk.CTkLabel(rodape, text="F8 vai ao próximo", text_color=_SUAVE).pack(side="left", padx=6)
+        anterior = ctk.CTkButton(rodape, text="◀", width=36, command=lambda: self.proximo(-1))
+        anterior.pack(side="left")
+        dica(anterior, "Vai ao aviso anterior.")
+        seguinte = ctk.CTkButton(rodape, text="▶", width=36, command=lambda: self.proximo(1))
+        seguinte.pack(side="left", padx=4)
+        dica(seguinte, "Vai ao próximo aviso.")
+        if not self._compacto:  # só a revisão da transcrição liga o F8
+            ctk.CTkLabel(rodape, text="F8 vai ao próximo", text_color=_SUAVE).pack(
+                side="left", padx=6
+            )
 
     def _configurar_tags(self) -> None:
         for tipo, cor in CORES.items():
@@ -296,6 +307,7 @@ class PainelDePortugues(ctk.CTkFrame):
             self._rodape.grid()
         else:
             self._moldura.grid_remove()
+            self._detalhe.grid_remove()
             self._rodape.grid_remove()
 
     def _ao_escolher(self, _evento=None) -> None:
@@ -355,7 +367,11 @@ class PainelDePortugues(ctk.CTkFrame):
                 filho.destroy()
         if item is None:
             self._mensagem.configure(text="")
+            if self._compacto:
+                self._detalhe.grid_remove()
             return
+        if self._compacto:
+            self._detalhe.grid()
         p = item.problema
         self._mensagem.configure(text=p.mensagem, text_color=CORES[p.tipo])
         for sugestao in item.sugestoes[:5]:

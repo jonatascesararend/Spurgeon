@@ -243,3 +243,11 @@ def test_busca_conta_e_marca_os_achados(aberto):
     aberto._busca.insert(0, "isto")
     assert aberto._marcar_achados() == 1
     assert aberto._texto._textbox.tag_ranges("achado")
+
+
+@pytest.mark.gui
+def test_todo_botao_da_revisao_da_transcricao_tem_dica(aberto):
+    from tests.test_studio_ferramentas import _sem_dica
+
+    faltam = _sem_dica(aberto)
+    assert not faltam, ", ".join(faltam)

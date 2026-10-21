@@ -27,6 +27,7 @@ from spurgeon.render.previa import (
     LARGURA_DA_PREVIA_DO_SHORT,
     PreviaDoShort,
 )
+from spurgeon.ui.dicas import dica
 
 try:  # o som só existe no Windows (o aplicativo é só para ele)
     import winsound
@@ -150,6 +151,7 @@ class MiniPlayer(ctk.CTkFrame):
             barra, text="▶", width=38, height=28, command=self.alternar, state="disabled"
         )
         self._botao.grid(row=0, column=0, padx=(0, 8))
+        dica(self._botao, "Toca ou pausa a prévia (com som, se o vídeo tiver).")
         self._barra = ctk.CTkSlider(barra, from_=0, to=1, command=self._ao_arrastar)
         self._barra.set(0)
         self._barra.grid(row=0, column=1, sticky="ew")

@@ -15,6 +15,7 @@ from spurgeon.core.formatacao import formatar_duracao, formatar_numero
 from spurgeon.core.hardware import detectar_hardware, recomendar, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa, ResultadoEtapa
 from spurgeon.core.tempo import MapaTempo, Trecho
+from spurgeon.render.mescla import mescla_em_s
 from spurgeon.transcricao.alucinacao import remover_alucinacoes
 from spurgeon.transcricao.blocos import PAUSA_MINIMA_S, planejar_blocos
 from spurgeon.transcricao.formato import Bloco, Transcricao, segundos_para_rotulo
@@ -358,6 +359,9 @@ class GerarSrt(Etapa):
     opcoes_relevantes = (
         "introducao",
         "introducao_arquivo",
+        "fade_vinhetas",
+        "fade_vinhetas_s",
+        "fade_estilo",
         "srt_max_linhas",
         "srt_max_caracteres_por_linha",
     )
@@ -376,6 +380,11 @@ class GerarSrt(Etapa):
             deslocamento = sondar(
                 ctx.config.pastas.arquivo_introducao(ctx.opcoes.introducao_arquivo)
             ).duracao_s
+            if ctx.opcoes.fade_mesclado:  # o vídeo começa antes de a introdução acabar
+                principal = sum(b - a for a, b in cortes["trechos"])
+                mescla = mescla_em_s(ctx.opcoes.fade_vinhetas_s, deslocamento, principal)
+                deslocamento -= mescla
+                ctx.log.info("A mescla com a introdução antecipa as legendas em %.2f s.", mescla)
             ctx.log.info(
                 "Introdução de %s: os tempos das legendas avançam esse tanto.",
                 formatar_duracao(deslocamento),

@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from spurgeon.shorts.dados import ORIGEM_AUTOMATICA, ORIGEM_MANUAL, Avaliacao
+from spurgeon.shorts.analise import separar_frases
+from spurgeon.shorts.dados import (
+    ID_BASE_DOS_MANUAIS,
+    ORIGEM_AUTOMATICA,
+    ORIGEM_MANUAL,
+    Avaliacao,
+    cor_da_categoria,
+    rotulo_da_categoria,
+)
+from spurgeon.shorts.edicao import indices_incluidos
 from spurgeon.shorts.etapas import carregar_cortes
 from spurgeon.shorts.livre import ContextoDaIA, Trecho
 from spurgeon.shorts.llm import MetadadosLLM
@@ -15,8 +25,15 @@ from spurgeon.transcricao.formato import Transcricao
 from spurgeon.ui import shorts_livre
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
 from spurgeon.ui.assincrono import Tarefas
-from spurgeon.ui.shorts_livre import BUSCA_PALAVRAS, PainelShortsLivre
+from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA_SETA
+from spurgeon.ui.shorts_livre import (
+    BUSCA_PALAVRAS,
+    CHAVE_FEITOS,
+    PainelShortsLivre,
+)
 from spurgeon.ui.studio_shorts import EditorDeCortes, rotulo_da_origem
+from tests.test_marcas_do_sermao import _gravar_analise
+from tests.test_studio_ferramentas import _sem_dica
 from tests.test_studio_shorts import caixas, pastas, raiz  # as fixtures do editor
 
 pytestmark = pytest.mark.gui
@@ -97,7 +114,7 @@ def test_o_texto_inteiro_da_transcricao_aparece_com_a_hora_de_cada_frase(painel,
     assert len(painel._palavras) == len(esperado)
     texto = painel._caixa._textbox.get("1.0", "end")
     assert texto.count("\n") >= len(painel._frases)
-    assert texto.startswith("0:00  ")
+    assert texto.startswith("   0:00  ")  # a margem das marcas (3 espaços) e depois a hora
     for k in (0, 17, 133, len(esperado) - 1):
         assert palavra(painel, k) == esperado[k].texto
 
@@ -273,7 +290,7 @@ def aba(raiz, pastas, ambiente, tmp_path):
     a = AbaStudioShorts(
         quadro,
         ao_renderizar=lambda: None,
-        pastas_do_app=Pastas(raiz=tmp_path),
+        pastas_do_app=Pastas(recursos=tmp_path / "recursos", projetos=tmp_path / "Projetos"),
         legenda_queimada=lambda: False,
         tarefas=ambiente.tarefas,
         contexto_da_ia=lambda: ContextoDaIA("modelo-de-teste", 2, False),
@@ -365,3 +382,313 @@ def test_a_previa_do_corte_sempre_leva_a_legenda(raiz, pastas, ambiente, monkeyp
         assert "sempre" in editor._dica_previa.cget("text")
     finally:
         editor.destroy()
+
+
+# --- o texto "vivo": categorias detectadas e Shorts já feitos -----------------------------------
+
+
+def _frase_do_corte(painel, corte):
+    """O número da linha (1 a N) de uma frase que cai dentro do corte."""
+    k = indices_incluidos(painel._palavras, corte)[30]
+    return painel._posicoes[k][0]
+
+
+@pytest.fixture
+def painel_vivo(raiz, pastas, ambiente):
+    """O painel com a análise da IA gravada no projeto e a lista de Shorts que existe."""
+    palavras = Transcricao.carregar(pastas.transcricao).palavras
+    frases = separar_frases(palavras)
+    _gravar_analise(
+        pastas,
+        palavras,
+        frases,
+        [("exortacao", 8), ("profecia", 6), ("oracao", 9), ("promessa", 7)],
+    )
+    cortes = carregar_cortes(pastas.cortes_shorts)
+    quadro = shorts_livre.ctk.CTkToplevel(raiz)
+    quadro.geometry("1000x600")
+    quadro.withdraw()
+    criados: list = []
+
+    def ao_criar(corte):
+        criados.append(corte)
+        cortes.append(corte)
+
+    p = PainelShortsLivre(
+        quadro, pastas, tarefas=ambiente.tarefas,
+        contexto_da_ia=lambda: ContextoDaIA("modelo-de-teste", 2, False),
+        cortes_existentes=lambda: cortes, ao_criar=ao_criar,
+    )  # fmt: skip
+    p.pack(fill="both", expand=True)
+    p.criados, p.cortes = criados, cortes
+    yield p
+    quadro.destroy()
+
+
+def _margem(painel, linha: int) -> str:
+    return painel._caixa._textbox.get(f"{linha}.0", f"{linha}.2")
+
+
+def test_cada_frase_detectada_ganha_a_barra_da_cor_da_categoria(painel_vivo):
+    p = painel_vivo
+    assert p._detectados and p._categoria_da_frase
+    texto = p._caixa._textbox
+    for posicao, detectado in p._categoria_da_frase.items():
+        linha = posicao + 1
+        assert _margem(p, linha)[0] == "▌"
+        assert f"cat_{detectado.categoria}" in texto.tag_names(f"{linha}.0")
+        cor = texto.tag_cget(f"cat_{detectado.categoria}", "foreground")
+        assert cor == cor_da_categoria(detectado.categoria)
+    sem_marca = next(n for n in range(1, len(p._frases) + 1) if n - 1 not in p._categoria_da_frase)
+    assert _margem(p, sem_marca)[0] == " "
+
+
+def test_a_margem_nao_desloca_as_palavras_nem_a_hora(painel_vivo):
+    p = painel_vivo
+    for k in (0, 17, 133):
+        assert palavra(p, k) == p._palavras[k].texto  # as posições valem depois de marcar
+    primeira_linha = p._caixa._textbox.get("1.0", "1.end")
+    assert primeira_linha[2:].strip().startswith("0:00")  # a margem de 3 caracteres e a hora
+
+
+def test_os_shorts_que_ja_existem_aparecem_com_losango_e_sublinhado(painel_vivo):
+    p = painel_vivo
+    corte = p.cortes[0]
+    linha = _frase_do_corte(p, corte)
+    assert _margem(p, linha)[1] == "◆"
+    texto = p._caixa._textbox
+    assert f"feito_{corte.categoria}" in texto.tag_names(f"{linha}.1")
+    assert texto.tag_ranges(f"sub_{corte.categoria}")
+    fora = next(n for n in range(1, len(p._frases) + 1) if not p._shorts_da_frase(p._frases[n - 1]))
+    assert _margem(p, fora)[1] == " "
+
+
+def test_a_legenda_tem_um_chip_por_categoria_detectada_e_um_dos_shorts_feitos(painel_vivo):
+    p = painel_vivo
+    categorias = {d.categoria for d in p._categoria_da_frase.values()}
+    assert {c for c in p._chips if c != CHAVE_FEITOS} == categorias
+    assert CHAVE_FEITOS in p._chips and "Já virou Short" in p._chips[CHAVE_FEITOS].cget("text")
+    for chave in categorias:
+        chip = p._chips[chave]
+        assert chip.cget("fg_color") == cor_da_categoria(chave)
+        assert rotulo_da_categoria(chave) in chip.cget("text")
+    assert p._legenda.winfo_manager() == "grid"
+
+
+def test_clicar_na_legenda_leva_ao_proximo_trecho_da_categoria_e_da_a_volta(painel_vivo):
+    p = painel_vivo
+    chave = next(iter(p._grupos))
+    linhas = p._grupos[chave]
+    assert [p.ir_para(chave) for _ in range(len(linhas) + 1)] == [*linhas, linhas[0]]
+    assert p.ir_para("categoria_que_nao_existe") is None
+    assert p._info.cget("text").startswith(f"Frase {linhas[0]} ·")
+
+
+def test_o_texto_da_frase_diz_a_categoria_a_nota_e_os_shorts_dela(painel_vivo):
+    p = painel_vivo
+    posicao, detectado = next(iter(p._categoria_da_frase.items()))
+    texto = p.descrever_linha(posicao + 1)
+    assert rotulo_da_categoria(detectado.categoria) in texto
+    assert f"nota {detectado.nota} de 10" in texto
+    corte = p.cortes[0]
+    com_short = p.descrever_linha(_frase_do_corte(p, corte))
+    assert "já é parte de um Short" in com_short and corte.titulo in com_short
+    assert p.descrever_linha(0) == "" and p.descrever_linha(10**6) == ""
+
+
+def test_sem_analise_o_texto_fica_limpo_mas_os_shorts_que_existem_aparecem(painel):
+    assert painel._detectados == [] and painel._categoria_da_frase == {}
+    assert _margem(painel, 1)[0] == " "
+    assert set(painel._chips) == {CHAVE_FEITOS}
+
+
+def test_sem_nada_a_mostrar_a_legenda_some(raiz, pastas, ambiente):
+    quadro = shorts_livre.ctk.CTkToplevel(raiz)
+    quadro.withdraw()
+    p = PainelShortsLivre(
+        quadro, pastas, tarefas=ambiente.tarefas, contexto_da_ia=lambda: None,
+        cortes_existentes=list, ao_criar=lambda c: None,
+    )  # fmt: skip
+    assert p._chips == {} and p._legenda.winfo_manager() == ""
+    quadro.destroy()
+
+
+def test_atualizar_marcas_pega_um_short_novo_e_nao_mexe_na_escolha(painel_vivo):
+    p = painel_vivo
+    p.definir_trecho(200, 280)
+    antes = len(p._feitos)
+    novo = replace(p.cortes[0], id=ID_BASE_DOS_MANUAIS, titulo="Novo", categoria="esperanca")
+    p.cortes.append(novo)
+    p.atualizar_marcas()
+    assert len(p._feitos) == antes + 1
+    assert p.trecho() == Trecho(200, 280)
+    assert p._caixa._textbox.tag_ranges("escolhido")  # o azul continua no lugar
+
+
+# --- as ferramentas: seta, marca-texto e borracha ------------------------------------------------
+
+
+def _palavras_da_frase(painel, numero: int) -> list[int]:
+    frase = painel._frases[numero]
+    return list(range(frase.primeira, frase.ultima + 1))
+
+
+def test_a_ferramenta_comeca_na_seta_e_a_troca_chega_ao_pincel(painel):
+    assert painel._ferramentas.ferramenta == FERRAMENTA_SETA
+    assert painel._pincel.ferramenta == FERRAMENTA_SETA
+    painel._ferramentas.definir(FERRAMENTA_MARCA)
+    assert painel._pincel.ferramenta == FERRAMENTA_MARCA
+    assert "pintá-las" in painel._rotulo_ferramenta.cget("text")
+    painel._ferramentas.definir(FERRAMENTA_BORRACHA)
+    assert painel._pincel.ferramenta == FERRAMENTA_BORRACHA
+    assert "tirá-las" in painel._rotulo_ferramenta.cget("text")
+
+
+def test_pintar_a_frase_tres_e_a_cinco_monta_um_corte_de_dois_pedacos(painel):
+    painel._pintou(_palavras_da_frase(painel, 3), FERRAMENTA_MARCA)
+    painel._pintou(_palavras_da_frase(painel, 5), FERRAMENTA_MARCA)
+    trecho = painel.trecho()
+    assert trecho.pedacos == [
+        (painel._frases[3].primeira, painel._frases[3].ultima),
+        (painel._frases[5].primeira, painel._frases[5].ultima),
+    ]
+    assert trecho.fora == frozenset(_palavras_da_frase(painel, 4))
+    texto = painel._caixa._textbox
+    assert len(texto.tag_ranges("escolhido")) == 4  # 2 pedaços, começo e fim de cada
+    assert texto.tag_ranges("pulado")
+    assert "2 pedaços" in painel._rotulo_trecho.cget("text")
+    assert "Pula 12 palavras" in painel._rotulo_pontas.cget("text")
+
+
+def test_a_borracha_tira_palavras_do_meio_e_o_marca_texto_as_devolve(painel):
+    painel.definir_trecho(14, 130)
+    tiradas = list(range(40, 52))
+    painel._pintou(tiradas, FERRAMENTA_BORRACHA)
+    assert painel.trecho() == Trecho(14, 130, frozenset(tiradas))
+    assert "pedaços" in painel._rotulo_trecho.cget("text")
+    painel._pintou(tiradas, FERRAMENTA_MARCA)
+    assert painel.trecho() == Trecho(14, 130)
+    assert "pedaços" not in painel._rotulo_trecho.cget("text")
+    painel._pintou([14, 15], FERRAMENTA_BORRACHA)  # tirar da ponta só encurta o corte
+    assert painel.trecho() == Trecho(16, 130)
+
+
+def test_a_borracha_em_tudo_limpa_o_trecho(painel):
+    painel.definir_trecho(14, 30)
+    painel._pintou(list(range(14, 31)), FERRAMENTA_BORRACHA)
+    assert painel.trecho() is None and painel._primeira is None
+    assert str(painel._botao_criar.cget("state")) == "disabled"
+
+
+def test_o_marca_texto_com_so_uma_ponta_marcada_a_inclui(painel):
+    painel._clique = 50
+    painel._marcar_inicio()
+    painel._pintou(list(range(80, 120)), FERRAMENTA_MARCA)
+    assert painel.trecho() == Trecho(50, 119, frozenset(range(51, 80)))
+
+
+def test_a_seta_nao_pinta_e_um_painel_bloqueado_tambem_nao(painel):
+    painel._pintou([20, 21, 22], FERRAMENTA_SETA)
+    assert painel.trecho() is None
+    painel.bloquear("Processando…")
+    painel._pintou(list(range(20, 60)), FERRAMENTA_MARCA)
+    assert painel.trecho() is None
+    painel.bloquear(None)
+
+
+def test_o_comeco_e_o_fim_por_clique_respeitam_o_que_ja_foi_pulado(painel):
+    painel._pintou(list(range(10, 40)), FERRAMENTA_MARCA)
+    painel._pintou(list(range(60, 100)), FERRAMENTA_MARCA)
+    painel._pintou(list(range(70, 75)), FERRAMENTA_BORRACHA)
+    buracos = frozenset(range(40, 60)) | frozenset(range(70, 75))
+    assert painel.trecho() == Trecho(10, 99, buracos)
+    painel._clique = 90
+    painel._marcar_fim()  # o fim sobe para a palavra 90: os buracos de antes continuam
+    assert painel.trecho() == Trecho(10, 90, buracos)
+    painel._clique = 65
+    painel._marcar_inicio()  # o começo passa do primeiro buraco: ele deixa de existir
+    assert painel.trecho() == Trecho(65, 90, frozenset(range(70, 75)))
+
+
+def test_os_botoes_de_palavra_pulam_o_que_esta_de_fora(painel):
+    painel.definir_palavras([*range(20, 30), *range(33, 90)])
+    painel._mover("fim", -1, False)
+    assert painel.trecho().ultima == 88
+    painel._mover("inicio", 1, False)
+    assert painel.trecho().primeira == 21 and painel.trecho().fora == frozenset({30, 31, 32})
+
+
+def test_arrastar_o_marca_texto_pinta_o_arrasto_e_entrega_as_palavras_ao_soltar(painel):
+    pintadas: list = []
+    painel._pincel._ao_pintar = lambda indices, ferramenta: pintadas.append((indices, ferramenta))
+    painel._ferramentas.definir(FERRAMENTA_MARCA)
+    sob = {
+        (1, 0): 20,
+        (2, 0): 24,
+        (3, 0): 22,
+    }  # o mouse "pula" palavras (y=0: a janela está escondida)
+    painel._pincel._palavra_em = lambda x, y: sob.get((x, y))
+    assert painel._pincel._comecou(SimpleNamespace(x=1, y=0)) == "break"
+    assert painel._caixa._textbox.tag_ranges("pintando")
+    painel._pincel._arrastou(SimpleNamespace(x=2, y=0))
+    painel._pincel._arrastou(SimpleNamespace(x=3, y=0))
+    assert painel._pincel._soltou(SimpleNamespace(x=3, y=0)) == "break"
+    assert pintadas == [(list(range(20, 25)), FERRAMENTA_MARCA)]
+    assert not painel._caixa._textbox.tag_ranges("pintando")  # a tinta some depois de entregar
+
+
+def test_a_seta_deixa_o_mouse_como_sempre(painel):
+    assert painel._pincel._comecou(SimpleNamespace(x=1, y=1)) is None
+    assert painel._pincel._soltou(SimpleNamespace(x=1, y=1)) is None
+
+
+def test_na_margem_ou_na_hora_o_arrasto_nao_acha_palavra(painel, monkeypatch):
+    texto = painel._caixa._textbox
+    coluna = painel._posicoes[0][1]
+    for onde, esperado in (("1.1", None), ("1.5", None), (f"1.{coluna + 2}", 0)):
+        monkeypatch.setattr(texto, "index", lambda ref, onde=onde: onde, raising=False)
+        assert painel._palavra_sob(1, 1) == esperado, onde
+
+
+# --- criar um Short de pedaços separados ---------------------------------------------------------
+
+
+def test_criar_com_pedaco_de_fora_faz_um_corte_com_salto(painel, ambiente, monkeypatch):
+    monkeypatch.setattr(shorts_livre, "preparar_cliente", lambda *a, **k: ClienteDeMentira())
+    quais = [3, 4, 5, 6, 8, 9, 10, 11]  # 8 frases de ~4 s, e a sétima (a de número 7) fica de fora
+    painel.definir_palavras([i for q in quais for i in _palavras_da_frase(painel, q)])
+    assert "2 pedaços" in painel._rotulo_trecho.cget("text")
+    painel.criar()
+    ambiente.esperar(lambda: bool(painel.criados))
+    corte = painel.criados[0]
+    assert len(corte.saltos) == 1 and corte.origem == ORIGEM_MANUAL
+    de, ate = corte.saltos[0]
+    assert painel._frases[6].fim <= de < ate <= painel._frases[8].inicio
+    assert painel._palavras[painel._frases[7].primeira].texto not in corte.texto.split()
+
+
+def test_depois_de_criar_o_short_novo_ja_aparece_marcado(painel_vivo, ambiente, monkeypatch):
+    p = painel_vivo
+    monkeypatch.setattr(shorts_livre, "preparar_cliente", lambda *a, **k: ClienteDeMentira())
+    antes = len(p._feitos)
+    p.definir_trecho(14, 130)
+    p.criar()
+    ambiente.esperar(lambda: bool(p.criados))
+    assert len(p._feitos) == antes + 1
+    assert p.trecho() is None  # a escolha foi limpa
+    assert "Um título feito à mão" in p.descrever_linha(p._posicoes[20][0])
+
+
+# --- as dicas de ferramenta ----------------------------------------------------------------------
+
+
+def test_todo_controle_do_shorts_livre_tem_dica(painel_vivo):
+    p = painel_vivo
+    p._var_busca.set(p._palavras[40].texto.strip(".?!"))
+    p.buscar()  # os botões dos achados nascem na busca
+    faltam = _sem_dica(p)
+    assert not faltam, ", ".join(faltam)
+    for botao in p._modo._buttons_dict.values():
+        assert getattr(botao, "_dica_spurgeon", None) is not None
+    for chip in p._chips.values():
+        assert getattr(chip, "_dica_spurgeon", None) is not None
