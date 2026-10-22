@@ -15,6 +15,7 @@ from spurgeon.render.previa import PreviaDoShort
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import janela_do_corte
 from spurgeon.transcricao.formato import Palavra
+from tests.ambiente_grafico import criar_raiz
 from tests.test_shorts import cortes_do_sermao, sermao_falso
 
 # --- janela do corte (pura) ----------------------------------------------------------------
@@ -43,10 +44,9 @@ def test_a_janela_do_corte_nao_sai_do_sermao():
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()

@@ -23,6 +23,7 @@ from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes
 from spurgeon.transcricao.formato import Transcricao
 from spurgeon.ui import dialogos
 from spurgeon.ui.studio_shorts import EditorDeCortes, trecho_da_legenda
+from tests.ambiente_grafico import criar_raiz
 from tests.test_shorts import cortes_do_sermao, gravar_transcricao, sermao_falso
 
 # --- funções puras -------------------------------------------------------------------------
@@ -71,10 +72,9 @@ def test_trecho_da_legenda_corta_com_reticencias_e_prefere_a_legenda_corrigida()
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()
@@ -434,7 +434,7 @@ def test_as_frases_ficam_uma_por_linha_na_tabela_com_a_hora_ao_lado(editor):
         if "AQUI" in linha:
             continue
         hora, frase = linha.split("\t")
-        assert re.fullmatch(r"(\d+:)?\d{1,2}:\d{2}", hora)
+        assert re.fullmatch(r"(\d+:)?\d{1,2}:\d{2}", hora.lstrip(" ▌◆"))  # antes dela, a margem
         assert frase.rstrip().endswith((".", "?", "!"))
 
 

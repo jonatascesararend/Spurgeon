@@ -18,7 +18,7 @@ margem). A legenda de cores, logo acima do texto, leva à próxima ocorrência d
 from __future__ import annotations
 
 import contextlib
-from collections import Counter
+import textwrap
 from collections.abc import Callable, Sequence
 from tkinter import TclError
 
@@ -34,7 +34,7 @@ from spurgeon.shorts.busca import (
     procurar_palavras,
     procurar_tema,
 )
-from spurgeon.shorts.dados import CATEGORIAS, Corte, Frase, cor_da_categoria, rotulo_da_categoria
+from spurgeon.shorts.dados import Corte, Frase, rotulo_da_categoria
 from spurgeon.shorts.edicao import faixas_de
 from spurgeon.shorts.etapas import nome_do_sermao
 from spurgeon.shorts.livre import (
@@ -62,16 +62,20 @@ from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.dicas import dica
 from spurgeon.ui.ferramentas_de_marca import FerramentasDeMarca
+from spurgeon.ui.legenda_de_categorias import (
+    LOSANGO,
+    LegendaDeCategorias,
+    configurar_tags_de_categoria,
+    itens_da_legenda,
+)
 from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA_SETA, Pincel
 
 _COR_SUAVE = "gray60"
 _COR_OK = "#4caf72"
 _COR_ALERTA = "#e0a030"
 _COR_ERRO = "#e05555"
-_COR_FEITO = "#c9a227"
 BUSCA_PALAVRAS = "Palavras parecidas"
 BUSCA_TEMA = "Tema"
-CHAVE_FEITOS = "feitos"  # o "tipo" da legenda que leva aos Shorts que já existem
 _AJUDA = {
     BUSCA_PALAVRAS: "Acha as frases com palavras parecidas, mesmo com erro de digitação, sem "
     "acento ou em outra forma (perdoar, perdoou…).",
@@ -88,13 +92,13 @@ _TEXTO_DA_FERRAMENTA = {
     FERRAMENTA_SETA: "Arraste no texto para escolher do começo ao fim, ou clique numa palavra "
     "e use “Começar aqui” e “Terminar aqui”.",
     FERRAMENTA_MARCA: "A palavra sob o mouse acende em amarelo: arraste para pintá-las e elas "
-    "entram no Short, mesmo longe das outras. Pinte a frase 1 e a frase 3 para montar “1 + 3”.",
+    "entram no Short, mesmo longe das outras.",
     FERRAMENTA_BORRACHA: "A palavra escolhida sob o mouse acende em vermelho: arraste para "
     "tirá-las; o Short pula essa parte e continua logo depois.",
 }
+_LIMITE_DA_DICA = 180  # letras que cabem nas duas linhas do rótulo sob o texto
 _PREFIXO = 3  # a margem de cada linha: a barra da categoria, o losango do Short e um espaço
 _BARRA = "▌"
-_LOSANGO = "◆"
 
 
 class PainelShortsLivre(ctk.CTkFrame):
@@ -136,10 +140,8 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._categoria_da_frase: dict[int, Detectado] = {}  # posição da frase → trecho detectado
         self._feitos: list[ShortFeito] = []
         self._por_palavra: dict[int, ShortFeito] = {}
-        self._chips: dict[str, ctk.CTkButton] = {}
         self._grupos: dict[str, list[int]] = {}  # tipo da legenda → linhas onde cada trecho abre
         self._proximo_salto: dict[str, int] = {}
-        self._largura_da_legenda = 0
         self._linha_da_dica = 0
 
         self._montar()
@@ -220,9 +222,8 @@ class PainelShortsLivre(ctk.CTkFrame):
         )  # fmt: skip
         self._rotulo_ferramenta.pack(side="left", padx=10)
 
-        self._legenda = ctk.CTkFrame(corpo, fg_color="transparent", height=1)
+        self._legenda = LegendaDeCategorias(corpo, ao_clicar=self.ir_para)
         self._legenda.grid(row=3, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 4))
-        self._legenda.bind("<Configure>", self._legenda_mudou_de_largura)
 
         self._caixa = ctk.CTkTextbox(
             corpo, wrap="word", font=ctk.CTkFont(size=14), state="disabled"
@@ -232,9 +233,9 @@ class PainelShortsLivre(ctk.CTkFrame):
         texto.tag_config("hora", foreground="#7f7f7f", font=("Consolas", 10))
         texto.tag_config("achado", background="#5a4a12")
         texto.tag_config("palavra_achada", background="#9a7b10", foreground="#ffffff")
-        texto.tag_config("escolhido", background="#1f4f7f", foreground="#ffffff")
+        texto.tag_config("escolhido", background="#1f4f7f")  # sem cor de letra: a margem fica
         texto.tag_config("pulado", foreground="#a07070", overstrike=True)
-        self._configurar_marcas_de_categoria(texto)
+        configurar_tags_de_categoria(texto)
         texto.tag_raise("pulado")
         texto.tag_raise("escolhido")
         self._pincel = Pincel(
@@ -246,11 +247,23 @@ class PainelShortsLivre(ctk.CTkFrame):
         )
         texto.bind("<ButtonRelease-1>", self._soltou_o_mouse, add="+")
         texto.bind("<Motion>", self._mouse_passou, add="+")
+        # o texto de cada frase muda ao passar o mouse, e a grade não pode mexer: o rótulo mora
+        # num quadro de tamanho fixo (duas linhas) que não cresce com ele (um rótulo largo ou alto
+        # empurrava a coluna do texto e o painel da direita, que piscava)
+        self._quadro_info = ctk.CTkFrame(corpo, fg_color="transparent", width=1, height=38)
+        self._quadro_info.grid(row=5, column=0, sticky="ew", padx=(16, 7), pady=(0, 6))
+        self._quadro_info.grid_propagate(False)
+        self._quadro_info.columnconfigure(0, weight=1)
         self._info = ctk.CTkLabel(
-            corpo, text="", anchor="w", justify="left", wraplength=600, text_color=_COR_SUAVE,
-            font=ctk.CTkFont(size=12),
+            self._quadro_info, text="", anchor="nw", justify="left", wraplength=360,
+            text_color=_COR_SUAVE, font=ctk.CTkFont(size=12), width=1,
         )  # fmt: skip
-        self._info.grid(row=5, column=0, sticky="ew", padx=(16, 7), pady=(0, 6))
+        self._info.grid(row=0, column=0, sticky="nsew")
+        self._caixa.bind(
+            "<Configure>",
+            lambda e: self._info.configure(wraplength=max(200, e.width - 40)),
+            add="+",
+        )
 
         lado = ctk.CTkFrame(corpo, fg_color="transparent")
         lado.grid(row=4, column=1, rowspan=2, sticky="nsew", padx=(7, 14), pady=(0, 6))
@@ -281,17 +294,6 @@ class PainelShortsLivre(ctk.CTkFrame):
         dica(self._botao_usar_achado, "O trecho escolhido passa a ser exatamente o achado.")
 
         self._montar_trecho(lado, 3)
-
-    def _configurar_marcas_de_categoria(self, texto) -> None:
-        """Uma etiqueta de cor por categoria: a barra da margem, o losango e o sublinhado."""
-        for chave in CATEGORIAS:
-            cor = cor_da_categoria(chave)
-            texto.tag_config(f"cat_{chave}", foreground=cor)
-            texto.tag_config(f"feito_{chave}", foreground=cor)
-            try:
-                texto.tag_config(f"sub_{chave}", underline=True, underlinefg=cor)
-            except TclError:  # Tk antigo, sem cor própria no sublinhado
-                texto.tag_config(f"sub_{chave}", underline=True)
 
     def _montar_trecho(self, lado, linha: int) -> None:
         quadro = ctk.CTkFrame(lado)
@@ -475,7 +477,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         for numero, frase in enumerate(self._frases, start=1):
             detectado = self._categoria_da_frase.get(numero - 1)
             feitos = self._shorts_da_frase(frase)
-            margem = (_BARRA if detectado else " ") + (_LOSANGO if feitos else " ")
+            margem = (_BARRA if detectado else " ") + (LOSANGO if feitos else " ")
             if texto.get(f"{numero}.0", f"{numero}.2") != margem:  # só mexe no que mudou
                 texto.delete(f"{numero}.0", f"{numero}.2")
                 texto.insert(f"{numero}.0", margem, ())
@@ -530,6 +532,15 @@ class PainelShortsLivre(ctk.CTkFrame):
             )
         return " · ".join(partes)
 
+    def _mostrar_a_dica(self, linha: int) -> None:
+        """O que se sabe da frase, no rótulo abaixo do texto. Ele só tem duas linhas: o que passar
+        disso é cortado, porque um rótulo que cresce empurra o texto e o painel da direita."""
+        self._info.configure(
+            text=textwrap.shorten(
+                self.descrever_linha(linha), width=_LIMITE_DA_DICA, placeholder="…"
+            )
+        )
+
     def _mouse_passou(self, evento) -> None:
         try:
             linha = int(self._caixa._textbox.index(f"@{evento.x},{evento.y}").split(".")[0])
@@ -537,80 +548,29 @@ class PainelShortsLivre(ctk.CTkFrame):
             return
         if linha != self._linha_da_dica:
             self._linha_da_dica = linha
-            self._info.configure(text=self.descrever_linha(linha))
+            self._mostrar_a_dica(linha)
 
     # --- a legenda de cores ---------------------------------------------------------------------
+    @property
+    def _chips(self) -> dict[str, ctk.CTkButton]:
+        return self._legenda.chips
+
     def _montar_legenda(self) -> None:
-        for chip in self._chips.values():
-            chip.destroy()
-        self._chips, self._grupos, self._proximo_salto = {}, {}, {}
-        contagem = Counter(d.categoria for d in self._categoria_da_frase.values())
+        self._proximo_salto = {}
         por_categoria: dict[str, list[int]] = {}
         for posicao in sorted(self._categoria_da_frase):
             por_categoria.setdefault(self._categoria_da_frase[posicao].categoria, []).append(
                 posicao + 1
             )
-        for chave in [c for c in CATEGORIAS if contagem[c]]:
-            self._grupos[chave] = self._inicios_dos_grupos(por_categoria[chave])
-            rotulo = rotulo_da_categoria(chave)
-            cor = cor_da_categoria(chave)
-            self._chips[chave] = self._novo_chip(
-                f"{rotulo} · {contagem[chave]}",
-                cor,
-                "white",
-                chave,
-                f"Frases em que a IA viu “{rotulo}”. Clique para ir ao próximo trecho assim.",
-            )
         linhas_dos_feitos = [
             n for n, frase in enumerate(self._frases, start=1) if self._shorts_da_frase(frase)
         ]
-        if linhas_dos_feitos:
-            self._grupos[CHAVE_FEITOS] = self._inicios_dos_grupos(linhas_dos_feitos)
-            self._chips[CHAVE_FEITOS] = self._novo_chip(
-                f"{_LOSANGO} Já virou Short · {len(self._feitos)}",
-                _COR_FEITO,
-                "#101010",
-                CHAVE_FEITOS,
-                "As frases sublinhadas (e com o losango na margem) já estão em algum Short da "
-                "lista. Clique para ir à próxima.",
-            )
-        if self._chips:
+        itens, self._grupos = itens_da_legenda(por_categoria, linhas_dos_feitos, len(self._feitos))
+        self._legenda.definir(itens)
+        if itens:
             self._legenda.grid()
-            self._arrumar_legenda()
         else:
             self._legenda.grid_remove()
-
-    @staticmethod
-    def _inicios_dos_grupos(linhas: Sequence[int]) -> list[int]:
-        """`[3, 4, 5, 9, 10]` → `[3, 9]`: a primeira linha de cada sequência de frases seguidas."""
-        return [de for de, _ate in faixas_de(linhas)]
-
-    def _novo_chip(self, texto: str, cor: str, cor_do_texto: str, chave: str, ajuda: str):
-        fonte = ctk.CTkFont(size=11, weight="bold")
-        chip = ctk.CTkButton(
-            self._legenda, text=texto, font=fonte, height=22, corner_radius=6, fg_color=cor,
-            hover_color=cor, text_color=cor_do_texto, width=fonte.measure(texto) + 22,
-            command=lambda: self.ir_para(chave),
-        )  # fmt: skip
-        dica(chip, ajuda)
-        return chip
-
-    def _legenda_mudou_de_largura(self, evento) -> None:
-        if evento.width != self._largura_da_legenda:
-            self._largura_da_legenda = evento.width
-            self._arrumar_legenda()
-
-    def _arrumar_legenda(self) -> None:
-        """Põe os chips um depois do outro, passando para a linha de baixo quando não cabem."""
-        limite = self._largura_da_legenda if self._largura_da_legenda > 1 else 10**6
-        x = linha = coluna = 0
-        for chip in self._chips.values():
-            largura = chip.winfo_reqwidth() + 6
-            if coluna and x + largura > limite:
-                linha, coluna, x = linha + 1, 0, 0
-            chip.grid(row=linha, column=coluna, padx=(0, 6), pady=2, sticky="w")
-            x += largura
-            coluna += 1
 
     def ir_para(self, chave: str) -> int | None:
         """Leva o texto ao próximo trecho da categoria (ou dos Shorts feitos); devolve a linha."""
@@ -623,7 +583,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         texto = self._caixa._textbox
         texto.yview(f"{linha}.0")
         self._linha_da_dica = linha
-        self._info.configure(text=self.descrever_linha(linha))
+        self._mostrar_a_dica(linha)
         return linha
 
     # --- marcar o trecho ----------------------------------------------------------------------

@@ -535,3 +535,264 @@ def test_os_tres_botoes_de_ferramenta_tem_icone_e_dica(raiz):
         assert getattr(botao, "_dica_spurgeon", None) is not None
         assert len(botao._dica_spurgeon.texto) > 60
     janela.destroy()
+
+
+# --- a aba avisa a janela a cada mudança: a legenda de antes não pode cobrir a do corte novo ------
+
+
+def _palavras_na_tabela(editor, tipo: str) -> list[str]:
+    return [t for linha in editor._janela.linhas if linha.tipo == tipo for t in linha.textos]
+
+
+def _frase_antes_do_corte(editor) -> list[int]:
+    primeira = _incluidas(editor)[0]
+    frase = next(f for f in editor._frases_do_sermao() if f.ultima == primeira - 1)
+    return list(range(frase.primeira, frase.ultima + 1))
+
+
+def _confere_que_a_tabela_mostra_todo_o_short(editor):
+    """Toda palavra do Short aparece em branco na tabela, e o que foi cortado, riscado."""
+    incluidas = _incluidas(editor)
+    corte = _aberto(editor)
+    assert len(_palavras_na_tabela(editor, "dentro")) == len(incluidas)
+    cortadas = (incluidas[-1] - incluidas[0] + 1) - len(incluidas)
+    assert len(_palavras_na_tabela(editor, "cortado")) == cortadas
+    return corte
+
+
+@pytest.mark.gui
+def test_pintar_uma_frase_antes_do_corte_a_poe_na_tabela_mesmo_com_a_aba_ligada(
+    raiz, pastas, tmp_path
+):
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        frase = _frase_antes_do_corte(ed)
+        antes = len(_incluidas(ed))
+        ed._ferramentas.definir(FERRAMENTA_MARCA)
+        ed._pintou(frase, FERRAMENTA_MARCA)
+        assert len(_incluidas(ed)) == antes + len(frase)
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        assert ed._palavras[frase[0]].texto in _palavras_na_tabela(ed, "dentro")  # não sumiu
+        assert not _aberto(ed).legenda  # nada foi corrigido: a legenda é a da transcrição
+        assert ed._palavras[frase[0]].texto in ed._texto.get("1.0", "end-1c").split()
+    finally:
+        quadro.destroy()
+
+
+@pytest.mark.gui
+def test_com_a_legenda_corrigida_pintar_uma_frase_tambem_a_poe_na_tabela_e_na_legenda(
+    raiz, pastas, tmp_path
+):
+    from tests.test_studio_shorts import corrigir_a_primeira_palavra
+
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        corrigir_a_primeira_palavra(ed)  # a legenda do Short passa a ter uma correção
+        ed._guardar_detalhe()
+        assert _aberto(ed).legenda
+        frase = _frase_antes_do_corte(ed)
+        ed._pintou(frase, FERRAMENTA_MARCA)
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        corte = _aberto(ed)
+        assert corte.legenda and ed._palavras[frase[0]].texto in corte.legenda.split()
+        assert "corrigida" in corte.legenda.split()  # a correção das palavras que ficam continua
+        assert "corrigida" in _palavras_na_tabela(ed, "dentro")
+        assert ed._palavras[frase[0]].texto in _palavras_na_tabela(ed, "dentro")
+    finally:
+        quadro.destroy()
+
+
+@pytest.mark.gui
+def test_apagar_do_meio_com_a_aba_ligada_risca_o_que_saiu_e_o_resto_continua(
+    raiz, pastas, tmp_path
+):
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        inc = _incluidas(ed)
+        tiradas = inc[20:30]
+        ed._pintou(tiradas, FERRAMENTA_BORRACHA)
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        assert _palavras_na_tabela(ed, "cortado") == [ed._palavras[i].texto for i in tiradas]
+        assert not _aberto(ed).legenda  # a legenda não ganhou as palavras que saíram
+        assert ed._palavras[tiradas[0]].texto not in ed._texto.get("1.0", "end-1c").split()
+    finally:
+        quadro.destroy()
+
+
+@pytest.mark.gui
+def test_desfazer_e_refazer_com_a_aba_ligada_tambem_acertam_a_tabela(raiz, pastas, tmp_path):
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        inicial = _incluidas(ed)
+        ed._pintou(_frase_antes_do_corte(ed), FERRAMENTA_MARCA)
+        ed._pintou(inicial[40:44], FERRAMENTA_BORRACHA)
+        com_tudo = _incluidas(ed)
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        assert ed.desfazer() and ed.desfazer()
+        assert _incluidas(ed) == inicial
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        assert ed.refazer() and ed.refazer()
+        assert _incluidas(ed) == com_tudo
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+    finally:
+        quadro.destroy()
+
+
+@pytest.mark.gui
+def test_o_botao_de_palavra_com_a_aba_ligada_tambem_nao_perde_a_palavra_que_entrou(
+    raiz, pastas, tmp_path
+):
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        primeira = _incluidas(ed)[0]
+        assert ed.mover("inicio", -3)
+        assert _incluidas(ed)[0] == primeira - 3
+        _confere_que_a_tabela_mostra_todo_o_short(ed)
+        assert ed._palavras[primeira - 3].texto in ed._texto.get("1.0", "end-1c").split()
+        assert not _aberto(ed).legenda
+    finally:
+        quadro.destroy()
+
+
+@pytest.mark.gui
+def test_guardar_o_detalhe_nao_copia_a_caixa_enquanto_ela_mostra_o_corte_de_antes(editor):
+    editor.selecionar(editor._ordem[0])
+    corte = _aberto(editor)
+    editor._texto.delete("1.0", "end")
+    editor._texto.insert("1.0", "texto de antes que não deve cobrir nada")
+    editor._tela_desatualizada = True
+    editor._guardar_detalhe()
+    assert _aberto(editor).legenda == corte.legenda  # nada foi copiado
+    editor._tela_desatualizada = False
+    editor._guardar_detalhe()
+    assert _aberto(editor).legenda == "texto de antes que não deve cobrir nada"
+
+
+# --- a margem e a legenda de categorias na tabela do Studio -------------------------------------
+
+
+@pytest.fixture
+def editor_com_analise(raiz, pastas):
+    """O editor de um projeto que tem a análise da IA gravada (categorias dos trechos avaliados)."""
+    import customtkinter as ctk
+
+    from spurgeon.shorts.analise import separar_frases
+    from tests.test_marcas_do_sermao import _gravar_analise
+
+    palavras = _palavras_do_projeto(pastas)
+    _gravar_analise(
+        pastas,
+        palavras,
+        separar_frases(palavras),
+        [("exortacao", 8), ("profecia", 6), ("oracao", 9), ("promessa", 7), ("esperanca", 8)],
+    )
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    ed = EditorDeCortes(janela, pastas, legenda_queimada=lambda: True)
+    ed.pack(fill="both", expand=True)
+    yield ed
+    janela.destroy()
+
+
+def _palavras_do_projeto(pastas):
+    from spurgeon.transcricao.formato import Transcricao
+
+    return Transcricao.carregar(pastas.transcricao).palavras
+
+
+def _margens_das_linhas(ed) -> list[str]:
+    caixa = ed._janela._textbox
+    return [caixa.get(f"{n}.0", f"{n}.2") for n in range(1, len(ed._janela.linhas) + 1)]
+
+
+@pytest.mark.gui
+def test_a_tabela_do_studio_mostra_a_barra_da_categoria_que_a_ia_viu(editor_com_analise):
+    ed = editor_com_analise
+    ed.selecionar(ed._ordem[0])
+    margens = _margens_das_linhas(ed)
+    assert any(m.startswith("▌") for m in margens)  # alguma frase tem categoria detectada
+    caixa = ed._janela._textbox
+    n = next(i for i, m in enumerate(margens, start=1) if m.startswith("▌"))
+    cores = [t for t in caixa.tag_names(f"{n}.0") if t.startswith("cat_")]
+    assert len(cores) == 1  # a barra tem a cor de uma categoria só
+
+
+@pytest.mark.gui
+def test_a_legenda_da_tabela_tem_os_chips_das_categorias_que_aparecem_nela(editor_com_analise):
+    ed = editor_com_analise
+    ed.selecionar(ed._ordem[0])
+    chips = ed._legenda_da_tabela.chips
+    assert chips and ed._legenda_da_tabela.winfo_manager() == "grid"
+    for chave, chip in chips.items():
+        if chave != "feitos":
+            assert chip.cget("fg_color") == cor_da_categoria(chave)
+            assert rotulo_da_categoria(chave) in chip.cget("text")
+        assert getattr(chip, "_dica_spurgeon", None) is not None
+    categorias_nas_linhas = {c for m in _margens_das_linhas(ed) for c in [m[0]] if m[0] == "▌"}
+    assert categorias_nas_linhas  # as barras e os chips contam a mesma história
+
+
+@pytest.mark.gui
+def test_clicar_num_chip_leva_a_tabela_ao_proximo_trecho_da_categoria(editor_com_analise):
+    ed = editor_com_analise
+    ed.selecionar(ed._ordem[0])
+    chave = next(c for c in ed._grupos_da_tabela if c != "feitos")
+    linhas = ed._grupos_da_tabela[chave]
+    vistas = [ed._ir_para_na_tabela(chave) for _ in range(len(linhas) + 1)]
+    assert vistas == [*linhas, linhas[0]]  # anda de trecho em trecho e dá a volta
+    assert ed._ir_para_na_tabela("nao_existe") is None
+    ed._janela.ir_para_linha(linhas[0])
+    assert int(ed._janela._textbox.index("@0,0").split(".")[0]) <= linhas[0]
+
+
+@pytest.mark.gui
+def test_o_losango_marca_so_o_que_ja_virou_outro_short_e_nunca_o_proprio(editor_com_analise):
+    ed = editor_com_analise
+    ed.selecionar(ed._ordem[0])
+    atual = _aberto(ed)
+    margens = _margens_das_linhas(ed)
+    linhas = ed._janela.linhas
+    for margem, linha in zip(margens, linhas, strict=True):
+        if linha.tipo == "dentro":
+            assert margem[1] == " "  # o próprio Short não ganha losango nas suas frases
+    outro = ed._cortes[ed._ordem[1]]
+    ed.selecionar(ed._ordem[1])
+    assert outro.id != atual.id
+    assert all(len(m) == 2 for m in _margens_das_linhas(ed))
+
+
+@pytest.mark.gui
+def test_sem_nada_a_mostrar_a_legenda_da_tabela_some(editor):
+    editor.selecionar(editor._ordem[0])  # o projeto deste teste não tem análise gravada
+    if not editor._legenda_da_tabela.chips:
+        assert editor._legenda_da_tabela.winfo_manager() == ""
+
+
+@pytest.mark.gui
+def test_a_borracha_funciona_num_short_com_a_legenda_corrigida(raiz, pastas, tmp_path):
+    from tests.test_studio_shorts import corrigir_a_primeira_palavra
+
+    quadro, aba = _aba(raiz, pastas, tmp_path)
+    try:
+        ed = aba.editor
+        ed.selecionar(ed._ordem[0])
+        corrigir_a_primeira_palavra(ed)
+        ed._guardar_detalhe()
+        assert _aberto(ed).legenda
+        alvo = _incluidas(ed)[30]
+        assert ed._janela._pode_pintar(alvo, FERRAMENTA_BORRACHA)  # a palavra tem posição
+        ed._pintou(_incluidas(ed)[30:34], FERRAMENTA_BORRACHA)
+        assert len(_palavras_na_tabela(ed, "cortado")) == 4
+        assert "corrigida" in _palavras_na_tabela(ed, "dentro")  # e a correção continua
+    finally:
+        quadro.destroy()

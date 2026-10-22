@@ -15,6 +15,7 @@ from spurgeon.ui.revisao_transcricao import (
     montar_linhas,
     trocar_no_texto,
 )
+from tests.ambiente_grafico import criar_raiz
 
 
 def segmento(texto: str, inicio: float, prob: float = 0.95) -> Segmento:
@@ -134,10 +135,9 @@ def test_o_painel_da_transcricao_esta_registrado():
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()

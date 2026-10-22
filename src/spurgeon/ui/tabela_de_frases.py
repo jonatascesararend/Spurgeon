@@ -23,13 +23,15 @@ from __future__ import annotations
 
 import contextlib
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from tkinter import Menu, TclError
 
 import customtkinter as ctk
 
 from spurgeon.shorts.edicao import LinhaDaTabela
 from spurgeon.transcricao.formato import segundos_para_rotulo
+from spurgeon.ui.legenda_de_categorias import BARRA, LOSANGO, configurar_tags_de_categoria
 from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA_SETA, Pincel
 
 COR_FORA = "#7f7f7f"
@@ -43,6 +45,21 @@ _MARCADOR = {
     "volta": "↩ CONTINUA AQUI ↩",
 }
 _QUEBRAS = re.compile(r"[\r\n\t]+")
+_MARGEM_DA_LINHA = 3  # a barra da categoria, o losango dos outros Shorts e um espaço
+
+
+@dataclass(frozen=True)
+class MargemDaLinha:
+    """O que a margem de uma linha mostra, como no texto do Shorts livre.
+
+    `categoria` é a que a IA viu no melhor trecho que cobre a frase (a barra colorida); `feito`, a
+    categoria do primeiro outro Short que fala algo da frase (o losango); `sublinhadas`, as palavras
+    da linha que esses Shorts falam (palavra → categoria do Short), que ficam sublinhadas.
+    """
+
+    categoria: str | None = None
+    feito: str | None = None
+    sublinhadas: Mapping[int, str] = field(default_factory=dict)
 
 
 class TabelaDeFrases(ctk.CTkTextbox):
@@ -93,6 +110,11 @@ class TabelaDeFrases(ctk.CTkTextbox):
         caixa.tag_config(
             "linha", lmargin1="6p", lmargin2="52p", tabs=("52p",), spacing1="2p", spacing3="2p"
         )
+        # com a margem das categorias a hora anda um pouco para a direita: o texto também
+        caixa.tag_config(
+            "linha_m", lmargin1="6p", lmargin2="66p", tabs=("66p",), spacing1="2p", spacing3="2p"
+        )
+        configurar_tags_de_categoria(caixa)
         caixa.tag_config("marcador", lmargin1="6p", lmargin2="6p", spacing1="4p", spacing3="2p")
         caixa.tag_config("hora", foreground=_COR_HORA, font=("Segoe UI", 9))
         caixa.tag_config("fora", foreground=COR_FORA)
@@ -105,7 +127,7 @@ class TabelaDeFrases(ctk.CTkTextbox):
             inactiveselectbackground=_COR_SELECAO,
             selectforeground="#ffffff",
         )
-        caixa.tag_raise("sel")
+        caixa.tag_raise("sel")  # depois de criar as etiquetas de categoria, que nascem por cima
 
     # --- o filtro de edição -------------------------------------------------------------------
     def _instalar_filtro(self) -> None:
@@ -185,9 +207,19 @@ class TabelaDeFrases(ctk.CTkTextbox):
     def linhas(self) -> list[LinhaDaTabela]:
         return list(self._linhas)
 
-    def mostrar(self, linhas: Sequence[LinhaDaTabela], *, centralizar: str | None = None) -> None:
-        """Põe as linhas na tabela. Com `centralizar` (`inicio` ou `fim`) leva a vista até esse
-        marcador; sem ele a vista fica onde estava (a mesma frase no alto)."""
+    def mostrar(
+        self,
+        linhas: Sequence[LinhaDaTabela],
+        *,
+        centralizar: str | None = None,
+        margens: Sequence[MargemDaLinha | None] | None = None,
+    ) -> None:
+        """Põe as linhas na tabela. Com `centralizar` (`inicio` ou `fim`) leva a vista até o começo
+        ou o fim do Short; sem ele a vista fica onde estava (a mesma frase no alto).
+
+        `margens` (uma por linha) liga a margem das categorias: a barra colorida, o losango dos
+        outros Shorts e o sublinhado das palavras deles. Sem `margens` as linhas começam na hora.
+        """
         caixa = self._textbox
         ancora = self._tempo_do_alto() if centralizar is None else None
         self._interno = True
@@ -204,15 +236,43 @@ class TabelaDeFrases(ctk.CTkTextbox):
                     self._colunas.append(0)
                     continue
                 hora = segundos_para_rotulo(linha.tempo)
-                caixa.insert("end", hora, ("hora", "linha"))
-                caixa.insert("end", "\t", ("linha",))
-                caixa.insert("end", linha.texto, (linha.tipo, "linha"))
-                caixa.insert("end", "\n", ("linha",))
-                self._colunas.append(len(hora) + 1)
-                coluna = len(hora) + 1
+                molde = "linha_m" if margens is not None else "linha"
+                prefixo = 0
+                if margens is not None:
+                    margem = margens[numero - 1] if numero <= len(margens) else None
+                    categoria = margem.categoria if margem else None
+                    feito = margem.feito if margem else None
+                    caixa.insert(
+                        "end",
+                        BARRA if categoria else " ",
+                        (f"cat_{categoria}", molde) if categoria else (molde,),
+                    )
+                    caixa.insert(
+                        "end",
+                        LOSANGO if feito else " ",
+                        (f"feito_{feito}", molde) if feito else (molde,),
+                    )
+                    caixa.insert("end", " ", (molde,))
+                    prefixo = _MARGEM_DA_LINHA
+                caixa.insert("end", hora, ("hora", molde))
+                caixa.insert("end", "\t", (molde,))
+                caixa.insert("end", linha.texto, (linha.tipo, molde))
+                caixa.insert("end", "\n", (molde,))
+                self._colunas.append(prefixo + len(hora) + 1)
+                coluna = prefixo + len(hora) + 1
                 for texto, indice in zip(linha.textos, linha.indices, strict=False):
-                    self._onde[indice] = (numero, coluna, len(texto))
+                    if indice >= 0:  # -1: palavra que a pessoa escreveu, sem par na transcrição
+                        self._onde[indice] = (numero, coluna, len(texto))
                     coluna += len(texto) + 1
+                if margens is not None and margem is not None:
+                    for indice, categoria_do_short in margem.sublinhadas.items():
+                        onde = self._onde.get(indice)
+                        if onde is not None and onde[0] == numero:
+                            caixa.tag_add(
+                                f"sub_{categoria_do_short}",
+                                f"{numero}.{onde[1]}",
+                                f"{numero}.{onde[1] + onde[2]}",
+                            )
                 if linha.tipo == "dentro":  # onde o Short começa e termina (sem marcador)
                     self._marcas.setdefault("inicio", f"{numero}.0")
                     self._marcas["fim"] = f"{numero}.0"
@@ -255,6 +315,11 @@ class TabelaDeFrases(ctk.CTkTextbox):
             self._ao_editar()
 
     # --- a vista ------------------------------------------------------------------------------
+    def ir_para_linha(self, numero: int) -> None:
+        """Leva a vista da tabela até a linha `numero` (de 1 a N), deixando-a no alto."""
+        with contextlib.suppress(TclError):
+            self._textbox.yview(f"{numero}.0")
+
     def ir_a(self, ponta: str, *, so_se_preciso: bool = False) -> None:
         """Rola até a primeira ou a última linha do Short, deixando contexto de um lado e do outro.
 
@@ -311,7 +376,7 @@ class TabelaDeFrases(ctk.CTkTextbox):
         comeco = 0
         for texto, indice in zip(linha.textos, linha.indices, strict=True):
             if comeco <= posicao < comeco + len(texto):
-                return linha, indice
+                return linha, (indice if indice >= 0 else None)
             comeco += len(texto) + 1
         return linha, None
 
@@ -384,7 +449,7 @@ class TabelaDeFrases(ctk.CTkTextbox):
         )
         if self._ao_pintar is not None:
             menu.add_separator()
-            frase = list(linha.indices)
+            frase = [i for i in linha.indices if i >= 0]
             if linha.tipo == "dentro":
                 menu.add_command(
                     label="Cortar esta palavra do Short",

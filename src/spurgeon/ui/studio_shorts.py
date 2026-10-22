@@ -21,6 +21,7 @@ import re
 import tempfile
 import threading
 import time
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -65,6 +66,7 @@ from spurgeon.shorts.edicao import (
     formatar_tempo_preciso,
     incluir_palavras,
     indices_das_palavras,
+    indices_incluidos,
     legenda_corrigida,
     legenda_do_corte,
     legenda_em_blocos,
@@ -82,6 +84,7 @@ from spurgeon.shorts.edicao import (
 from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes, nome_do_sermao
 from spurgeon.shorts.livre import ContextoDaIA, preparar_cliente
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS
+from spurgeon.shorts.marcas import Detectado, categoria_de_cada_frase, trechos_detectados
 from spurgeon.shorts.pausas import (
     LIMIAR_MAXIMO_S,
     LIMIAR_MINIMO_S,
@@ -102,6 +105,7 @@ from spurgeon.ui.dicas import dica
 from spurgeon.ui.dicionario import DicionarioPersonalizado
 from spurgeon.ui.estabilidade import RotuloQueSome
 from spurgeon.ui.ferramentas_de_marca import FerramentasDeMarca
+from spurgeon.ui.legenda_de_categorias import LegendaDeCategorias, itens_da_legenda
 from spurgeon.ui.miniplayer import MiniPlayer
 from spurgeon.ui.rolagem import QuadroRolavel
 from spurgeon.ui.tabela_de_frases import (
@@ -109,6 +113,7 @@ from spurgeon.ui.tabela_de_frases import (
     FERRAMENTA_BORRACHA,
     FERRAMENTA_MARCA,
     FERRAMENTA_SETA,
+    MargemDaLinha,
     TabelaDeFrases,
 )
 from spurgeon.ui.verificacao import PainelDePortugues
@@ -280,6 +285,15 @@ class EditorDeCortes(ctk.CTkFrame):
         self._cores_das_linhas: dict[int, object] = {}  # a cor que cada linha tem na tela
         self._mudou = False
         self._carregando = False  # True enquanto a tela é preenchida (não conta como edição)
+        self._tela_desatualizada = False  # True entre trocar o corte e a tela mostrar o corte novo
+        # a margem da tabela (categorias detectadas e Shorts já feitos), calculada uma vez por carga
+        self._deteccoes: dict[int, Detectado] | None = None  # posição da frase → o que a IA viu
+        self._mapa_de_frases: tuple[list[int], list[float]] | None = None
+        self._tempos_das_palavras: tuple[list[float], list[float]] | None = None
+        self._indices_dos_cortes: dict[int, tuple[tuple, frozenset[int]]] = {}
+        self._itens_da_legenda_da_tabela: tuple = ()
+        self._grupos_da_tabela: dict[str, list[int]] = {}
+        self._salto_da_tabela: dict[str, int] = {}
         self._portugues: PainelDePortugues | None = None
         self._portugues_visivel = False
         self._bloqueado: str | None = None
@@ -323,6 +337,8 @@ class EditorDeCortes(ctk.CTkFrame):
             inicio, fim = self._janela_do_video()
             self._palavras = palavras_da_janela(self._palavras, inicio, fim)
         self._frases = None
+        self._deteccoes = self._mapa_de_frases = self._tempos_das_palavras = None
+        self._indices_dos_cortes = {}
         self._marcas = [BooleanVar(value=c.incluir) for c in self._cortes]
         self._atual = None
         self._mudou = False
@@ -969,6 +985,9 @@ class EditorDeCortes(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         )
         self._dica_janela.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        self._legenda_da_tabela = LegendaDeCategorias(cabeca, ao_clicar=self._ir_para_na_tabela)
+        self._legenda_da_tabela.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        self._legenda_da_tabela.grid_remove()  # só aparece quando há o que mostrar
         self._janela = TabelaDeFrases(
             pai,
             height=_ALTURA_DA_JANELA,
@@ -1387,9 +1406,127 @@ class EditorDeCortes(ctk.CTkFrame):
         except LimiteInvalido:
             self._janela.mostrar_aviso("(transcrição indisponível)")
             return
-        self._janela.mostrar(linhas, centralizar=None if ver or texto is not None else "inicio")
+        margens = self._margens_da_tabela(linhas, corte)
+        self._janela.mostrar(
+            linhas,
+            centralizar=None if ver or texto is not None else "inicio",
+            margens=None if margens is None else margens[0],
+        )
+        self._atualizar_a_legenda_da_tabela(margens)
         if ver:
             self._janela.ir_a(ver, so_se_preciso=True)
+
+    # --- a margem da tabela: categorias detectadas e Shorts que já existem ---------------------
+    def _mapa_das_frases(self) -> tuple[list[int], list[float]]:
+        """(a posição da frase de cada palavra, o instante em que cada frase começa)."""
+        if self._mapa_de_frases is None:
+            da_palavra = [0] * len(self._palavras)
+            for numero, frase in enumerate(self._frases_do_sermao()):
+                for i in range(frase.primeira, frase.ultima + 1):
+                    da_palavra[i] = numero
+            self._mapa_de_frases = (da_palavra, [f.inicio for f in self._frases_do_sermao()])
+        return self._mapa_de_frases
+
+    def _deteccoes_por_frase(self) -> dict[int, Detectado]:
+        """Para cada frase, o trecho avaliado pela IA de maior nota que a cobre."""
+        if self._deteccoes is None:
+            detectados = trechos_detectados(self._pastas, self._palavras)
+            self._deteccoes = categoria_de_cada_frase(detectados, self._frases_do_sermao())
+        return self._deteccoes
+
+    def _indices_do_corte(self, corte: Corte) -> frozenset[int]:
+        """As palavras que um corte fala, guardadas até o corte mudar (são muitos cortes)."""
+        assinatura = (corte.inicio, corte.fim, tuple(tuple(s) for s in corte.saltos))
+        guardado = self._indices_dos_cortes.get(corte.id)
+        if guardado is not None and guardado[0] == assinatura:
+            return guardado[1]
+        if self._tempos_das_palavras is None:
+            self._tempos_das_palavras = (
+                [p.inicio for p in self._palavras],
+                [p.fim for p in self._palavras],
+            )
+        inicios, fins = self._tempos_das_palavras
+        de = max(0, bisect_left(fins, corte.inicio) - 20)  # folga: os tempos podem se sobrepor
+        ate = min(len(self._palavras), bisect_right(inicios, corte.fim) + 20)
+        indices = frozenset(de + i for i in indices_incluidos(self._palavras[de:ate], corte))
+        self._indices_dos_cortes[corte.id] = (assinatura, indices)
+        return indices
+
+    def _margens_da_tabela(
+        self, linhas, corte: Corte
+    ) -> tuple[list[MargemDaLinha | None], int] | None:
+        """A margem de cada linha da tabela e quantos outros Shorts aparecem (None sem texto)."""
+        frases = self._frases_do_sermao()
+        if not frases:
+            return None
+        da_palavra, inicios = self._mapa_das_frases()
+        detectadas = self._deteccoes_por_frase()
+        outros: dict[int, tuple[int, str]] = {}  # palavra → (id, categoria) do primeiro Short dela
+        for outro in self._cortes:
+            if outro.id != corte.id:
+                for i in self._indices_do_corte(outro):
+                    outros.setdefault(i, (outro.id, outro.categoria))
+        margens: list[MargemDaLinha | None] = []
+        presentes: set[int] = set()
+        for linha in linhas:
+            if linha.e_marcador:
+                margens.append(None)
+                continue
+            conhecida = next((i for i in linha.indices if i >= 0), None)
+            numero = (
+                da_palavra[conhecida]
+                if conhecida is not None
+                else max(0, bisect_right(inicios, linha.tempo + 0.05) - 1)
+            )
+            detectado = detectadas.get(numero)
+            frase = frases[numero]
+            da_frase = [outros[i] for i in range(frase.primeira, frase.ultima + 1) if i in outros]
+            presentes.update(id_ for id_, _categoria in da_frase)
+            margens.append(
+                MargemDaLinha(
+                    detectado.categoria if detectado else None,
+                    da_frase[0][1] if da_frase else None,
+                    {i: outros[i][1] for i in linha.indices if i in outros},
+                )
+            )
+        return margens, len(presentes)
+
+    def _atualizar_a_legenda_da_tabela(
+        self, margens: tuple[list[MargemDaLinha | None], int] | None
+    ) -> None:
+        """A legenda de cores acima da tabela: o que a IA viu e o que já virou Short, nas frases
+        que a tabela mostra. Os chips só são refeitos quando mudam (refazê-los piscaria)."""
+        por_categoria: dict[str, list[int]] = {}
+        linhas_dos_feitos: list[int] = []
+        quantos = 0
+        if margens is not None:
+            lista, quantos = margens
+            for numero, margem in enumerate(lista, start=1):
+                if margem is None:
+                    continue
+                if margem.categoria:
+                    por_categoria.setdefault(margem.categoria, []).append(numero)
+                if margem.feito:
+                    linhas_dos_feitos.append(numero)
+        itens, self._grupos_da_tabela = itens_da_legenda(por_categoria, linhas_dos_feitos, quantos)
+        self._salto_da_tabela = {}
+        if tuple(itens) != self._itens_da_legenda_da_tabela:
+            self._itens_da_legenda_da_tabela = tuple(itens)
+            self._legenda_da_tabela.definir(itens)
+            if itens:
+                self._legenda_da_tabela.grid()
+            else:
+                self._legenda_da_tabela.grid_remove()
+
+    def _ir_para_na_tabela(self, chave: str) -> int | None:
+        """Leva a tabela ao próximo trecho da categoria (ou dos outros Shorts); devolve a linha."""
+        linhas = self._grupos_da_tabela.get(chave)
+        if not linhas:
+            return None
+        posicao = (self._salto_da_tabela.get(chave, -1) + 1) % len(linhas)
+        self._salto_da_tabela[chave] = posicao
+        self._janela.ir_para_linha(linhas[posicao])
+        return linhas[posicao]
 
     def _ir_a_ponta(self, ponta: str) -> None:
         self._janela.ir_a(ponta)
@@ -1461,11 +1598,22 @@ class EditorDeCortes(ctk.CTkFrame):
         return True
 
     def _depois_de_mudar(self, antes: Corte, novo: Corte, *, avisar_da_legenda: bool) -> None:
-        """Põe `novo` no lugar de `antes` e atualiza a tela (detalhe, linha da lista e resumo)."""
+        """Põe `novo` no lugar de `antes` e atualiza a tela (detalhe, linha da lista e resumo).
+
+        A ordem importa: quem é avisado da mudança (a aba, que pede `pendentes()`) acaba chamando
+        `_guardar_detalhe`, que copia a caixa da legenda para o corte. Se isso acontecesse antes de
+        a caixa mostrar o corte novo, a legenda de antes cobriria a do corte novo e as palavras
+        que entraram sumiriam do Short e da tabela. Por isso o detalhe é refeito primeiro e, até
+        lá, `_guardar_detalhe` não copia nada.
+        """
         self._cortes[self._atual] = novo
         self._mudanca = comparar_cortes(self._palavras, antes, novo)
+        self._tela_desatualizada = True
+        try:
+            self._mostrar_detalhe(so_pontas=True)
+        finally:
+            self._tela_desatualizada = False
         self._houve_mudanca()
-        self._mostrar_detalhe(so_pontas=True)
         if avisar_da_legenda and antes.legenda and not novo.legenda:
             self._rotulo_ajuste.configure(
                 text="As correções da legenda eram de palavras que saíram do corte e foram "
@@ -2241,7 +2389,7 @@ class EditorDeCortes(ctk.CTkFrame):
 
     def _guardar_detalhe(self) -> None:
         """Copia título, descrição, hashtags e legenda da tela para o corte que estava aberto."""
-        if self._atual is None or self._carregando or not self._cortes:
+        if self._atual is None or self._carregando or self._tela_desatualizada or not self._cortes:
             return
         self._levar_a_tabela_para_a_legenda()  # o que foi editado na tabela chega à caixa antes
         corte = self._cortes[self._atual]

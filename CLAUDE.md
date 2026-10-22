@@ -150,6 +150,20 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   de texto (`xterm`; `cursor=""` herdaria a seta do sistema). A palavra sob o mouse acende (amarelo no
   marca-texto, vermelho na borracha) e só acendem as palavras que a ferramenta muda (`vale`: o marca-texto, as de
   fora; a borracha, as do Short). O arrasto é um elástico do ponto apertado até a palavra sob o mouse.
+- ARMADILHA do Studio: `EditorDeCortes` avisa a aba a cada mudança (`ao_mudar`), e a aba chama `pendentes()`, que
+  chama `_guardar_detalhe()`, que copia a caixa da legenda para o corte. Se isso rodar antes de a tela mostrar o
+  corte novo, a legenda velha cobre a nova e as palavras que entraram somem. Por isso `_depois_de_mudar` refaz o
+  detalhe ANTES de chamar `_houve_mudanca` e `_tela_desatualizada` trava `_guardar_detalhe` nesse meio tempo.
+  Os testes do editor sem aba NÃO pegam isso: teste mudanças do corte também por `AbaStudioShorts`.
+- Linhas da tabela do Short com legenda corrigida (`linhas_da_tabela`) mantêm `indices` (a posição na
+  transcrição) das palavras cujo tempo não mudou; `-1` é a palavra que a pessoa escreveu. Sem isso o marca-texto e
+  a borracha não achavam palavra nenhuma num Short com legenda corrigida.
+- Margem da tabela do Studio (`TabelaDeFrases.mostrar(..., margens=...)`, `MargemDaLinha`): igual à do Shorts livre,
+  com a barra da categoria detectada, o losango dos OUTROS Shorts e o sublinhado de suas palavras; a legenda de
+  cores é `ui/legenda_de_categorias.LegendaDeCategorias` (a mesma nos dois estúdios; `itens_da_legenda` monta os
+  chips). Recalcular o que não muda é caro: `EditorDeCortes` guarda as detecções e as palavras de cada corte
+  (`_indices_do_corte`) por carga. Rótulos que mudam ao passar o mouse vão num quadro de tamanho fixo
+  (`_quadro_info` do Shorts livre): um rótulo que cresce empurra a grade e o painel da direita pisca.
 - A tabela não tem marcador de começo nem de fim (só `corta`/`volta`, do pedaço cortado): o Short é o texto em
   branco. `TabelaDeFrases._marcas["inicio"|"fim"]` apontam a primeira e a última linha em branco (para `ir_a`).
   Depois de pintar ou apagar a vista da tabela NÃO se mexe; o duplo clique numa palavra cinza leva a ponta até ela

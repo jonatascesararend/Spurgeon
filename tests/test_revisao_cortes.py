@@ -14,6 +14,7 @@ from spurgeon.ui.revisao_cortes import (
     formatar_nota,
     formatar_total,
 )
+from tests.ambiente_grafico import criar_raiz
 from tests.test_shorts import cortes_do_sermao, gravar_transcricao, sermao_falso
 
 
@@ -29,10 +30,9 @@ def test_formatacao_da_tela():
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()

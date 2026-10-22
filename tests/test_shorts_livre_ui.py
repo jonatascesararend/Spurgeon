@@ -25,12 +25,9 @@ from spurgeon.transcricao.formato import Transcricao
 from spurgeon.ui import shorts_livre
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
 from spurgeon.ui.assincrono import Tarefas
+from spurgeon.ui.legenda_de_categorias import CHAVE_FEITOS
 from spurgeon.ui.pincel import FERRAMENTA_BORRACHA, FERRAMENTA_MARCA, FERRAMENTA_SETA
-from spurgeon.ui.shorts_livre import (
-    BUSCA_PALAVRAS,
-    CHAVE_FEITOS,
-    PainelShortsLivre,
-)
+from spurgeon.ui.shorts_livre import BUSCA_PALAVRAS, PainelShortsLivre
 from spurgeon.ui.studio_shorts import EditorDeCortes, rotulo_da_origem
 from tests.test_marcas_do_sermao import _gravar_analise
 from tests.test_studio_ferramentas import _sem_dica
@@ -728,3 +725,35 @@ def test_todo_controle_do_shorts_livre_tem_dica(painel_vivo):
         assert getattr(botao, "_dica_spurgeon", None) is not None
     for chip in p._chips.values():
         assert getattr(chip, "_dica_spurgeon", None) is not None
+
+
+# --- passar o mouse no texto não pode mexer na grade (o painel da direita "piscava") ------------
+
+
+def test_o_texto_da_frase_sob_o_mouse_nao_muda_o_tamanho_de_nada(painel, monkeypatch):
+    painel.update_idletasks()
+    antes = (painel._corpo.winfo_reqwidth(), painel._corpo.winfo_reqheight())
+    altura_do_quadro = painel._quadro_info.winfo_reqheight()
+    longo = "Frase 3 · 0:12 · já é parte de Shorts: " + "“Um título bem comprido” " * 20
+    for texto in ("", "Frase 3 · 0:12", longo):
+        monkeypatch.setattr(painel, "descrever_linha", lambda _n, texto=texto: texto)
+        painel._mostrar_a_dica(3)
+        painel.update_idletasks()
+        assert (painel._corpo.winfo_reqwidth(), painel._corpo.winfo_reqheight()) == antes
+        assert painel._quadro_info.winfo_reqheight() == altura_do_quadro  # duas linhas reservadas
+    assert len(painel._info.cget("text")) <= 180 and painel._info.cget("text").endswith("…")
+    assert painel._quadro_info.winfo_reqwidth() <= 10  # a largura vem da coluna, não do texto
+
+
+def test_a_cor_da_barra_da_margem_nao_some_dentro_do_trecho_escolhido(painel_vivo):
+    p = painel_vivo
+    texto = p._caixa._textbox
+    assert texto.tag_cget("escolhido", "foreground") == ""  # só o fundo azul, sem cor de letra
+    posicao, detectado = next((n, d) for n, d in p._categoria_da_frase.items() if n >= 6)
+    primeira = p._frases[posicao].primeira
+    p.definir_trecho(primeira - 50, primeira + 80)  # a frase fica no meio do trecho
+    assert "escolhido" in texto.tag_names(f"{posicao + 1}.0")  # a margem está dentro do azul
+    assert f"cat_{detectado.categoria}" in texto.tag_names(f"{posicao + 1}.0")
+    assert texto.tag_cget(f"cat_{detectado.categoria}", "foreground") == cor_da_categoria(
+        detectado.categoria
+    )

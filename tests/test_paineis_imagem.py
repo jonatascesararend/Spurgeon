@@ -21,16 +21,16 @@ from spurgeon.ui.painel_tratamento import PainelTratamento
 from spurgeon.ui.painel_zoom import PainelZoom
 from spurgeon.ui.presets import RepositorioDePresets
 from spurgeon.ui.quadros import FonteDeQuadros
+from tests.ambiente_grafico import criar_raiz
 
 pytestmark = pytest.mark.gui
 
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()

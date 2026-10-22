@@ -235,8 +235,17 @@ PASSOS: tuple[Passo, ...] = (
         "marca-texto realça, palavra por palavra, o que entra no Short, mesmo longe dele (a "
         "palavra sob o mouse acende em amarelo); a borracha apaga, palavra por palavra, o que "
         "sai (acende em vermelho): no meio do corte o Short pula essa parte e continua depois, "
-        "ótimo para cortar um erro de pronúncia. As palavras tiradas ficam riscadas. Os botões "
-        "de palavra e de frase, em cima e embaixo, mexem no começo e no fim.",
+        "ótimo para cortar um erro de pronúncia. As palavras tiradas ficam riscadas.",
+        alvo="studio_tabela",
+        vista=VISTA_STUDIO,
+    ),
+    Passo(
+        "As cores da tabela",
+        "A margem esquerda da tabela mostra, com uma barra colorida, o que a IA viu em cada "
+        "frase (pergunta-gancho, exortação, promessa…); a legenda de cores acima da tabela leva "
+        "ao próximo trecho de cada categoria. O losango e o sublinhado marcam o que já virou "
+        "outro Short da lista, para você não repetir o mesmo trecho. Os botões de palavra e de "
+        "frase, em cima e embaixo da tabela, mexem no começo e no fim do Short.",
         alvo="studio_tabela",
         vista=VISTA_STUDIO,
     ),

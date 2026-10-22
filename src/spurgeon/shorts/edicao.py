@@ -512,7 +512,9 @@ class LinhaDaTabela:
     tipo: Literal["fora", "dentro", "cortado", "corta", "volta"]
     tempo: float = 0.0  # onde a primeira palavra da linha foi dita, em segundos
     textos: tuple[str, ...] = ()
-    indices: tuple[int, ...] = ()  # posição de cada palavra na transcrição (vazio = não se sabe)
+    #: posição de cada palavra na transcrição; `-1` para a palavra que a pessoa escreveu e não
+    #: existe na transcrição (vazio = não se sabe nenhuma)
+    indices: tuple[int, ...] = ()
 
     @property
     def texto(self) -> str:
@@ -573,6 +575,8 @@ def linhas_da_tabela(
         return linhas
 
     dentro = palavras_do_corte(palavras, corte)
+    # as palavras da legenda que não mudaram de tempo são as da transcrição: a linha sabe qual é
+    por_tempo = {(palavras[i].inicio, palavras[i].fim): i for i in incluidas}
     escrita = corte.legenda if texto_dentro is None else texto_dentro
     corrigidas = aplicar_edicao(dentro, escrita) if escrita.strip() and dentro else dentro
     editado = [p.texto for p in corrigidas] != [p.texto for p in dentro]
@@ -607,10 +611,10 @@ def linhas_da_tabela(
                 for p in por_pedaco.get(numero_do_pedaco, []):
                     atual_p.append(p)
                     if _fecha_frase(p.texto):
-                        linhas.append(_linha_de_palavras(atual_p))
+                        linhas.append(_linha_de_palavras(atual_p, por_tempo))
                         atual_p = []
                 if atual_p:
-                    linhas.append(_linha_de_palavras(atual_p))
+                    linhas.append(_linha_de_palavras(atual_p, por_tempo))
     return linhas
 
 
@@ -627,9 +631,17 @@ def _linha_de_indices(
     )
 
 
-def _linha_de_palavras(palavras: Sequence[Palavra]) -> LinhaDaTabela:
+def _linha_de_palavras(
+    palavras: Sequence[Palavra], por_tempo: dict[tuple[float, float], int]
+) -> LinhaDaTabela:
+    """Uma linha do Short escrita pela pessoa (a legenda corrigida). As palavras que ela não
+    mexeu continuam sabendo qual é a sua na transcrição (o marca-texto e a borracha precisam)."""
+    indices = tuple(por_tempo.get((p.inicio, p.fim), -1) for p in palavras)
     return LinhaDaTabela(
-        "dentro", tempo=palavras[0].inicio, textos=tuple(p.texto for p in palavras)
+        "dentro",
+        tempo=palavras[0].inicio,
+        textos=tuple(p.texto for p in palavras),
+        indices=indices if any(i >= 0 for i in indices) else (),
     )
 
 

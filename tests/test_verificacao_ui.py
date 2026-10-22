@@ -10,6 +10,7 @@ import pytest
 from spurgeon.transcricao.verificador import Verificador
 from spurgeon.transcricao.vocabulario import carregar_vocabulario
 from spurgeon.ui.verificacao import PainelDePortugues, corpos_das_linhas, indice_do_tk
+from tests.ambiente_grafico import criar_raiz
 
 MARCA = re.compile(r"^\[(\d+:\d{2})\] ?")
 
@@ -34,10 +35,9 @@ def test_indice_do_tk_conta_linhas_a_partir_de_um():
 
 @pytest.fixture(scope="module")
 def raiz():
-    import customtkinter as ctk
 
     try:
-        janela = ctk.CTk()
+        janela = criar_raiz()
     except tkinter.TclError:
         pytest.skip("sem ambiente gráfico")
     janela.withdraw()

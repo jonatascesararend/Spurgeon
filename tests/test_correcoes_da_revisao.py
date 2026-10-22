@@ -20,6 +20,7 @@ from spurgeon.shorts.etapas import (
 )
 from spurgeon.ui.formulario import ValoresFormulario, para_opcoes
 from tests import test_shorts as base
+from tests.ambiente_grafico import criar_raiz
 from tests.test_render import corte
 
 ctx_shorts, ollama = base.ctx_shorts, base.ollama  # fixtures do arquivo de Shorts
@@ -153,7 +154,6 @@ def test_tempo_exato_da_linha_de_comando_nao_e_arredondado_ao_reabrir():
 
 def test_fim_negativo_ainda_no_campo_vale_ao_validar_o_formulario(video_teste):
     """Clicar em Iniciar não tira o foco do campo: o "-0:05" ainda está lá."""
-    import customtkinter as ctk
 
     from spurgeon.core.ffmpeg import sondar
     from spurgeon.ui.assincrono import Tarefas
@@ -161,7 +161,7 @@ def test_fim_negativo_ainda_no_campo_vale_ao_validar_o_formulario(video_teste):
     from spurgeon.ui.quadros import FonteDeQuadros
 
     try:
-        raiz = ctk.CTk()
+        raiz = criar_raiz()
     except Exception:
         pytest.skip("sem ambiente gráfico")
     raiz.withdraw()

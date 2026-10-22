@@ -747,7 +747,7 @@ Treze pedidos do autor, todos feitos e testados (o autor pediu para trabalhar a 
 9. **O programa reabre o último projeto** ao abrir (`ConfigApp.ultimo_projeto`; em silêncio, e some se a pasta não existe mais).
 10. **Shorts livre "vivo"** (`ui/shorts_livre.py`, `shorts/marcas.py`). A margem esquerda de cada frase leva a barra da cor da categoria que a IA viu no melhor trecho que a cobre; as palavras que já viraram Short ficam sublinhadas, com um losango na margem; uma legenda de cores (um chip por categoria) leva ao próximo trecho de cada uma; passar o mouse numa frase diz a categoria, a nota e os Shorts dela. Dá para montar **"frase 1 + frase 3"** pintando as duas com o marca-texto (`Trecho.fora`); a IA lê só o que o Short fala e o corte sai com saltos.
 11. **Dicas de ferramenta em todos os botões e o "?" em cada etapa** (`ui/dicas.py`, `ui/ajuda.py`): o balão aparece depois de uma pausa e some ao sair ou clicar; cada cartão tem um "?" no canto com a explicação da etapa. Os testes falham se um controle novo ficar sem dica.
-12. **Passo a passo na primeira abertura** (`ui/tutorial.py`, 27 passos): pergunta "Quer ver o passo a passo?" com a caixinha "não mostrar de novo"; um contorno amarelo marca o que cada passo explica; o rodapé da janela tem a caixinha "Mostrar o passo a passo ao abrir" e o botão "Como usar".
+12. **Passo a passo na primeira abertura** (`ui/tutorial.py`, 28 passos): pergunta "Quer ver o passo a passo?" com a caixinha "não mostrar de novo"; um contorno amarelo marca o que cada passo explica; o rodapé da janela tem a caixinha "Mostrar o passo a passo ao abrir" e o botão "Como usar".
 13. **O painel de português do Studio** ocupava 380 a 500 px à toa (a barra de rolagem da lista pede 200 px por padrão); agora tem só o tamanho do que mostra (cerca de 66 px sem avisos).
 
 #### Escolhas que fiz sozinho na rodada 1.5 (confirmar ou mudar)
@@ -793,3 +793,31 @@ Reproduzido com cliques e arrastos de mouse simulados numa janela de verdade (`e
 **Escolhas que fiz sozinho:** (38) o duplo clique numa palavra cinza continua movendo o começo ou o fim (era o
 combinado: "a seta seleciona normal e corta com 2 cliques"); (39) a borracha e o marca-texto têm o mesmo cursor
 (`xterm`), e o que os diferencia é o botão aceso e a cor do aviso.
+
+### Rodada 1.5.2 (2026-10-22): o texto que sumia no Studio e a tabela com as cores do Shorts livre
+
+Pedido (com prints do aplicativo aberto): no Studio normal, pintar a frase com o marca-texto fazia a frase **sumir**;
+o Shorts livre funcionava. Pediram a mesma experiência nos dois, com a legenda colorida de categorias, e que a
+tela do Shorts livre parasse de "dar bugs visuais" ao passar o mouse.
+
+1. **Causa do texto que sumia (um defeito meu, da rodada 1.5).** Em `EditorDeCortes._depois_de_mudar` o aviso à aba
+   (`ao_mudar` → `pendentes()` → `_guardar_detalhe()`) vinha ANTES de a caixa da legenda mostrar o corte novo; a
+   legenda velha era gravada por cima da nova e as palavras que entraram sumiam do Short e da tabela. Só acontecia
+   com a aba (nos testes do editor sozinho, não): valia para o marca-texto, a borracha, os botões de palavra e frase
+   e o desfazer, e deixava o Short com "✎ legenda" sem a pessoa ter corrigido nada. **Correção:** o detalhe é refeito
+   primeiro e `_tela_desatualizada` impede a cópia nesse meio tempo. Conferi as 18 legendas gravadas dos projetos
+   reais: todas são correções de verdade (nenhuma tem o defeito), mas **um aplicativo que estava aberto antes desta
+   correção guarda o defeito na memória: feche-o sem salvar (ou use "Descartar alterações") e abra de novo.**
+2. **A borracha não achava palavras num Short com a legenda corrigida** (14 dos 31 Shorts do projeto real): as linhas
+   do Short saíam do texto da legenda e perdiam a ligação com a transcrição. Agora cada palavra da legenda que não
+   mudou de tempo continua sabendo qual é a sua (`-1` para a que foi escrita pela pessoa).
+3. **A tabela do Studio ganhou a margem do Shorts livre:** barra colorida da categoria que a IA viu na frase, losango
+   (e sublinhado nas palavras) do que já virou OUTRO Short, e a legenda de cores acima da tabela, que leva ao próximo
+   trecho de cada categoria. O widget da legenda é o mesmo nos dois estúdios (`ui/legenda_de_categorias.py`).
+4. **Bug visual do Shorts livre ao passar o mouse:** o rótulo com o que se sabe da frase (categoria, nota, Shorts)
+   mudava de tamanho a cada frase, empurrava a coluna do texto e o painel da direita piscava. Agora o rótulo mora
+   num quadro de tamanho fixo (duas linhas, texto cortado em 180 letras). A barra da categoria também perdia a cor
+   dentro do trecho escolhido (a etiqueta azul pintava a letra de branco); agora só pinta o fundo.
+
+**Escolha que fiz sozinho:** (40) os marcadores "corta aqui" e "continua aqui" continuam na tabela do Studio (o
+Shorts livre risca as palavras no próprio texto, mas ali a tabela é uma frase por linha e é editável).

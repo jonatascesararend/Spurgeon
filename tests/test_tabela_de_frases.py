@@ -24,7 +24,7 @@ from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS, ClienteLLM
 from spurgeon.ui import studio_shorts
 from spurgeon.ui.studio_shorts import ORDEM_HORARIO, EditorDeCortes, OrigemDaPrevia
-from spurgeon.ui.tabela_de_frases import TabelaDeFrases
+from spurgeon.ui.tabela_de_frases import MargemDaLinha, TabelaDeFrases
 from tests import test_studio_shorts as base
 from tests.test_shorts import OllamaFalso, cortes_do_sermao, sermao_falso
 
@@ -77,7 +77,9 @@ def test_com_a_legenda_corrigida_as_linhas_do_corte_saem_do_texto_novo():
     editado = dentro.replace(dentro.split()[0], "corrigida", 1)
     linhas = linhas_da_tabela(palavras, corte, frases, fora=10, texto_dentro=editado)
     do_corte = [linha for linha in linhas if linha.tipo == "dentro"]
-    assert do_corte[0].textos[0] == "corrigida" and not any(x.indices for x in do_corte)
+    assert do_corte[0].textos[0] == "corrigida"
+    # a palavra trocada por outra continua sabendo qual é a sua na transcrição (a borracha precisa)
+    assert all(len(x.indices) == len(x.textos) and min(x.indices) >= 0 for x in do_corte)
     assert all(linha.texto.endswith((".", "?")) for linha in do_corte)
     assert " ".join(linha.texto for linha in do_corte) == editado
     # o mesmo texto da transcrição não conta como edição: as linhas guardam as posições
@@ -1012,3 +1014,121 @@ def test_selecionar_palavra_deixa_a_palavra_azul_na_tabela(tabela_de_pincel):
     assert caixa.get("sel.first", "sel.last") == "d4"
     assert t.selecionar_palavra(10) is True and caixa.get("sel.first", "sel.last") == "f10"
     assert t.selecionar_palavra(999) is False  # uma palavra que não está na tabela
+
+
+# --- a legenda corrigida não tira da tabela a ligação das palavras com a transcrição -------------
+
+
+def test_a_palavra_que_a_pessoa_escreveu_fica_sem_posicao_e_as_outras_continuam_com_a_sua():
+    palavras, corte = _corte_e_palavras()
+    frases = separar_frases(palavras)
+    incluidas = [p.texto for p in palavras_com_a_legenda(palavras, corte)]
+    editado = [*incluidas[:5], "palavrinha", "nova", *incluidas[5:]]  # duas palavras a mais
+    linhas = linhas_da_tabela(palavras, corte, frases, fora=5, texto_dentro=" ".join(editado))
+    do_corte = [linha for linha in linhas if linha.tipo == "dentro"]
+    todas = [
+        (texto, i)
+        for linha in do_corte
+        for texto, i in zip(linha.textos, linha.indices, strict=True)
+    ]
+    assert [i for texto, i in todas if texto in ("palavrinha", "nova")] == [-1, -1]
+    conhecidas = [i for texto, i in todas if i >= 0]
+    assert conhecidas == sorted(conhecidas) and len(conhecidas) == len(incluidas)
+
+
+@pytest.mark.gui
+def test_a_borracha_e_o_duplo_clique_acham_a_palavra_numa_linha_de_legenda_corrigida(raiz):
+    import customtkinter as ctk
+
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    t = TabelaDeFrases(
+        janela, height=200, ao_editar=lambda: None, ao_duplo_clique=print, ao_menu=print,
+        ao_pintar=lambda *a: None,
+    )  # fmt: skip
+    t.pack()
+    t.mostrar([LinhaDaTabela("dentro", 20.0, ("Dentro", "nova", "um."), (2, -1, 3))])
+    assert 2 in t._onde and 3 in t._onde and -1 not in t._onde
+    assert t.linha_da_palavra(3).tipo == "dentro"
+    assert t._pode_pintar(3, "borracha") and not t._pode_pintar(3, "marca")
+    janela.destroy()
+
+
+# --- a margem das categorias (como no texto do Shorts livre) -----------------------------------
+
+
+@pytest.fixture
+def tabela_com_margem(raiz):
+    import customtkinter as ctk
+
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    t = TabelaDeFrases(
+        janela, height=200, ao_editar=lambda: None, ao_duplo_clique=print, ao_menu=print,
+        ao_pintar=lambda *a: None,
+    )  # fmt: skip
+    t.pack(fill="both", expand=True)
+    margens = [
+        MargemDaLinha("exortacao", None, {}),
+        MargemDaLinha(None, "profecia", {2: "profecia"}),
+        MargemDaLinha("promessa", "profecia", {4: "profecia", 5: "profecia"}),
+        None,
+    ]
+    t.mostrar(_LINHAS, margens=margens)
+    yield t
+    janela.destroy()
+
+
+@pytest.mark.gui
+def test_a_margem_poe_a_barra_da_categoria_e_o_losango_dos_outros_shorts(tabela_com_margem):
+    t = tabela_com_margem
+    assert _linha(t, 1).startswith("▌  0:10") and _linha(t, 2).startswith(" ◆ 0:20")
+    assert _linha(t, 3).startswith("▌◆ 0:25") and _linha(t, 4).startswith("   0:30")
+    caixa = t._textbox
+    assert "cat_exortacao" in caixa.tag_names("1.0") and "cat_promessa" in caixa.tag_names("3.0")
+    assert "feito_profecia" in caixa.tag_names("2.1") and "feito_profecia" in caixa.tag_names("3.1")
+    assert caixa.tag_cget("cat_exortacao", "foreground") != caixa.tag_cget(
+        "cat_promessa", "foreground"
+    )
+
+
+@pytest.mark.gui
+def test_as_palavras_dos_outros_shorts_ficam_sublinhadas(tabela_com_margem):
+    caixa = tabela_com_margem._textbox
+    sublinhadas = [
+        caixa.get(de, ate)
+        for de, ate in zip(
+            caixa.tag_ranges("sub_profecia")[::2],
+            caixa.tag_ranges("sub_profecia")[1::2],
+            strict=True,
+        )
+    ]
+    assert sublinhadas == ["Dentro", "Dentro", "dois."]  # as palavras 2, 4 e 5
+
+
+@pytest.mark.gui
+def test_com_a_margem_o_texto_comeca_depois_dela_e_tudo_continua_funcionando(tabela_com_margem):
+    t = tabela_com_margem
+    assert t._colunas[:4] == [3 + 4 + 1] * 4  # margem de 3, hora de 4 e o TAB
+    assert t.posicao_da_palavra(1) == f"1.{3 + 5 + 6}"  # "um." depois de "Antes "
+    assert t.texto_dentro() == "Dentro um. Dentro dois."
+    caixa = t._textbox
+    caixa.insert("2.0", "XX")  # a margem e a hora não aceitam texto
+    caixa.insert("2.5", "XX")
+    caixa.insert(f"2.{t._colunas[1]}", "Novo ")  # o texto do Short, sim
+    assert _linha(t, 2).endswith("Novo Dentro um.") and _linha(t, 2).startswith(" ◆ 0:20")
+    caixa.delete("2.0", f"2.{t._colunas[1] + 5}")  # apagar não leva a margem nem a hora
+    assert _linha(t, 2).startswith(" ◆ 0:20\t")
+
+
+@pytest.mark.gui
+def test_sem_margens_as_linhas_comecam_na_hora_como_antes(tabela):
+    assert _linha(tabela, 1) == "0:10\tAntes um."
+    assert tabela._colunas[0] == 5
+
+
+@pytest.mark.gui
+def test_ir_para_linha_leva_a_vista_da_tabela(tabela_com_margem):
+    tabela_com_margem.ir_para_linha(3)
+    assert int(tabela_com_margem._textbox.index("@0,0").split(".")[0]) <= 3
+    tabela_com_margem.ir_para_linha(999)  # uma linha que não existe não quebra
