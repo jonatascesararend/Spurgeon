@@ -60,3 +60,6 @@ desktop.ini
 .env
 *.local.toml
 *.local.json
+
+# Registro da instalação (instalar.bat)
+instalacao.log

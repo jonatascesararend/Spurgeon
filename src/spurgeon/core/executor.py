@@ -23,6 +23,21 @@ _PRIORIDADE_BAIXA = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 COMANDOS = ("pausar", "retomar", "cancelar")
 
 
+def python_do_trabalhador() -> str:
+    """O interpretador que roda o trabalhador.
+
+    O atalho do aplicativo abre a janela pelo `pythonw.exe` (sem console). O trabalhador conversa
+    por stdin/stdout e escreve erros em stderr, então ele usa o `python.exe` do mesmo ambiente;
+    `CREATE_NO_WINDOW` (abaixo) impede que isso abra uma janela preta.
+    """
+    atual = Path(sys.executable)
+    if atual.name.lower() == "pythonw.exe":
+        com_console = atual.with_name("python.exe")
+        if com_console.is_file():
+            return str(com_console)
+    return str(atual)
+
+
 class ExecutorProjeto:
     """Um processamento por vez. Os eventos chegam por `eventos()` (sem bloquear)."""
 
@@ -50,7 +65,7 @@ class ExecutorProjeto:
         escrever_json_atomico(arquivo_config, config.model_dump(mode="json"))
 
         comando = [
-            sys.executable, "-X", "utf8", "-m", "spurgeon.core.trabalhador",
+            python_do_trabalhador(), "-X", "utf8", "-m", "spurgeon.core.trabalhador",
             "--projeto", str(pastas.raiz), "--config", str(arquivo_config),
         ]  # fmt: skip
         if aprovar:

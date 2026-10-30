@@ -98,8 +98,9 @@ Gerenciamento: **Python 3.11**, `uv` com lockfile, `pyproject.toml` com extras o
 Spurgeon/
 ├── Projeto.md
 ├── pyproject.toml
-├── iniciar.bat                 ← abre o app (v1: sem .exe)
-├── instalar.bat                ← cria o ambiente e baixa os modelos
+├── iniciar.bat                 ← abre o app pelo pythonw (sem console; v1: sem .exe)
+├── instalar.bat                ← chama o instalar.ps1
+├── instalar.ps1                ← instala o que faltar num PC zerado (Visual C++, uv, Python, FFmpeg, Ollama, modelos, atalhos)
 ├── src/spurgeon/
 │   ├── core/                   ← config, log, estado, hardware, pipeline, ffmpeg, mapa de tempo
 │   ├── audio/                  ← extrair, limpar, normalizar
@@ -576,6 +577,32 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 * Diarização (identificar vários falantes).
 * Empacotamento em `.exe` (PyInstaller), a fazer depois para distribuir a outros PCs.
 * Legendas em outros idiomas.
+* **Trocar o CustomTkinter por outra interface (só anotado em 2026-10-23; nada foi decidido nem alterado).**
+  A análise do código mostrou que a dor vem de duas camadas. Do CustomTkinter (desenha cada widget num Canvas):
+  piscar a cada `configure`, rastros na rolagem, `CTkLabel` vazio pedindo 28 px e `CTkFrame`/`CTkScrollbar` pedindo
+  200 px (remendos em `ui/estabilidade.py` e `ui/rolagem.py`). Do próprio Tk: o `Text` não tem gancho de entrada
+  (`ui/tabela_de_frases.py` renomeia o comando Tcl do widget; `ui/pincel.py`), não há mídia (`ui/miniplayer.py` usa
+  FFmpeg→RGB + `winsound`) e os testes de janela precisam de tela. Alternativas que ficam no Tk (ttk + sv-ttk)
+  só curam a primeira camada.
+  * **Candidata: PySide6 (Qt, Widgets, não QML).** `QTextEdit`/`QTextCursor`/`QTextCharFormat` e `eventFilter` para
+    o editor de palavras, `QMediaPlayer` para a prévia, `QProcess` + sinais para o trabalhador, `QUndoStack` para o
+    desfazer, modo `offscreen` para testes sem tela. O 6.11.x declara suporte a Python 3.11 no Windows; licença
+    LGPL; usar `PySide6-Essentials`. Outras opções avaliadas: ttk + sv-ttk (menor risco, mantém os hacks do `Text`),
+    web com pywebview/NiceGUI (precisa de JavaScript e gasta RAM que o Whisper e o Ollama disputam), wxPython,
+    PyQt6 (GPL); Flet, Dear PyGui, Kivy, Toga e Textual foram descartadas.
+  * **Cuidado:** o Qt só ajuda de verdade se a migração refizer o desenho, não se for trocar `CTkButton` por
+    `QPushButton`. As armadilhas de desenho do CLAUDE.md (`_guardar_detalhe`, dois lugares de edição da legenda,
+    `_reordenar` contra `_atualizar_linha`, estado dentro dos widgets em `EditorDeCortes`, 2.462 linhas) viajariam junto.
+    Ideia: `QAbstractListModel` para os cortes e `QTextDocument` como fonte única da tabela e da legenda. O Qt traz
+    armadilhas próprias (objeto C++ já apagado, objetos sem referência coletados, widget mexido em thread derruba o
+    processo).
+  * **Como decidir quando chegar a hora:** prova de 2 a 3 dias num `spurgeon gui-qt` experimental, ao lado da
+    interface atual (Tk e Qt não convivem na mesma janela), só com a tabela de frases (marca-texto, borracha,
+    sublinhado) e o miniplayer. Se as duas ficarem claramente mais simples e estáveis, portar o resto tela por tela
+    (Studio Shorts primeiro), mantendo o CustomTkinter até haver paridade.
+  * **Para uma suíte profissional, o toolkit é a menor parte:** faltam instalador e assinatura (PyInstaller/Nuitka,
+    `pyside6-deploy`), atualização automática, relatório de falhas e conferir as licenças da distribuição (o
+    build do FFmpeg com libx264 é GPL; o LGPL do Qt pede um build em pasta, não arquivo único).
 
 ---
 
@@ -821,3 +848,51 @@ tela do Shorts livre parasse de "dar bugs visuais" ao passar o mouse.
 
 **Escolha que fiz sozinho:** (40) os marcadores "corta aqui" e "continua aqui" continuam na tabela do Studio (o
 Shorts livre risca as palavras no próprio texto, mas ali a tabela é uma frase por linha e é editável).
+
+### Rodada 1.6 (2026-10-30): aviso de contato, abertura sem console e instalador para um PC zerado
+
+Pedido (com print do canto superior direito da janela): (1) mostrar ali "Sugestões ou contribuições (Pix):
+jonatascesararend@gmail.com", com o e-mail como link `mailto:`; (2) ao abrir o programa ficava uma janela do prompt
+de comando aberta no fundo; (3) conferir e **testar** se o instalar vai mesmo instalar tudo num PC sem nada.
+
+1. **Aviso de contato** (`ui/contato.py`, `AvisoDeContato`): na faixa das abas, encostado à direita, nas duas abas.
+   O e-mail é um link azul sublinhado (`mailto:`); o botão direito copia o endereço (a chave Pix, para quem não tem
+   programa de e-mail). Tem dica de ferramenta, como todo controle.
+2. **Console:** a causa era o `iniciar.bat` rodar `uv run …`, que mantém o `cmd` vivo enquanto o programa roda. Agora
+   `iniciar.bat` e o atalho abrem `.venv\Scripts\pythonw.exe -m spurgeon gui` (o `.bat` fecha em ~0,1 s). Sem console,
+   `sys.stdout`/`sys.stderr` são `None`; por isso `core/sem_console.py` manda a saída para
+   `%LOCALAPPDATA%\Spurgeon\Logs\interface.log` (recomeça acima de 1 MB) e um erro de importação ou uma queda mostra uma
+   caixa. O trabalhador continua no `python.exe` (`executor.python_do_trabalhador`), com `CREATE_NO_WINDOW`.
+3. **O instalar.bat antigo NÃO instalava tudo:** só fazia `uv sync` e exigia Python, uv, FFmpeg e Ollama já instalados
+   (o COMO_INSTALAR mandava rodar um `winget install` antes, que num Windows 10 sem winget nem existe). Agora o
+   `instalar.bat` chama o `instalar.ps1`, que confere e instala, sem precisar do winget:
+   Visual C++ (instalador oficial, UAC, só se faltar), uv `0.13.0` e FFmpeg `9.0.2` full (zips fixados por SHA-256 em
+   `modelos\ferramentas\`, só se o PC não tiver um FFmpeg com `ass`, `loudnorm`, `zscale`, `tonemap`, `libx264` e
+   `aac`), Python 3.11 e as bibliotecas (`uv sync`; o uv baixa o Python se não houver), Ollama (instalador oficial,
+   assinatura conferida), modelos (`spurgeon baixar-modelos`: Whisper, deep-filter e o modelo do Ollama, com pergunta) e
+   atalhos na Área de Trabalho e no Menu Iniciar (`recursos/studio_spurgeon.ico`). Opções: `-SemModelos`, `-SemOllama`,
+   `-SemAtalhos`, `-Silencioso`. Rodar de novo é seguro (pula o que existe e recria um `.venv` que veio de outro PC).
+4. **Dois defeitos achados pelo teste:** (a) **pasta com acento** (`C:\Users\João\…`, comum no Brasil): o Python 3.11
+   lê os `.pth` com a página de código local (cp1252), o `.pth` da instalação editável perdia o caminho e
+   `import spurgeon` falhava em silêncio, ou seja, o programa inteiro não abriria. O instalador grava um
+   `sitecustomize.py` no `site-packages` que acha `src` pela posição do arquivo. (b) O `ffmpeg -filters` do FFmpeg 9 usa
+   2 colunas de flags (antes 3); a minha primeira checagem recusava o FFmpeg bom.
+5. **Como foi testado.** *De verdade*, numa cópia isolada do projeto ("PC zerado" simulado: `PATH` só com as pastas do
+   Windows, perfil e `TEMP` numa pasta com espaço e acento, sem Python do sistema): download do uv e do FFmpeg com hash
+   conferido, Python 3.11.17 gerenciado, 76 pacotes, `spurgeon doctor` sem `[ERRO]`, deep-filter e Whisper tiny
+   baixados, programa aberto pelo `iniciar.bat` e pelo atalho **sem console**, executor dentro do `pythonw.exe`,
+   processamento ponta a ponta (limpeza de áudio, transcrição, legendas, vídeo longo) com o FFmpeg baixado, nova
+   execução (idempotência) e recuperação de um `.venv` de outro PC. *Com simulação* (funções trocadas por mentiras):
+   a instalação do Visual C++ (UAC negado, códigos 0/3010/1638/erro, assinatura inválida) e a do Ollama (silenciosa, falha,
+   assinatura adulterada), além do download com hash e retomada. **Não foi possível testar de verdade:** a instalação
+   real do Visual C++ e do Ollama (este PC já os tem, e o instalador do Ollama mexeria no Ollama de verdade), o UAC,
+   um Windows 10 real e um PC sem internet. Para a prova completa: Windows Sandbox ou uma VM com Windows limpo, rodando
+   `instalar.bat`.
+
+**Escolhas que fiz sozinho na rodada 1.6 (confirmar ou mudar):** (41) o instalador baixa os programas direto, sem
+`winget`, com versões e hashes fixados (o `winget` pode faltar e falha por conta própria); (42) a cópia do FFmpeg da
+pasta do programa vale mais que a do PATH, e só é baixada se o PC não tiver um FFmpeg completo; (43) os modelos são
+baixados na instalação (com pergunta), os das opções: Whisper `large-v3-turbo` e `qwen3:8b`; (44) o botão direito no
+e-mail o copia; (45) o ícone do atalho é um quadrado azul com "play" que gerei (troque `recursos/studio_spurgeon.ico`
+se quiser outro); (46) o `iniciar.bat` não usa mais `uv run`, então não atualiza as bibliotecas sozinho: depois de
+atualizar o programa, rode o `instalar.bat` de novo.

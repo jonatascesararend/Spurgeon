@@ -5,61 +5,59 @@ O que é: programa para Windows que transforma um sermão longo em vídeo limpo,
 legendas e Shorts. Tudo roda no seu computador, sem enviar nada para a internet.
 
 Você precisa de:
-  - Windows 10 ou 11
-  - uns 20 GB livres no disco (programas e modelos) + uns 6 GB para cada sermão
-  - internet só na instalação e na primeira vez que usar cada recurso
-    (depois funciona offline)
+  - Windows 10 (versão 1809 ou mais nova) ou Windows 11, de 64 bits
+  - uns 20 GB livres no disco (programas e modelos de IA) + uns 6 GB para cada sermão
+  - internet durante a instalação (depois o programa funciona offline)
+
+Não precisa instalar mais nada antes: o instalador cuida de tudo.
 
 
-PASSO 1 - Instalar os programas (uma vez só)
---------------------------------------------
-Clique no menu Iniciar, digite "PowerShell", abra e cole esta linha inteira:
-
-    winget install Python.Python.3.11 astral-sh.uv Gyan.FFmpeg Ollama.Ollama
-
-Aperte Enter e aceite o que o Windows perguntar. Quando terminar, FECHE o
-PowerShell (isso é importante, para o Windows enxergar os programas novos).
-
-Se o "winget" não existir no seu Windows, instale um por um:
-  Python 3.11 ..... https://www.python.org/downloads/release/python-3119/
-  uv .............. https://docs.astral.sh/uv/getting-started/installation/
-  FFmpeg .......... https://www.gyan.dev/ffmpeg/builds/  (versão "full")
-  Ollama .......... https://ollama.com/download
-
-
-PASSO 2 - Pôr a pasta do Studio Spurgeon no computador
+PASSO 1 - Pôr a pasta do Studio Spurgeon no computador
 ------------------------------------------------------
 Copie a pasta "Spurgeon" inteira para um lugar fácil, por exemplo:
 
-    C:\Users\SeuNome\Documents\Spurgeon
+    C:\Spurgeon
 
-Evite pastas dentro do OneDrive ou do "Arquivos de Programas".
+Evite pastas dentro do OneDrive ou do "Arquivos de Programas". (Nome de pasta com
+acento ou espaço funciona, por exemplo C:\Users\João\Documents\Spurgeon.)
 
 
-PASSO 3 - Instalar o Studio Spurgeon
-------------------------------------
+PASSO 2 - Instalar
+------------------
 Dentro da pasta Spurgeon, dê DOIS CLIQUES em:
 
     instalar.bat
 
-Uma janela preta vai baixar e montar tudo (leva alguns minutos). No final ela
-confere o ambiente. Procure estas linhas:
+Uma janela preta vai instalar o que faltar no seu computador. Leva de 10 a 40
+minutos, conforme a internet (os modelos de IA são grandes). O que ele confere e,
+se faltar, instala:
+
+  1. Visual C++ da Microsoft (o Windows pede permissão de administrador, só se
+     ele ainda não estiver instalado)
+  2. Python 3.11 e todas as bibliotecas do programa (ficam dentro da pasta)
+  3. FFmpeg (fica dentro da pasta, em modelos\ferramentas)
+  4. Ollama, a IA local que escolhe os Shorts (~1,7 GB)
+  5. Os modelos de IA: transcrição Whisper (~1,6 GB), limpeza de áudio (~26 MB) e
+     o modelo do Ollama (~5 GB). Ele pergunta antes; se responder "n", o programa
+     baixa cada um sozinho na primeira vez que precisar.
+  6. Atalho "Studio Spurgeon" na Área de Trabalho e no Menu Iniciar
+
+Pode rodar o instalador de novo quando quiser: o que já está instalado é pulado.
+
+No final ele confere o ambiente. Procure estas linhas:
 
     [OK]     tudo certo
-    [AVISO]  não impede de usar (por exemplo: "Ollama: modelo ainda não baixado")
+    [AVISO]  não impede de usar (por exemplo: "Modelo Whisper ainda não baixado")
     [ERRO]   precisa corrigir antes de continuar (a própria linha diz o quê)
 
-Quando aparecer "Ambiente pronto", aperte uma tecla para fechar.
+Quando aparecer "Tudo pronto", aperte uma tecla para fechar.
 
 
-PASSO 4 - Abrir o programa
+PASSO 3 - Abrir o programa
 --------------------------
-Dê DOIS CLIQUES em:
-
-    iniciar.bat
-
-Pode criar um atalho dele na Área de Trabalho (botão direito > Enviar para >
-Área de trabalho).
+Use o atalho "Studio Spurgeon" da Área de Trabalho (ou dê DOIS CLIQUES em
+iniciar.bat). O programa abre sem janela preta; a primeira abertura demora um
+pouco mais.
 
 
 COMO USAR (resumo)
@@ -76,17 +74,6 @@ Dica: a qualidade "Máxima" é lenta (horas). Para testar, escolha "Rápido" na
 aba "3 · Revisão e opções".
 
 
-PRIMEIRA VEZ (downloads automáticos)
-------------------------------------
-Na primeira vez que usar cada recurso, o programa baixa sozinho (precisa de
-internet e demora):
-  - modelo de transcrição (Whisper) .......... cerca de 1,6 GB
-  - modelo da IA dos Shorts (Ollama) ......... cerca de 5 GB
-  - filtro de limpeza de áudio ............... cerca de 26 MB
-
-Se preferir baixar a IA antes, abra o PowerShell e rode:  ollama pull qwen3:8b
-
-
 OPCIONAL - Introdução e vinheta
 -------------------------------
 Para usar introdução e vinheta final, ponha seus vídeos na pasta "recursos" com
@@ -98,17 +85,30 @@ os nomes:
 (ou escolha outros arquivos direto na tela, em "Introdução e vinheta final").
 
 
+OPÇÕES DO INSTALADOR (para quem quiser)
+---------------------------------------
+Abra o PowerShell na pasta Spurgeon e rode, por exemplo:
+
+    .\instalar.bat -SemModelos      não baixa os modelos de IA agora
+    .\instalar.bat -SemOllama       não instala o Ollama (sem ele não há Shorts)
+    .\instalar.bat -SemAtalhos      não cria os atalhos
+    .\instalar.bat -Silencioso      sem perguntas
+
+
 SE ALGO DEU ERRADO
 ------------------
-- "uv não foi encontrado": faltou fechar e abrir o terminal depois do Passo 1.
-  Feche tudo e rode o instalar.bat de novo.
-- Ollama: abra o programa Ollama pelo menu Iniciar e deixe-o rodando.
+- A instalação parou com [ERRO]: leia a linha, corrija (quase sempre é internet,
+  espaço em disco ou a permissão de administrador negada) e rode o instalar.bat
+  de novo. O registro fica no arquivo "instalacao.log", na pasta Spurgeon.
+- O programa não abre: o motivo aparece numa caixa e fica gravado em
+  %LOCALAPPDATA%\Spurgeon\Logs\interface.log (cole esse caminho no Explorer).
+- Ollama: abra o programa Ollama pelo Menu Iniciar e deixe-o rodando.
 - Pouco espaço em disco: libere espaço ou escolha outra "Pasta de projetos".
 - O processamento parou ou o PC desligou: abra o programa, escolha o mesmo vídeo
   (ou use "Abrir projeto...") e clique em Iniciar: ele continua de onde parou.
-- Para ver o que aconteceu, abra o arquivo "processamento.log" dentro da pasta
-  do projeto.
+- Para ver o que aconteceu num processamento, abra o arquivo "processamento.log"
+  dentro da pasta do projeto.
 - Para conferir o ambiente a qualquer hora: abra o PowerShell na pasta Spurgeon e
-  rode:  uv run spurgeon doctor
+  rode:  .venv\Scripts\python -m spurgeon doctor
 
 Mais detalhes: README.md e Projeto.md.

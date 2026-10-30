@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 from spurgeon import __version__
@@ -17,6 +18,7 @@ from spurgeon.core.hardware import detectar_hardware, recomendar, threads_para_u
 from spurgeon.core.pipeline import ResultadoPipeline
 from spurgeon.core.preflight import Nivel, executar_preflight, tem_erro
 from spurgeon.core.projeto import criar_ou_retomar_projeto, data_gravacao
+from spurgeon.core.sem_console import preparar_sem_console
 from spurgeon.core.trabalhador import executar as executar_projeto
 from spurgeon.ui.formulario import (
     ErroFormulario,
@@ -65,6 +67,25 @@ def _hardware(_: argparse.Namespace) -> int:
     for aviso in rec.avisos:
         print(f"  ! {aviso}")
     return 0
+
+
+def _baixar_modelos(args: argparse.Namespace) -> int:
+    """Baixa os modelos de IA (a instalação chama isto); 1 se algum download falhou."""
+    from spurgeon.core.instalacao import baixar_modelos
+
+    resultados = baixar_modelos(
+        carregar_config(),
+        limpeza_de_audio=not args.sem_limpeza,
+        whisper=None if args.sem_whisper else args.whisper,
+        ollama=None if args.sem_ollama else args.ollama,
+    )
+    falhas = [r for r in resultados if not r.ok]
+    if falhas:
+        print(
+            "\nO que não foi baixado agora o aplicativo baixa sozinho na primeira vez que "
+            "precisar (com internet)."
+        )
+    return 1 if falhas else 0
 
 
 def _config(_: argparse.Namespace) -> int:
@@ -243,15 +264,40 @@ def _acordado(args: argparse.Namespace) -> int:
     return 0
 
 
+def _avisar_na_tela(mensagem: str, log: Path | None) -> None:
+    """Sem console (aberto pelo atalho) ninguém lê o stderr: mostra o problema numa caixa."""
+    print(mensagem, file=sys.stderr)
+    if log is None:
+        return
+    with contextlib.suppress(Exception):  # sem Tk não há o que fazer além do log
+        import tkinter
+        from tkinter import messagebox
+
+        raiz = tkinter.Tk()
+        raiz.withdraw()
+        messagebox.showerror("Studio Spurgeon", f"{mensagem}\n\nDetalhes em:\n{log}", parent=raiz)
+        raiz.destroy()
+
+
 def _gui(_: argparse.Namespace) -> int:
+    log = preparar_sem_console()
     try:
         from spurgeon.ui.app import executar
-    except ImportError:
-        print(
-            "A interface precisa do customtkinter. Instale com: uv sync --extra ui", file=sys.stderr
+    except ImportError as erro:
+        _avisar_na_tela(
+            "A interface não pôde ser aberta: falta um componente "
+            f"({erro}). Rode o instalar.bat de novo.",
+            log,
         )
         return 1
-    return executar()
+    try:
+        return executar()
+    except Exception:
+        if log is None:
+            raise  # com console, o traceback aparece onde a pessoa está olhando
+        traceback.print_exc()
+        _avisar_na_tela("O Studio Spurgeon encontrou um erro e precisou fechar.", log)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -270,6 +316,16 @@ def main(argv: list[str] | None = None) -> int:
         funcao=_hardware
     )
     sub.add_parser("config", help="mostra a configuração atual").set_defaults(funcao=_config)
+
+    baixar = sub.add_parser(
+        "baixar-modelos", help="baixa os modelos de IA (Whisper, Ollama, limpeza de áudio)"
+    )
+    baixar.add_argument("--whisper", default="", help="modelo do Whisper (padrão: o das opções)")
+    baixar.add_argument("--ollama", default="", help="modelo do Ollama (padrão: o das opções)")
+    baixar.add_argument("--sem-whisper", action="store_true", help="não baixa o Whisper")
+    baixar.add_argument("--sem-ollama", action="store_true", help="não baixa o modelo do Ollama")
+    baixar.add_argument("--sem-limpeza", action="store_true", help="não baixa o deep-filter")
+    baixar.set_defaults(funcao=_baixar_modelos)
     sub.add_parser("gui", help="abre a interface gráfica").set_defaults(funcao=_gui)
 
     acordado = sub.add_parser("acordado", help="impede o PC de suspender, apagar a tela e bloquear")

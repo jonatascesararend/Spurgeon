@@ -1,14 +1,16 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Studio Spurgeon
 
-where uv >nul 2>nul
-if errorlevel 1 (
-    echo [ERRO] O "uv" nao foi encontrado. Rode o instalar.bat primeiro.
+rem Abre o aplicativo pelo pythonw.exe (sem console) e fecha esta janela na hora.
+rem Se algo der errado ao abrir, o erro aparece numa caixa e fica no interface.log
+rem (%LOCALAPPDATA%\Spurgeon\Logs). Para ver a saida no terminal: uv run spurgeon gui
+if not exist ".venv\Scripts\pythonw.exe" (
+    echo O Studio Spurgeon ainda nao foi instalado nesta pasta.
+    echo De dois cliques em instalar.bat e depois abra este arquivo de novo.
+    echo.
     pause
     exit /b 1
 )
 
-uv run --no-dev --extra ui --extra transcricao --extra shorts spurgeon gui
-if errorlevel 1 pause
+start "" ".venv\Scripts\pythonw.exe" -m spurgeon gui

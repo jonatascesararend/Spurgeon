@@ -67,27 +67,25 @@ progresso e um log detalhado) e **Studio Shorts**.
 
 ## Requisitos
 
-- Windows 10/11
-- Python 3.11 e [uv](https://docs.astral.sh/uv/)
-- [FFmpeg](https://ffmpeg.org/) (com `libass`, `libzimg`, `loudnorm` e `libx264`)
-- [Ollama](https://ollama.com/) para os Shorts (o aplicativo baixa o modelo `qwen3:8b`, ~5 GB,
-  na primeira vez)
+- Windows 10 (1809 ou mais novo) ou 11, de 64 bits
 - Espaço em disco: para um sermão de 65 min, ~6 GB livres além do vídeo original, mais ~20 GB
-  para o ambiente e os modelos (Whisper ~1,6 GB, Ollama ~5 GB)
-- Internet na instalação e na primeira vez de cada recurso (os modelos são baixados sozinhos)
+  para o ambiente e os modelos (Whisper ~1,6 GB, Ollama e seu modelo ~7 GB)
+- Internet na instalação (depois o programa roda offline)
 
-Instalação rápida com o `winget` (passo a passo em [COMO_INSTALAR.txt](COMO_INSTALAR.txt)):
-
-```
-winget install Python.Python.3.11 astral-sh.uv Gyan.FFmpeg Ollama.Ollama
-```
+**Não é preciso instalar nada antes:** o `instalar.bat` confere e instala o que faltar (Visual C++,
+uv, Python 3.11 com as bibliotecas, FFmpeg, Ollama e os modelos de IA); veja os passos em
+[COMO_INSTALAR.txt](COMO_INSTALAR.txt). Tudo, menos o Visual C++ e o Ollama (que têm instalador
+próprio), fica dentro da pasta do programa.
 
 ## Como usar
 
 ```
-instalar.bat          cria o ambiente e confere as dependências (rode uma vez)
-iniciar.bat           abre o aplicativo
+instalar.bat          instala o que faltar e confere o ambiente (rode uma vez; pode repetir)
+iniciar.bat           abre o aplicativo (sem janela preta; o instalador também cria um atalho)
 ```
+
+Opções do instalador (`.\instalar.bat -SemModelos -SemOllama -SemAtalhos -Silencioso`): veja o
+[COMO_INSTALAR.txt](COMO_INSTALAR.txt).
 
 Coloque o vídeo em `Downloads/` (ou escolha outro arquivo), marque o que quer gerar e clique em
 **Iniciar**. A janela mostra o tempo estimado antes de começar. Na qualidade padrão (Máxima),
@@ -109,6 +107,7 @@ uv run spurgeon processar "Downloads\video.MOV" --limpar-audio --normalizar --sh
                               --introducao-arquivo A.mp4  --vinheta-arquivo B.mp4
 uv run spurgeon doctor        verifica o ambiente (pré-verificação)
 uv run spurgeon hardware      mostra o hardware detectado e a recomendação
+uv run spurgeon baixar-modelos  baixa o Whisper, o filtro de áudio e o modelo do Ollama (o instalador chama)
 uv run spurgeon acordado      mantém o PC acordado e sem bloquear por algumas horas
 uv run pytest                 roda os testes
 uv run ruff check .           análise estática
@@ -123,6 +122,8 @@ Para experimentar a tela sem processar de verdade: `SPURGEON_DEMO=1` antes de ab
 - **Pausar** vale no próximo ponto seguro da etapa (o log confirma na hora e diz quando); **Cancelar**
   também. O projeto sempre pode ser retomado.
 - `uv run spurgeon doctor` confere o ambiente (FFmpeg, Ollama, modelos, espaço em disco).
+- A janela abre sem console: se o programa não abrir, o motivo aparece numa caixa e fica em
+  `%LOCALAPPDATA%\Spurgeon\Logs\interface.log`; a instalação grava o `instalacao.log` na pasta do programa.
 - As preferências da janela ficam em `%LOCALAPPDATA%\Spurgeon\config.toml`.
 - Os testes (`uv run pytest`, ~30 min, parte deles abre a janela) não mexem nesse arquivo.
 

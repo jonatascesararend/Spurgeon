@@ -200,6 +200,34 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
 - Commits: o hook do pre-commit chama `uv`; no Git Bash ponha a pasta do winget do uv no PATH.
   No Git Bash não há `python`, e heredocs com apóstrofos às vezes quebram: use a ferramenta de
   edição ou um script para textos assim.
+- Abertura SEM console: `iniciar.bat` e o atalho abrem `.venv\Scripts\pythonw.exe -m spurgeon gui`. Sob o
+  pythonw `sys.stdout`/`sys.stderr` são `None`: `core/sem_console.preparar_sem_console` (chamado por `__main__._gui`)
+  manda a saída para `%LOCALAPPDATA%\Spurgeon\Logs\interface.log` e `_avisar_na_tela` mostra erro fatal numa caixa.
+  O trabalhador roda no `python.exe` ao lado (`executor.python_do_trabalhador`) e TODO `subprocess` do app usa
+  `CREATE_NO_WINDOW` (um filho de console aberto por um processo sem console abre uma janela preta). Nunca avise o
+  usuário só por `print`/stderr. Testes que simulam o pythonw põem `sys.stdout = None` DENTRO do teste (o pytest
+  recoloca o dele ao começar cada fase).
+- Instalador: `instalar.bat` só chama o `instalar.ps1` (PowerShell 5.1 vem em todo Windows). O `.ps1` é UTF-8 COM BOM
+  (sem BOM o 5.1 lê os acentos errado) e CRLF. Cada passo (`Garantir-*`) confere antes e é idempotente: Visual C++
+  (UAC, só se faltar), uv (zip fixado em `modelos\ferramentas\uv`), `uv sync`, FFmpeg (zip fixado por SHA-256 em
+  `modelos\ferramentas\ffmpeg`; `core/ffmpeg.localizar_binario` procura ali ANTES do PATH), Ollama (instalador
+  oficial, `/VERYSILENT`), modelos (`spurgeon baixar-modelos`, `core/instalacao.py`) e atalhos (pythonw, sem
+  console). Trocou a versão ou a URL do uv/FFmpeg? Refaça o SHA-256 (`tests/test_instalador.py` confere o formato).
+  `. .\instalar.ps1` só carrega as funções (não instala), o que dá para testar com `Start-Process`/`Baixar-Arquivo`
+  trocados por funções de mentira. A saída do `ffmpeg -filters` já mudou de 3 para 2 colunas de flags: não conte
+  colunas.
+- Pasta com acento (`C:\Users\João\…`): o Python 3.11 lê os `.pth` com a página de código local (cp1252), então o
+  `.pth` da instalação editável perde o caminho e `import spurgeon` falha em silêncio. O instalador grava um
+  `sitecustomize.py` no `site-packages` do `.venv` que acha `src` pela posição do arquivo (marcador "Criado pelo
+  instalar.ps1"). O código usa `raiz_repositorio()` (posição do pacote), por isso NÃO dá para trocar por
+  `--no-editable`, e o `dev-mode-exact` do hatch exige o pacote `editables` em tempo de execução.
+- Testar o instalador num "PC zerado" sem VM: cópia do projeto (sem `.venv`/`modelos`) numa pasta com espaço e acento,
+  `PATH` só com as pastas do Windows, `USERPROFILE`/`LOCALAPPDATA`/`APPDATA`/`TEMP` numa pasta de teste e
+  `UV_PYTHON_PREFERENCE=only-managed`; rode com `-Silencioso -SemOllama -SemAtalhos` (o Ollama e os atalhos mexem no
+  PC de verdade). `platformdirs` ignora variáveis de ambiente: para isolar o `config.toml` use um `.pth` no
+  `site-packages` do `.venv` de teste que troque `platformdirs.user_config_path`.
+- Aviso do canto superior direito: `ui/contato.py` (`AvisoDeContato`, e-mail como `mailto:`; botão direito copia),
+  dentro da faixa das abas, visível nas duas abas.
 
 ## Hardware desta máquina (alvo da v1)
 

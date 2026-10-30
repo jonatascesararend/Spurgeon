@@ -45,6 +45,7 @@ from spurgeon.ui import dialogos, dicas
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
 from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
+from spurgeon.ui.contato import AvisoDeContato
 from spurgeon.ui.estimativa import (
     EstimadorTempo,
     estimar_render_s,
@@ -175,6 +176,8 @@ class JanelaPrincipal(ctk.CTk):
             faixa, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
         )
         self._abas.pack(side="left")
+        self.contato = AvisoDeContato(faixa)  # no canto direito, nas duas abas
+        self.contato.pack(side="right", padx=(12, 2))
         self._faixa_das_abas = faixa
         dica_do_seletor(
             self._abas,

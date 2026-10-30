@@ -24,15 +24,28 @@ from spurgeon.core.processos import vigiar_processo
 from spurgeon.core.sinais import SinalControle
 
 _SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_AJUDA_INSTALAR = "winget install Gyan.FFmpeg"
+_AJUDA_INSTALAR = "rode o instalar.bat (ou: winget install Gyan.FFmpeg)"
+
+
+def pasta_das_ferramentas() -> Path:
+    """Onde o instalar.bat guarda o que baixa para o aplicativo (FFmpeg, deep-filter, uv)."""
+    from spurgeon.core.config import raiz_repositorio
+
+    return raiz_repositorio() / "modelos" / "ferramentas"
 
 
 @cache
 def localizar_binario(nome: str) -> Path:
-    """Acha `ffmpeg` ou `ffprobe`: variável SPURGEON_<NOME>, PATH, ou pasta do winget."""
+    """Acha `ffmpeg` ou `ffprobe`: variável SPURGEON_<NOME>, pasta do aplicativo, PATH ou winget.
+
+    A cópia da pasta do aplicativo vem primeiro: o instalar.bat só a baixa quando o FFmpeg do
+    computador não tem os recursos que o programa usa (ou não existe).
+    """
     manual = os.environ.get(f"SPURGEON_{nome.upper()}")
     if manual and Path(manual).exists():
         return Path(manual)
+    for candidato in sorted((pasta_das_ferramentas() / "ffmpeg").glob(f"**/bin/{nome}.exe")):
+        return candidato
     achado = shutil.which(nome)
     if achado:
         return Path(achado)

@@ -3,26 +3,21 @@ setlocal
 cd /d "%~dp0"
 title Studio Spurgeon - Instalacao
 
-where uv >nul 2>nul
-if errorlevel 1 (
-    echo [ERRO] O "uv" nao foi encontrado.
-    echo Instale com: winget install astral-sh.uv
-    echo Depois feche este terminal, abra de novo e rode instalar.bat.
+rem O trabalho todo esta no instalar.ps1 (PowerShell vem em todo Windows 10/11).
+rem Opcoes: -SemModelos  -SemOllama  -SemAtalhos  -Silencioso
+set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%POWERSHELL%" (
+    echo [ERRO] O PowerShell nao foi encontrado neste Windows.
     pause
     exit /b 1
 )
 
-echo Criando o ambiente Python 3.11 e instalando as dependencias...
-uv sync --no-dev --extra ui --extra transcricao --extra shorts
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0instalar.ps1" %*
+set "CODIGO=%ERRORLEVEL%"
+
+echo %* | find /i "-Silencioso" >nul
 if errorlevel 1 (
-    echo [ERRO] Falha ao instalar as dependencias.
+    echo.
     pause
-    exit /b 1
 )
-
-echo.
-echo Verificando o ambiente...
-uv run spurgeon doctor
-
-echo.
-pause
+exit /b %CODIGO%
