@@ -726,10 +726,13 @@ def test_o_rodape_tem_o_hardware_a_esquerda_e_os_controles_a_direita(tela):
     assert int(rodape.grid_info()["columnspan"]) == 2  # a linha ocupa a janela toda
     colunas = {
         "rotulo": int(tela._rodape.grid_info()["column"]),
+        "atualizacao": int(tela._check_atualizacao.grid_info()["column"]),
         "caixa": int(tela._check_tutorial.grid_info()["column"]),
         "botao": int(tela._botao_tutorial.grid_info()["column"]),
     }
-    assert colunas == {"rotulo": 0, "caixa": 1, "botao": 2}
+    assert colunas == {"rotulo": 0, "atualizacao": 1, "caixa": 2, "botao": 3}
+    assert tela._check_atualizacao.cget("text") == "Procurar atualizações ao abrir"
+    assert len(_dica_de(tela._check_atualizacao)) > 40
     assert "e" in tela._botao_tutorial.grid_info()["sticky"]
     assert tela._check_tutorial.cget("text") == "Mostrar o passo a passo ao abrir"
     assert tela._botao_tutorial.cget("text") == "Como usar"
@@ -944,7 +947,12 @@ def test_executar_abre_a_janela_com_a_oferta_e_a_reabertura(monkeypatch):
 
     monkeypatch.setattr(app_mod, "JanelaPrincipal", Falsa)
     assert app_mod.executar() == 0
-    assert chamadas[0] == {"args": (), "oferecer_tutorial": True, "reabrir_ultimo": True}
+    assert chamadas[0] == {
+        "args": (),
+        "oferecer_tutorial": True,
+        "reabrir_ultimo": True,
+        "verificar_atualizacao": True,  # só a abertura de verdade consulta o GitHub
+    }
     assert chamadas[1] == {"mainloop": True}
 
 

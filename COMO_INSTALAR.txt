@@ -9,7 +9,8 @@ Você precisa de:
   - uns 20 GB livres no disco (programas e modelos de IA) + uns 6 GB para cada sermão
   - internet durante a instalação (depois o programa funciona offline)
 
-Não precisa instalar mais nada antes: o instalador cuida de tudo.
+Não precisa instalar mais nada antes: o instalador cuida de tudo (inclusive o uv e o
+Ollama; se um guia antigo mandou rodar "winget install" de alguma coisa, ignore).
 
 
 PASSO 1 - Pôr a pasta do Studio Spurgeon no computador
@@ -21,12 +22,20 @@ Copie a pasta "Spurgeon" inteira para um lugar fácil, por exemplo:
 Evite pastas dentro do OneDrive ou do "Arquivos de Programas". (Nome de pasta com
 acento ou espaço funciona, por exemplo C:\Users\João\Documents\Spurgeon.)
 
+Se baixou a pasta como ZIP pelo navegador, ANTES de extrair clique com o botão direito
+no arquivo .zip > Propriedades > marque "Desbloquear" > OK. Isso evita quase todos os
+avisos do Windows descritos mais abaixo.
+
 
 PASSO 2 - Instalar
 ------------------
 Dentro da pasta Spurgeon, dê DOIS CLIQUES em:
 
     instalar.bat
+
+Se o Windows mostrar "O Windows protegeu o computador" (SmartScreen), clique em
+"Mais informações" e depois em "Executar assim mesmo": o instalar.bat é um arquivo de
+texto que só chama o instalar.ps1, e ambos podem ser lidos no Bloco de Notas.
 
 Uma janela preta vai instalar o que faltar no seu computador. Leva de 10 a 40
 minutos, conforme a internet (os modelos de IA são grandes). O que ele confere e,
@@ -43,6 +52,10 @@ se faltar, instala:
   6. Atalho "Studio Spurgeon" na Área de Trabalho e no Menu Iniciar
 
 Pode rodar o instalador de novo quando quiser: o que já está instalado é pulado.
+Se uma instalação automática falhar (o uv, o Ollama...), ele tenta de outro jeito (pelo
+winget da Microsoft) e só depois pede para você instalar à mão; no fim ele lista o que
+ficou pendente. Você não precisa rodá-lo três vezes: uma vez basta, e repetir só serve
+para o que ficou na lista de pendências.
 
 No final ele confere o ambiente. Procure estas linhas:
 
@@ -85,6 +98,20 @@ os nomes:
 (ou escolha outros arquivos direto na tela, em "Introdução e vinheta final").
 
 
+ATUALIZAR O PROGRAMA
+--------------------
+Ao abrir, o Studio Spurgeon consulta o GitHub (precisa de internet; sem ela, ele só
+segue sem avisar nada). Se houver versão nova, aparece no alto da janela uma faixa
+amarela piscando: "Atualização disponível". Clique em "Atualizar agora": ele baixa a
+versão nova, troca os arquivos do programa e reabre sozinho. Seus projetos, modelos,
+configurações, marca d'água e vocabulário não são mexidos. Se a versão nova usar
+bibliotecas novas, uma janela do instalador roda antes de o programa reabrir.
+Para não consultar o GitHub, desmarque "Procurar atualizações ao abrir" no rodapé.
+
+A atualização automática só vale numa pasta copiada ou baixada em ZIP. Numa pasta
+clonada com git (que tem a pasta oculta ".git"), use "git pull".
+
+
 OPÇÕES DO INSTALADOR (para quem quiser)
 ---------------------------------------
 Abra o PowerShell na pasta Spurgeon e rode, por exemplo:
@@ -97,6 +124,13 @@ Abra o PowerShell na pasta Spurgeon e rode, por exemplo:
 
 SE ALGO DEU ERRADO
 ------------------
+- O Windows bloqueou um programa (SmartScreen, Controle Inteligente de Aplicativos ou
+  o antivírus): o instalador avisa se o Controle Inteligente de Aplicativos (Windows 11)
+  estiver ligado. Ele bloqueia programas sem assinatura digital, como o Python, o FFmpeg
+  e o uv. Para desligar: Segurança do Windows > Controle de aplicativos e do navegador >
+  Configurações do Controle Inteligente de Aplicativos > Desativado. Em algumas versões
+  do Windows ele só volta a ser ligado reinstalando o sistema; se preferir manter, deixe
+  uma exceção no antivírus para a pasta do Studio Spurgeon.
 - A instalação parou com [ERRO]: leia a linha, corrija (quase sempre é internet,
   espaço em disco ou a permissão de administrador negada) e rode o instalar.bat
   de novo. O registro fica no arquivo "instalacao.log", na pasta Spurgeon.

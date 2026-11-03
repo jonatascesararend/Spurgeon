@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from spurgeon.shorts.dados import (
 )
 from spurgeon.shorts.llm import ClienteLLM, ErroLLM
 from spurgeon.shorts.selecao import RESERVAS_PADRAO, montar_cortes, nome_de_arquivo
+from spurgeon.shorts.titulos import LIMITE_DE_SEMELHANCA, Problema, mais_parecido
 from spurgeon.transcricao.formato import Transcricao, segundos_para_rotulo
 
 #: na pré-seleção os candidatos podem se sobrepor mais, para a IA comparar variações do mesmo trecho
@@ -39,7 +40,6 @@ SOBREPOSICAO_NA_PRE_SELECAO = 0.6
 _CONTEXTO_ANTES = 300
 _CONTEXTO_DEPOIS = 200
 MODELO_SPACY = "pt_core_news_md"
-_TEMPERATURAS_DE_VARIACAO = (0.5, 0.9)
 
 
 def carregar_spacy():
@@ -317,6 +317,21 @@ def gravar_cortes(caminho: Path, cortes: list[Corte]) -> None:
     escrever_json_atomico(caminho, [c.para_dict() for c in cortes])
 
 
+def gravar_postado(caminho: Path, id_do_corte: int, postado: bool, quando: str = "") -> bool:
+    """Grava só o "já postado" de um corte no arquivo, sem levar junto o resto do que a tela tem
+    em edição. Devolve False se o corte não está no arquivo (ainda não foi salvo)."""
+    if not caminho.exists():
+        return False
+    cortes = carregar_cortes(caminho)
+    for corte in cortes:
+        if corte.id == id_do_corte:
+            corte.postado = postado
+            corte.postado_em = quando if postado else ""
+            gravar_cortes(caminho, cortes)
+            return True
+    return False
+
+
 def cortes_manuais_guardados(caminho: Path) -> list[Corte]:
     """Os cortes criados à mão (Shorts livre) que já estão no arquivo, para não se perderem.
 
@@ -406,12 +421,21 @@ class SelecionarShorts(Etapa):
             antigo = anteriores.get(corte.id)
             if antigo is not None and not _mesmo_trecho(antigo, corte):
                 antigo = None  # a análise foi refeita: o número é o mesmo, mas o trecho é outro
+            if antigo is not None and antigo.postado:
+                corte.postado, corte.postado_em = True, antigo.postado_em  # não se perde ao refazer
             guardado = cache.get(str(corte.id))
+            if antigo is not None and _repete_um_ja_criado(antigo.titulo, titulos, guardado, marca):
+                ctx.log.info("O título do corte %d repete um já criado; criando outro.", numero)
+                antigo = guardado = None
             if antigo is not None:
                 corte.titulo, corte.descricao = antigo.titulo, antigo.descricao
                 corte.hashtags = antigo.hashtags
                 corte.slug = nome_de_arquivo(antigo.slug or antigo.titulo, usados)
-            elif guardado is not None and guardado["marca"] == marca:
+            elif (
+                guardado is not None
+                and guardado["marca"] == marca
+                and not _repete_um_ja_criado(guardado["titulo"], titulos, guardado, marca)
+            ):
                 corte.titulo, corte.descricao = guardado["titulo"], guardado["descricao"]
                 corte.hashtags = guardado["hashtags"]
                 corte.slug = nome_de_arquivo(guardado["slug"] or guardado["titulo"], usados)
@@ -422,7 +446,7 @@ class SelecionarShorts(Etapa):
                     intervalo_s=30.0,
                     quando_pausa="quando a IA responder sobre este corte (cerca de 1 min)",
                 ):
-                    meta = self._metadados_sem_repetir(cliente, sermao, corte, titulos)
+                    meta = self._metadados_sem_repetir(cliente, sermao, corte, titulos, ctx)
                 corte.titulo = meta.titulo.strip()
                 corte.descricao = meta.descricao.strip()
                 corte.hashtags = meta.hashtags
@@ -446,9 +470,14 @@ class SelecionarShorts(Etapa):
             titulos.append(corte.titulo)
             ctx.progresso(numero / len(cortes))
 
-    def _metadados_sem_repetir(self, cliente, sermao: str, corte: Corte, titulos: list[str]):
+    def _metadados_sem_repetir(
+        self, cliente, sermao: str, corte: Corte, titulos: list[str], ctx: ContextoProjeto
+    ):
+        def recusado(titulo: str, problema: Problema) -> None:
+            ctx.log.info("Título recusado (%s): “%s” %s.", problema.tipo, titulo, problema.motivo)
+
         return metadados_sem_repetir(
-            cliente, sermao, corte.texto, corte.categoria, corte.duracao, titulos
+            cliente, sermao, corte.texto, corte.categoria, corte.duracao, titulos, recusado
         )
 
 
@@ -459,32 +488,37 @@ def metadados_sem_repetir(
     categoria: str,
     duracao_s: float,
     titulos: Sequence[str],
+    ao_recusar: Callable[[str, Problema], None] | None = None,
 ):
-    """Pede os metadados e, se o título repetir um já criado, tenta de novo mais solto."""
+    """Pede os metadados e confere o título: se for igual, parecido demais com um já criado ou
+    genérico, pede só o título de novo, dizendo à IA o que estava errado (até algumas vezes; se
+    nenhum servir, fica o melhor). O nome do arquivo acompanha o título que ficou."""
     meta = cliente.metadados(sermao, texto, categoria, duracao_s, titulos_usados=titulos)
-    conhecidos = {_chave_do_titulo(t) for t in titulos}
-    for temperatura in _TEMPERATURAS_DE_VARIACAO:
-        if _chave_do_titulo(meta.titulo) not in conhecidos:
-            break
-        meta = cliente.metadados(
-            sermao,
-            texto,
-            categoria,
-            duracao_s,
-            titulos_usados=titulos,
-            temperatura=temperatura,
-        )
+    escolha = cliente.melhorar_titulo(
+        meta.titulo, sermao, texto, categoria, duracao_s, titulos, ao_recusar
+    )
+    if escolha.problema is not None and ao_recusar is not None:
+        ao_recusar(escolha.titulo, escolha.problema)  # ficou assim mesmo: o log mostra
+    if escolha.titulo != meta.titulo:
+        meta = meta.model_copy(update={"titulo": escolha.titulo, "slug": escolha.titulo})
     return meta
+
+
+def _repete_um_ja_criado(
+    titulo: str, titulos: Sequence[str], guardado: dict[str, Any] | None, marca: str
+) -> bool:
+    """O título que a IA criou antes (e que a pessoa não mexeu) é igual ou parecido demais com um
+    já criado neste sermão? Títulos que a pessoa escreveu ou editou nunca são trocados."""
+    veio_da_ia = (
+        guardado is not None and guardado.get("marca") == marca and guardado.get("titulo") == titulo
+    )
+    return veio_da_ia and mais_parecido(titulo, titulos)[1] >= LIMITE_DE_SEMELHANCA
 
 
 def _mesmo_trecho(a: Corte, b: Corte, minimo: float = 0.8) -> bool:
     """Os dois cortes cobrem (quase) o mesmo trecho do sermão? Um corte editado ainda conta."""
     comum = min(a.fim, b.fim) - max(a.inicio, b.inicio)
     return comum > 0 and comum / max(min(a.duracao, b.duracao), 0.1) >= minimo
-
-
-def _chave_do_titulo(titulo: str) -> str:
-    return re.sub(r"\W+", " ", titulo.casefold()).strip()
 
 
 def _marca_do_texto(texto: str) -> str:

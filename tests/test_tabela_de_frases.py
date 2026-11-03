@@ -779,7 +779,12 @@ def _cliente_llm(falso, **kwargs):
 @pytest.mark.parametrize(
     ("campo", "resposta", "esperado"),
     [
-        ("titulo", {"titulo": "  Por que confiar? "}, "Por que confiar?"),
+        # um título de uma palavra só seria recusado como genérico (e a IA, chamada de novo)
+        (
+            "titulo",
+            {"titulo": "  Por que confiar na promessa de Deus? "},
+            "Por que confiar na promessa de Deus?",
+        ),
         ("descricao", {"descricao": " Um resumo. "}, "Um resumo."),
         ("hashtags", {"hashtags": ["shorts", "#fé", "fé", "  "]}, ["#shorts", "#fé"]),
     ],
@@ -794,11 +799,13 @@ def test_refazer_devolve_so_o_campo_pedido(campo, resposta, esperado):
 
 
 def test_refazer_o_titulo_pede_um_diferente_dos_ja_usados_e_so_ele():
-    falso = OllamaFalso([{"titulo": "Outro título"}, {"descricao": "Resumo."}])
+    falso = OllamaFalso([{"titulo": "Calvino e a soberania de Deus"}, {"descricao": "Resumo."}])
     cliente = _cliente_llm(falso)
     cliente.refazer("titulo", "S", "texto", "outra", 40.0, ["Título A", "Título B"])
     prompt = falso.chamadas[0]["messages"][1]["content"]
-    assert "Título A" in prompt and "Título B" in prompt and "diferente" in prompt
+    assert "Título A" in prompt and "Título B" in prompt
+    assert "NÃO pode repetir nem lembrar" in prompt  # pede um título diferente dos já usados
+    assert len(falso.chamadas) == 1  # o título serviu: não foi preciso pedir outro
     cliente.refazer("descricao", "S", "texto", "outra", 40.0, ["Título A"])
     assert "Título A" not in falso.chamadas[1]["messages"][1]["content"]
 

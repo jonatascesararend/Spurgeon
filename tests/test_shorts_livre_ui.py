@@ -21,6 +21,7 @@ from spurgeon.shorts.edicao import indices_incluidos
 from spurgeon.shorts.etapas import carregar_cortes
 from spurgeon.shorts.livre import ContextoDaIA, Trecho
 from spurgeon.shorts.llm import MetadadosLLM
+from spurgeon.shorts.titulos import Escolha
 from spurgeon.transcricao.formato import Transcricao
 from spurgeon.ui import shorts_livre
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
@@ -52,6 +53,9 @@ class ClienteDeMentira:
             hashtags=["#shorts", "#graca"],
             slug="titulo-a-mao",
         )
+
+    def melhorar_titulo(self, titulo, *_args, **_kwargs):
+        return Escolha(titulo, None, 0)  # o título de mentira já serve
 
     def descarregar(self):
         self.descarregado = True

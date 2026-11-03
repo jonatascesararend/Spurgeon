@@ -17,6 +17,11 @@
     Nada é instalado fora da pasta do projeto, exceto o Visual C++ e o Ollama (que têm instalador
     próprio). Precisa de internet. Não precisa ser administrador (só o Visual C++ pede permissão).
 
+    Não é preciso instalar o uv nem o Ollama antes: se o download direto falhar, o instalador tenta
+    o winget (da Microsoft) sozinho. Também tira dos arquivos do programa a marca "baixado da
+    internet" que o SmartScreen do Windows usa para bloquear, e avisa se o Controle Inteligente de
+    Aplicativos do Windows 11 estiver ligado (ele bloqueia programas sem assinatura digital).
+
 .PARAMETER SemModelos
     Não baixa os modelos de IA agora; o aplicativo os baixa sozinho na primeira vez que precisar.
 .PARAMETER SemOllama
@@ -25,13 +30,20 @@
     Não cria atalhos na Área de Trabalho nem no Menu Iniciar.
 .PARAMETER Silencioso
     Sem perguntas: assume "sim" em tudo.
+.PARAMETER AguardarPid
+    Antes de começar, espera o programa com este número de processo fechar (a atualização pelo
+    próprio programa usa isto: o Windows não deixa trocar arquivos de um programa aberto).
+.PARAMETER Abrir
+    No fim, se deu certo, abre o Studio Spurgeon (a atualização pelo programa usa isto).
 #>
 [CmdletBinding()]
 param(
     [switch]$SemModelos,
     [switch]$SemOllama,
     [switch]$SemAtalhos,
-    [switch]$Silencioso
+    [switch]$Silencioso,
+    [int]$AguardarPid = 0,
+    [switch]$Abrir
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,7 +101,7 @@ function Baixar-Arquivo {
     if ($Sha256 -and (Test-Path -LiteralPath $Destino) -and ((Hash-De $Destino) -eq $Sha256)) { return }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destino) | Out-Null
     $parcial = "$Destino.baixando"
-    for ($tentativa = 1; $tentativa -le 2; $tentativa++) {
+    for ($tentativa = 1; $tentativa -le 3; $tentativa++) {
         Dizer "  Baixando $Nome ..."
         $feito = $false
         $curl = Join-Path $env:SystemRoot 'System32\curl.exe'   # mostra o progresso e retoma
@@ -104,16 +116,17 @@ function Baixar-Arquivo {
                 Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $parcial
                 $feito = $true
             } catch {
-                if ($tentativa -ge 2) {
+                if ($tentativa -ge 3) {
                     throw "Não foi possível baixar $Nome ($($_.Exception.Message)). Confira a internet e rode o instalador de novo."
                 }
+                Start-Sleep -Seconds (3 * $tentativa)
             }
         }
         if ($feito -and $Sha256 -and ((Hash-De $parcial) -ne $Sha256)) {
             Dizer '  O arquivo baixado não confere com o esperado; baixando de novo.' 'Yellow'
             Remove-Item -LiteralPath $parcial -Force -ErrorAction SilentlyContinue
             $feito = $false
-            if ($tentativa -ge 2) { throw "O arquivo de $Nome baixou corrompido duas vezes. Tente de novo mais tarde." }
+            if ($tentativa -ge 3) { throw "O arquivo de $Nome baixou corrompido três vezes. Tente de novo mais tarde." }
         }
         if ($feito) { break }
     }
@@ -124,6 +137,60 @@ function Extrair-Zip([string]$Zip, [string]$Pasta) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     if (Test-Path -LiteralPath $Pasta) { Remove-Item -LiteralPath $Pasta -Recurse -Force }
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $Pasta)
+    Desbloquear-Pasta $Pasta
+}
+
+function Desbloquear-Pasta([string]$Pasta) {
+    # Arquivos que vieram da internet por um navegador (ou por um ZIP baixado) levam a marca "baixado
+    # da internet", e é ela que faz o SmartScreen do Windows bloquear. Tirar a marca não muda o
+    # conteúdo; sem marca, o arquivo é tratado como qualquer outro do computador.
+    if (-not (Test-Path -LiteralPath $Pasta)) { return }
+    try {
+        Get-ChildItem -LiteralPath $Pasta -Recurse -File -ErrorAction SilentlyContinue |
+            Unblock-File -ErrorAction SilentlyContinue
+    } catch { }
+}
+
+function Desbloquear-O-Programa {
+    # Só os arquivos pequenos do programa (código, scripts, recursos); os modelos de IA não têm marca.
+    try {
+        Get-ChildItem -LiteralPath $Raiz -File -ErrorAction SilentlyContinue |
+            Unblock-File -ErrorAction SilentlyContinue
+    } catch { }
+    foreach ($sub in 'src', 'recursos') { Desbloquear-Pasta (Join-Path $Raiz $sub) }
+}
+
+function Esperar-O-Programa-Fechar {
+    if ($AguardarPid -le 0) { return }
+    Dizer '  Esperando o Studio Spurgeon fechar para atualizar os arquivos dele ...'
+    try { Wait-Process -Id $AguardarPid -Timeout 90 -ErrorAction Stop } catch { }
+    if (Get-Process -Id $AguardarPid -ErrorAction SilentlyContinue) {
+        Aviso 'O Studio Spurgeon ainda está aberto; se a instalação reclamar de arquivos em uso, feche-o e rode o instalar.bat de novo.'
+    }
+}
+
+function Conferir-A-Protecao-Do-Windows {
+    # Controle Inteligente de Aplicativos (Windows 11): 0 = desligado, 1 = ligado, 2 = em avaliação.
+    try {
+        $estado = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
+            -Name VerifiedAndReputablePolicyState -ErrorAction Stop).VerifiedAndReputablePolicyState
+    } catch { return }
+    if ($estado -in 1, 2) {
+        Aviso 'O "Controle Inteligente de Aplicativos" do Windows está ligado: ele bloqueia programas sem assinatura digital, como o Python, o FFmpeg e o uv que este instalador baixa.'
+        Aviso 'Se o Windows bloquear algo, desligue em: Segurança do Windows > Controle de aplicativos e do navegador > Configurações do Controle Inteligente de Aplicativos > Desativado. Em algumas versões do Windows ele só volta a ser ligado reinstalando o sistema.'
+    }
+}
+
+
+# --- winget (plano B quando o download direto falha) --------------------------------------------
+function Instalar-Pelo-Winget([string]$Id, [string]$Nome) {
+    # O winget (da Microsoft) vem no Windows 11 e em Windows 10 atualizados; se faltar, não há plano B.
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { return $false }
+    Dizer "  Tentando instalar $Nome pelo winget ..."
+    try {
+        & winget.exe install --id $Id -e --silent --accept-package-agreements --accept-source-agreements
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
 }
 
 
@@ -218,12 +285,28 @@ function Achar-Uv {
 function Garantir-Uv {
     $uv = Achar-Uv
     if ($uv) { $script:Uv = $uv; Ok "uv encontrado: $uv"; return }
-    $zip = Join-Path $PastaFerramentas 'uv.zip'
-    Baixar-Arquivo -Url $UvUrl -Destino $zip -Sha256 $UvSha256 -Nome "uv $UvVersao (16 MB)"
-    Extrair-Zip $zip (Join-Path $PastaFerramentas 'uv')
-    Remove-Item -LiteralPath $zip -Force
     $uv = Join-Path $PastaFerramentas 'uv\uv.exe'
-    if (-not (Uv-Funciona $uv)) { throw "O uv baixado não funcionou ($uv)." }
+    try {
+        $zip = Join-Path $PastaFerramentas 'uv.zip'
+        Baixar-Arquivo -Url $UvUrl -Destino $zip -Sha256 $UvSha256 -Nome "uv $UvVersao (16 MB)"
+        Extrair-Zip $zip (Join-Path $PastaFerramentas 'uv')
+        Remove-Item -LiteralPath $zip -Force
+        if (-not (Uv-Funciona $uv)) {
+            throw "o uv baixado não abriu (o Windows ou o antivírus pode ter bloqueado: $uv)"
+        }
+    } catch {
+        Aviso "O download direto do uv não deu certo ($($_.Exception.Message))."
+        if (-not (Instalar-Pelo-Winget 'astral-sh.uv' 'o uv')) {
+            throw "Não foi possível instalar o uv: $($_.Exception.Message)"
+        }
+        $uv = Achar-Uv
+        if (-not $uv) {
+            throw 'O uv foi instalado pelo winget, mas não foi encontrado. Feche esta janela e rode o instalar.bat de novo.'
+        }
+        $script:Uv = $uv
+        Ok "uv instalado pelo winget: $uv"
+        return
+    }
     $script:Uv = $uv
     Ok "uv $UvVersao instalado em $uv"
 }
@@ -372,12 +455,22 @@ function Garantir-Ollama {
         if ($assinatura.Status -in 'HashMismatch', 'NotTrusted') {
             throw 'o instalador baixado não passou na conferência da assinatura digital'
         }
-        Dizer '  Instalando o Ollama ...'
-        $processo = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES' -Wait -PassThru
+        Dizer '  Instalando o Ollama (pode levar alguns minutos) ...'
+        # Sem -Wait: no fim o instalador abre o aplicativo do Ollama, que fica rodando na bandeja, e o
+        # -Wait do PowerShell 5.1 espera por esse aplicativo também (a instalação parecia travada).
+        $processo = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES' -PassThru
+        $null = $processo.Handle   # sem isto o ExitCode pode vir vazio
+        if (-not $processo.WaitForExit(20 * 60 * 1000)) {
+            Stop-Process -Id $processo.Id -Force -ErrorAction SilentlyContinue
+            throw 'o instalador do Ollama demorou mais de 20 minutos'
+        }
         if ($processo.ExitCode -ne 0) { throw "o instalador terminou com o código $($processo.ExitCode)" }
     } catch {
-        Pendencia "O Ollama não foi instalado ($($_.Exception.Message)). Os Shorts precisam dele: instale em https://ollama.com/download e rode o instalar.bat de novo."
-        return
+        Aviso "A instalação direta do Ollama não deu certo ($($_.Exception.Message))."
+        if (-not (Instalar-Pelo-Winget 'Ollama.Ollama' 'o Ollama') -and -not (Achar-Ollama)) {
+            Pendencia "O Ollama não foi instalado. Os Shorts precisam dele: instale em https://ollama.com/download (ou, no PowerShell: winget install Ollama.Ollama) e rode o instalar.bat de novo."
+            return
+        }
     } finally {
         Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
     }
@@ -433,8 +526,12 @@ try {
     Dizer '=== Studio Spurgeon - instalação ===' 'Cyan'
     Dizer "Pasta: $Raiz"
 
+    Esperar-O-Programa-Fechar
+    Desbloquear-O-Programa
+
     Passo 'Conferindo o computador'
     Conferir-Computador
+    Conferir-A-Protecao-Do-Windows
     if (-not (Perguntar 'Instalar agora? (faltando algo, serão baixados até ~2 GB, mais ~7 GB de modelos de IA)')) {
         Dizer 'Instalação cancelada.'
         exit 2
@@ -475,7 +572,14 @@ try {
     } else {
         Dizer '=== Tudo pronto ===' 'Green'
     }
-    if ($SemAtalhos) { Dizer 'Para abrir o programa: dê dois cliques em iniciar.bat.' }
+    if ($script:Pendencias.Count -gt 0) {
+        Dizer 'O que ficou pendente acima não impede de abrir o programa. Para tentar de novo, rode o instalar.bat: ele pula o que já está pronto.' 'Gray'
+    }
+    if ($Abrir) {
+        Dizer 'Abrindo o Studio Spurgeon ...'
+        Start-Process -FilePath $Pyw -ArgumentList '-m', 'spurgeon', 'gui' -WorkingDirectory $Raiz
+    }
+    elseif ($SemAtalhos) { Dizer 'Para abrir o programa: dê dois cliques em iniciar.bat.' }
     else { Dizer 'Para abrir o programa: use o atalho "Studio Spurgeon" da Área de Trabalho (ou o iniciar.bat).' }
     exit 0
 } catch {

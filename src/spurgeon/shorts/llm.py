@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from spurgeon.core.erros import ErroFerramenta
 from spurgeon.core.ollama import URL_OLLAMA
 from spurgeon.shorts.dados import CATEGORIAS, Avaliacao
+from spurgeon.shorts.titulos import Escolha, Problema, Recusa, escolher_titulo
 
 _TENTATIVAS = 3
 TEMPERATURA_PADRAO = 0.1
@@ -78,6 +79,18 @@ mal interpretado teologicamente (parecer que o pregador diz o contrário do que 
 descreva o risco em uma frase curta.
 - motivo: uma frase curta (até 20 palavras) justificando a nota."""
 
+#: o que se pede de um título, no pedido completo e no pedido só do título. Sem exemplos de
+#: títulos (a IA os copia): só o que um bom título é e o que ele não pode ser.
+REGRAS_DO_TITULO = (
+    "até 60 caracteres, em português do Brasil, fiel ao que o trecho diz, sem exagero, sem CAIXA "
+    "ALTA e sem aspas. O título tem de ser ESPECÍFICO: nomeie a ideia central, a pergunta, o "
+    "personagem ou o texto bíblico que só aparecem neste trecho, com palavras que estão nele. "
+    "Não escreva um título genérico, sobre o tema geral do sermão (Deus, a Palavra, o pecado, a "
+    "graça…), que serviria para qualquer outra parte, nem um que apenas repita o título do "
+    "sermão. Varie a forma: uma pergunta, uma afirmação direta, o contraste entre duas ideias ou "
+    "uma frase do próprio pregador; não abra todos os títulos do mesmo jeito."
+)
+
 PROMPT_METADADOS = """\
 Sermão: {sermao}
 
@@ -85,20 +98,22 @@ TRECHO ({duracao:.0f} segundos, categoria "{categoria}"):
 {trecho}
 
 {usados}Crie os dados para publicar este trecho como YouTube Short:
-- titulo: até 60 caracteres, em português do Brasil, uma frase natural e completa (uma pergunta \
-ou uma afirmação direta) que desperte curiosidade sobre o ASSUNTO ESPECÍFICO deste trecho, com \
-palavras que aparecem nele. Fiel ao que o trecho diz, sem exagero, sem CAIXA ALTA e sem aspas. \
-Não escreva um título genérico que serviria para qualquer parte do sermão.
+- titulo: {regras_do_titulo}
 - descricao: 1 ou 2 frases (até 220 caracteres) resumindo o trecho, sem inventar nada que não \
 esteja nele.
 - hashtags: de 4 a 6, em português, cada uma começando com # e sem espaços; inclua #shorts.
 - slug: de 2 a 5 palavras minúsculas, sem acentos, separadas por hífen, para o nome do arquivo."""
 
 _BLOCO_USADOS = (
-    "Títulos já criados para outros trechos deste sermão (o novo deve ser diferente deles):\n"
-    "{titulos}\n\n"
+    "Títulos já criados para outros trechos deste sermão. O novo NÃO pode repetir nem lembrar "
+    "nenhum deles: use outras palavras-chave, outro ângulo e outra abertura:\n{titulos}\n\n"
 )
-_MAXIMO_DE_TITULOS_NO_PROMPT = 12
+_BLOCO_RECUSADOS = (
+    "Para ESTE trecho, estes títulos já foram recusados. Escreva um diferente de todos eles e que "
+    "evite o problema apontado:\n{recusados}\n\n"
+)
+#: o prompt leva os títulos mais recentes (cada um custa uns 15 tokens)
+_MAXIMO_DE_TITULOS_NO_PROMPT = 30
 
 #: o que a pessoa pode pedir de novo, um por vez, a partir do texto que o Short tem agora
 CAMPOS_REFAZIVEIS = ("titulo", "descricao", "hashtags")
@@ -109,16 +124,10 @@ Sermão: {sermao}
 TRECHO ({duracao:.0f} segundos, categoria "{categoria}"):
 {trecho}
 
-{usados}{pedido}"""
+{usados}{recusados}{pedido}"""
 
 _PEDIDOS = {
-    "titulo": (
-        "Crie o título para publicar este trecho como YouTube Short: até 60 caracteres, em "
-        "português do Brasil, uma frase natural e completa (uma pergunta ou uma afirmação direta) "
-        "que desperte curiosidade sobre o ASSUNTO ESPECÍFICO deste trecho, com palavras que "
-        "aparecem nele. Fiel ao que o trecho diz, sem exagero, sem CAIXA ALTA e sem aspas. Não "
-        "escreva um título genérico que serviria para qualquer parte do sermão."
-    ),
+    "titulo": (f"Crie o título para publicar este trecho como YouTube Short: {REGRAS_DO_TITULO}"),
     "descricao": (
         "Crie a descrição para publicar este trecho como YouTube Short: 1 ou 2 frases (até 220 "
         "caracteres) em português do Brasil resumindo o trecho, sem inventar nada que não esteja "
@@ -196,6 +205,21 @@ _ESQUEMA_DO_CAMPO: dict[str, type[BaseModel]] = {
     "descricao": DescricaoLLM,
     "hashtags": HashtagsLLM,
 }
+
+
+def _bloco_dos_usados(titulos: Sequence[str]) -> str:
+    recentes = [t for t in titulos if t.strip()][-_MAXIMO_DE_TITULOS_NO_PROMPT:]
+    if not recentes:
+        return ""
+    return _BLOCO_USADOS.format(titulos="\n".join(f"- {t}" for t in recentes))
+
+
+def _bloco_dos_recusados(recusas: Sequence[Recusa]) -> str:
+    if not recusas:
+        return ""
+    return _BLOCO_RECUSADOS.format(
+        recusados="\n".join(f"- “{titulo}”: {motivo}" for titulo, motivo in recusas)
+    )
 
 
 class ErroLLM(ErroFerramenta):
@@ -291,13 +315,10 @@ class ClienteLLM:
         titulos_usados: Sequence[str] = (),
         temperatura: float = TEMPERATURA_PADRAO,
     ) -> MetadadosLLM:
-        usados = ""
-        if titulos_usados:
-            recentes = list(titulos_usados)[-_MAXIMO_DE_TITULOS_NO_PROMPT:]
-            usados = _BLOCO_USADOS.format(titulos="\n".join(f"- {t}" for t in recentes))
         prompt = PROMPT_METADADOS.format(
-            sermao=sermao, trecho=trecho, categoria=categoria, duracao=duracao_s, usados=usados
-        )
+            sermao=sermao, trecho=trecho, categoria=categoria, duracao=duracao_s,
+            usados=_bloco_dos_usados(titulos_usados), regras_do_titulo=REGRAS_DO_TITULO,
+        )  # fmt: skip
         return self._perguntar(prompt, MetadadosLLM, temperatura)
 
     def refazer(
@@ -311,20 +332,64 @@ class ClienteLLM:
         temperatura: float = TEMPERATURA_DE_REFAZER,
     ) -> str | list[str]:
         """Cria de novo só um dado do Short (`titulo`, `descricao` ou `hashtags`), a partir do texto
-        que ele tem agora. Devolve o texto, ou a lista de hashtags."""
+        que ele tem agora. Devolve o texto, ou a lista de hashtags.
+
+        O título nunca volta igual a um dos `titulos_usados`, parecido demais com ele ou genérico:
+        se o primeiro não servir, a IA é avisada do motivo e tenta de novo (`melhorar_titulo`)."""
         if campo not in CAMPOS_REFAZIVEIS:
             raise ValueError(f"campo desconhecido: {campo}")
-        usados = ""
-        if campo == "titulo" and titulos_usados:
-            recentes = list(titulos_usados)[-_MAXIMO_DE_TITULOS_NO_PROMPT:]
-            usados = _BLOCO_USADOS.format(titulos="\n".join(f"- {t}" for t in recentes))
+        if campo == "titulo":
+            primeiro = self._titulo_novo(
+                sermao, trecho, categoria, duracao_s, titulos_usados, (), temperatura
+            )
+            return self.melhorar_titulo(
+                primeiro, sermao, trecho, categoria, duracao_s, titulos_usados
+            ).titulo
         prompt = PROMPT_CAMPO.format(
             sermao=sermao, trecho=trecho, categoria=categoria, duracao=duracao_s,
-            usados=usados, pedido=_PEDIDOS[campo],
+            usados="", recusados="", pedido=_PEDIDOS[campo],
         )  # fmt: skip
         resposta = self._perguntar(prompt, _ESQUEMA_DO_CAMPO[campo], temperatura)
         valor = getattr(resposta, campo)
         return list(valor) if campo == "hashtags" else str(valor).strip()
+
+    def melhorar_titulo(
+        self,
+        titulo: str,
+        sermao: str,
+        trecho: str,
+        categoria: str,
+        duracao_s: float,
+        titulos_usados: Sequence[str] = (),
+        ao_recusar: Callable[[str, Problema], None] | None = None,
+    ) -> Escolha:
+        """Confere `titulo` contra os `titulos_usados` e, se ele for igual, parecido demais ou
+        genérico, pede outro à IA (só o título, que é rápido), dizendo a ela por que o anterior foi
+        recusado. Se nenhum servir, fica o de menor problema (`Escolha.problema` diz qual)."""
+
+        def pedir(recusas: Sequence[Recusa], temperatura: float) -> str:
+            return self._titulo_novo(
+                sermao, trecho, categoria, duracao_s, titulos_usados, recusas, temperatura
+            )
+
+        return escolher_titulo(titulo, pedir, titulos_usados, sermao=sermao, ao_recusar=ao_recusar)
+
+    def _titulo_novo(
+        self,
+        sermao: str,
+        trecho: str,
+        categoria: str,
+        duracao_s: float,
+        titulos_usados: Sequence[str],
+        recusas: Sequence[Recusa],
+        temperatura: float,
+    ) -> str:
+        prompt = PROMPT_CAMPO.format(
+            sermao=sermao, trecho=trecho, categoria=categoria, duracao=duracao_s,
+            usados=_bloco_dos_usados(titulos_usados), recusados=_bloco_dos_recusados(recusas),
+            pedido=_PEDIDOS["titulo"],
+        )  # fmt: skip
+        return self._perguntar(prompt, TituloLLM, temperatura).titulo.strip()
 
     def _perguntar(
         self, prompt: str, esquema: type[Esquema], temperatura: float = TEMPERATURA_PADRAO

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import queue
 import threading
 import tkinter
@@ -15,7 +16,22 @@ from pathlib import Path
 import customtkinter as ctk
 
 from spurgeon.core.aparencia import TratamentoImagem
-from spurgeon.core.config import ConfigApp, OpcoesProcessamento, carregar_config, salvar_config
+from spurgeon.core.atualizacao import (
+    URL_DA_PAGINA,
+    InfoAtualizacao,
+    ResultadoDaAtualizacao,
+    baixar_e_atualizar,
+    consultar_atualizacao,
+    motivo_de_nao_atualizar_sozinho,
+    reabrir_programa,
+)
+from spurgeon.core.config import (
+    ConfigApp,
+    OpcoesProcessamento,
+    carregar_config,
+    raiz_repositorio,
+    salvar_config,
+)
 from spurgeon.core.erros import ErroSpurgeon, ProjetoConflito
 from spurgeon.core.estado import StatusEtapa, carregar_estado
 from spurgeon.core.executor import ExecutorProjeto
@@ -45,7 +61,8 @@ from spurgeon.ui import dialogos, dicas
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
 from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
-from spurgeon.ui.contato import AvisoDeContato
+from spurgeon.ui.aviso_de_atualizacao import AvisoDeAtualizacao
+from spurgeon.ui.contato import AvisoDeContato, abrir_link
 from spurgeon.ui.estimativa import (
     EstimadorTempo,
     estimar_render_s,
@@ -86,6 +103,7 @@ ABA_PROCESSAMENTO = "Processamento"
 ABA_STUDIO = "Studio Shorts"
 _ABERTURA_MS = 600  # a janela monta e aparece antes da reabertura e da oferta do passo a passo
 _ENTRE_REABRIR_E_OFERTAR_MS = 300
+_ATUALIZACAO_MS = 1500  # a consulta ao GitHub começa depois de a janela aparecer
 _NOTA_SEM_STUDIO = (
     "Esta tela só aparece quando o projeto tem Shorts calculados. Para vê-la de verdade, abra um "
     "projeto que já tenha Shorts (“Abrir projeto…”) ou processe um vídeo."
@@ -108,10 +126,12 @@ class JanelaPrincipal(ctk.CTk):
         *,
         oferecer_tutorial: bool = False,
         reabrir_ultimo: bool = False,
+        verificar_atualizacao: bool = False,
     ):
-        """`oferecer_tutorial` e `reabrir_ultimo` valem só na abertura de verdade do programa
-        (`executar`): ao abrir, reabre o último projeto e oferece o passo a passo. Por padrão
-        (testes, janelas escondidas) nenhum dos dois acontece."""
+        """`oferecer_tutorial`, `reabrir_ultimo` e `verificar_atualizacao` valem só na abertura de
+        verdade do programa (`executar`): ao abrir, reabre o último projeto, oferece o passo a
+        passo e pergunta ao GitHub se há versão nova (se a pessoa não desligou). Por padrão
+        (testes, janelas escondidas) nada disso acontece, e nenhum teste toca a internet."""
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         super().__init__()
@@ -151,6 +171,8 @@ class JanelaPrincipal(ctk.CTk):
         threading.Thread(target=self._detectar_hardware, daemon=True).start()
         self._listar_ollama()
         self._agendar_abertura(oferecer_tutorial, reabrir_ultimo)
+        if verificar_atualizacao and self.config_app.atualizacao_ao_abrir:
+            self.after(_ATUALIZACAO_MS, self._verificar_atualizacao)
 
     # --- montagem -----------------------------------------------------------------------------
     def _ajustar_tamanho(self) -> None:
@@ -172,11 +194,15 @@ class JanelaPrincipal(ctk.CTk):
         # esquerda e o andamento à direita; o Studio Shorts toma a janela inteira.
         faixa = ctk.CTkFrame(self, fg_color="transparent")
         faixa.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 0))
+        # o aviso de atualização, quando há, fica por cima das abas (empacotado só ao aparecer)
+        self.aviso_de_atualizacao = AvisoDeAtualizacao(faixa, ao_atualizar=self._atualizar_programa)
+        linha_das_abas = ctk.CTkFrame(faixa, fg_color="transparent")
+        linha_das_abas.pack(side="bottom", fill="x")
         self._abas = ctk.CTkSegmentedButton(
-            faixa, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
+            linha_das_abas, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
         )
         self._abas.pack(side="left")
-        self.contato = AvisoDeContato(faixa)  # no canto direito, nas duas abas
+        self.contato = AvisoDeContato(linha_das_abas)  # no canto direito, nas duas abas
         self.contato.pack(side="right", padx=(12, 2))
         self._faixa_das_abas = faixa
         dica_do_seletor(
@@ -286,6 +312,23 @@ class JanelaPrincipal(ctk.CTk):
             font=ctk.CTkFont(size=12),
         )
         self._rodape.grid(row=0, column=0, sticky="ew")
+        self._var_atualizacao = ctk.BooleanVar(value=self.config_app.atualizacao_ao_abrir)
+        self._check_atualizacao = ctk.CTkCheckBox(
+            self._faixa_do_rodape,
+            text="Procurar atualizações ao abrir",
+            variable=self._var_atualizacao,
+            command=self._mudou_atualizacao_ao_abrir,
+            font=ctk.CTkFont(size=12),
+            checkbox_width=18,
+            checkbox_height=18,
+        )
+        self._check_atualizacao.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        dicas.dica(
+            self._check_atualizacao,
+            "Marcado: ao abrir, o programa consulta o GitHub (precisa de internet) e avisa, no "
+            "alto da janela, quando há uma versão nova. É a única coisa que o programa faz online "
+            "sem você pedir; desmarcado, ele não consulta nada.",
+        )
         self._var_tutorial = ctk.BooleanVar(value=self.config_app.tutorial_ao_abrir)
         self._check_tutorial = ctk.CTkCheckBox(
             self._faixa_do_rodape,
@@ -296,7 +339,7 @@ class JanelaPrincipal(ctk.CTk):
             checkbox_width=18,
             checkbox_height=18,
         )
-        self._check_tutorial.grid(row=0, column=1, sticky="e", padx=(12, 12))
+        self._check_tutorial.grid(row=0, column=2, sticky="e", padx=(12, 12))
         dicas.dica(
             self._check_tutorial,
             "Marcado: ao abrir, o programa pergunta se você quer ver o passo a passo. Desmarcado: "
@@ -309,7 +352,7 @@ class JanelaPrincipal(ctk.CTk):
             height=26,
             command=self.abrir_tutorial,
         )
-        self._botao_tutorial.grid(row=0, column=2, sticky="e")
+        self._botao_tutorial.grid(row=0, column=3, sticky="e")
         dicas.dica(
             self._botao_tutorial,
             "Abre agora o passo a passo que explica cada etapa, da escolha do vídeo até os "
@@ -895,6 +938,106 @@ class JanelaPrincipal(ctk.CTk):
         self.config_app.tutorial_ao_abrir = bool(self._var_tutorial.get())
         self._salvar_config("a preferência do passo a passo")
 
+    # --- atualização do programa --------------------------------------------------------------
+    def _mudou_atualizacao_ao_abrir(self) -> None:
+        self.config_app.atualizacao_ao_abrir = bool(self._var_atualizacao.get())
+        self._salvar_config("a preferência de procurar atualizações")
+        if not self.config_app.atualizacao_ao_abrir:
+            self.aviso_de_atualizacao.ocultar()
+
+    def _verificar_atualizacao(self) -> None:
+        """Pergunta ao GitHub, em segundo plano, se há versão nova. Sem internet, em silêncio: o
+        programa funciona offline e não tem por que reclamar disso."""
+        if self._encerrando:
+            return
+        self.tarefas.rodar(
+            consultar_atualizacao,
+            self._achou_atualizacao,
+            self._sem_consulta_de_atualizacao,
+            chave="consultar_atualizacao",
+        )
+
+    def _achou_atualizacao(self, info: InfoAtualizacao | None) -> None:
+        if info is not None and not self._encerrando:
+            self.aviso_de_atualizacao.mostrar(info)
+
+    @staticmethod
+    def _sem_consulta_de_atualizacao(erro: Exception) -> None:
+        logging.info("Não foi possível procurar atualização: %s", erro)
+
+    def _atualizar_programa(self, info: InfoAtualizacao) -> None:
+        """O clique no aviso: confirma, baixa a versão nova do GitHub, troca os arquivos, reabre."""
+        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
+            dialogos.aviso(
+                self,
+                "Atualizar o programa",
+                "Espere o processamento terminar (ou cancele-o) para atualizar.",
+            )
+            return
+        raiz = raiz_repositorio()
+        if (motivo := motivo_de_nao_atualizar_sozinho(raiz)) is not None:
+            if dialogos.confirmar(
+                self,
+                "Atualizar o programa",
+                f"{motivo}\n\nAbrir a página do projeto no GitHub?",
+                sim="Abrir a página",
+                nao="Fechar",
+            ):
+                abrir_link(URL_DA_PAGINA)
+            return
+        if self.studio.mudou and not self.studio.salvar(exigir_ate_o_limite=False):
+            return
+        if not dialogos.confirmar(
+            self,
+            "Atualizar o programa",
+            f"Atualizar da versão {info.versao_atual} para a {info.versao}?\n\n"
+            "O programa baixa a versão nova do GitHub, troca os arquivos e reabre sozinho. Seus "
+            "projetos, modelos e configurações não são mexidos. Leva um ou dois minutos.",
+            sim="Atualizar agora",
+            nao="Depois",
+        ):
+            return
+        self.aviso_de_atualizacao.mostrar_andamento("Baixando a atualização… 0%")
+
+        def trabalho() -> ResultadoDaAtualizacao:
+            return baixar_e_atualizar(
+                raiz, info, ao_progresso=lambda f: self._na_interface(lambda: self._baixando(f))
+            )
+
+        self.tarefas.rodar(trabalho, self._atualizado, self._atualizacao_falhou, chave="atualizar")
+
+    def _baixando(self, fracao: float) -> None:
+        if self._encerrando:
+            return
+        if fracao >= 1.0:
+            texto = "Instalando a atualização…"
+        elif fracao < 0:  # o GitHub não diz o tamanho do ZIP: sem porcentagem
+            texto = "Baixando a atualização…"
+        else:
+            texto = f"Baixando a atualização… {fracao:.0%}"
+        self.aviso_de_atualizacao.mostrar_andamento(texto)
+
+    def _atualizado(self, resultado: ResultadoDaAtualizacao) -> None:
+        if self._encerrando:
+            return
+        depois = (
+            "Ela usa bibliotecas novas: o instalador vai rodar numa janela e o programa reabre "
+            "quando ele terminar."
+            if resultado.precisa_instalar
+            else "O programa vai reabrir agora."
+        )
+        dialogos.aviso(
+            self, "Atualização concluída", f"A versão {resultado.versao} foi instalada.\n\n{depois}"
+        )
+        reabrir_programa(raiz_repositorio(), instalar=resultado.precisa_instalar, pid=os.getpid())
+        self._ao_fechar()
+
+    def _atualizacao_falhou(self, erro: Exception) -> None:
+        if self._encerrando:
+            return
+        self.aviso_de_atualizacao.voltar_ao_aviso()
+        dialogos.erro(self, "Atualizar o programa", f"Não foi possível atualizar: {erro}")
+
     def _oferecer_tutorial(self) -> None:
         """A pergunta "Quer ver o passo a passo?" (uma só janela por vez)."""
         self._abertura_agendada = None
@@ -1308,5 +1451,7 @@ def _a_vista(alvo) -> bool:
 
 def executar() -> int:
     """Abre o programa: reabre o último projeto e oferece o passo a passo (se não dispensado)."""
-    JanelaPrincipal(oferecer_tutorial=True, reabrir_ultimo=True).mainloop()
+    JanelaPrincipal(
+        oferecer_tutorial=True, reabrir_ultimo=True, verificar_atualizacao=True
+    ).mainloop()
     return 0

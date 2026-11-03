@@ -355,6 +355,44 @@ def test_nome_de_arquivo_nao_repete_nem_estoura_o_tamanho():
 # --- cliente do Ollama ---------------------------------------------------------------------
 
 
+#: títulos de verdade, todos bem diferentes entre si: nenhum é igual, parecido demais ou genérico
+#: para as regras de `shorts/titulos.py`. O Ollama falso devolve um a um, em ordem.
+TITULOS_DISTINTOS = [
+    "Acaz queimou os próprios filhos no fogo",
+    "Quando o profeta incomoda os poderosos",
+    "A tempestade que Deus anunciou a Samaria",
+    "Ninguém escapa do tribunal de Cristo",
+    "O orgulho que derruba reis e nações",
+    "Pastores que enganam as ovelhas por dinheiro",
+    "A promessa de Belém e o menino rei",
+    "Por que a idolatria atrai tanta gente?",
+    "Lutero diante da dieta de Worms",
+    "Calvino e a soberania sobre cada detalhe",
+    "O silêncio de Deus diante da injustiça",
+    "Arrependimento verdadeiro muda o rumo da vida",
+    "Como orar quando a fé está cansada",
+    "Esperança para quem perdeu tudo",
+    "Corrupção começa no coração de cada um",
+    "A graça que alcança até o pior inimigo",
+    "Jonas fugiu mas o Senhor foi atrás",
+    "Sábado, descanso e o trabalho redimido",
+    "O cálice amargo que Jesus bebeu sozinho",
+    "Eleição não é desculpa para a preguiça",
+    "Os mártires escoceses e a liberdade de consciência",
+    "Davi chorou o pecado e Deus perdoou",
+    "A ressurreição muda o que fazemos hoje",
+    "Casamento é aliança, não contrato",
+    "A ceia aponta para uma festa futura",
+    "O batismo e a marca do povo de Deus",
+    "Pregar sem medo numa cidade hostil",
+    "Um reino que não se parece com Roma",
+    "Gratidão no meio da doença prolongada",
+    "Os dez mandamentos e a vida em família",
+    "O cordeiro que tira o pecado do mundo",
+    "Josias redescobre o livro esquecido",
+]
+
+
 class OllamaFalso:
     """Imita o `ollama.Client`: respostas prontas, em ordem, e registro das chamadas."""
 
@@ -363,7 +401,8 @@ class OllamaFalso:
         self.chamadas: list[dict] = []
         self.instalados = list(instalados)
         self.baixados: list[str] = []
-        self.titulos: list[str] = []  # títulos a devolver, em ordem, nos pedidos de metadados
+        self.titulos: list[str] = []  # títulos a devolver, em ordem, nos pedidos de título
+        self._sorteados = 0  # quantos títulos da lista `TITULOS_DISTINTOS` já saíram
 
     def chat(self, **kwargs):
         self.chamadas.append(kwargs)
@@ -373,16 +412,23 @@ class OllamaFalso:
         conteudo = resposta if isinstance(resposta, str) else json.dumps(resposta)
         return SimpleNamespace(message=SimpleNamespace(content=conteudo))
 
+    def proximo_titulo(self) -> str:
+        if self.titulos:
+            return self.titulos.pop(0)
+        self._sorteados += 1
+        return TITULOS_DISTINTOS[(self._sorteados - 1) % len(TITULOS_DISTINTOS)]
+
     def resposta_padrao(self, kwargs):
-        if "slug" in json.dumps(kwargs["format"]):
+        esquema = json.dumps(kwargs["format"])
+        if "slug" in esquema:
             return {
-                "titulo": self.titulos.pop(0)
-                if self.titulos
-                else "Por que o povo rejeita a verdade?",
+                "titulo": self.proximo_titulo(),
                 "descricao": "Um trecho sobre a rejeição da verdade.",
                 "hashtags": ["#shorts", "fé", "#Miquéias"],
                 "slug": "povo-rejeita-verdade",
             }
+        if '"titulo"' in esquema:  # o pedido só do título (refazer ou trocar um recusado)
+            return {"titulo": self.proximo_titulo()}
         return {
             "categoria": "aplicacao_pratica",
             "nota": 7,
@@ -706,32 +752,127 @@ def test_faixas_da_nota_e_resumo_dos_cortes():
 
 
 def test_o_pedido_de_titulo_lista_os_ja_criados_e_nao_traz_exemplo_para_copiar(ctx_shorts, ollama):
-    ollama.titulos = [f"Título número {i}" for i in range(100)]
+    ollama.titulos = list(TITULOS_DISTINTOS)
     for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
         rodar(etapa, ctx_shorts)
     pedidos = [
         c["messages"][1]["content"] for c in ollama.chamadas if "slug" in json.dumps(c["format"])
     ]
     assert "Títulos já criados" not in pedidos[0]
-    assert "Título número 0" in pedidos[1] and "Títulos já criados" in pedidos[1]
+    assert TITULOS_DISTINTOS[0] in pedidos[1] and "Títulos já criados" in pedidos[1]
     assert "povo não quer ouvir" not in pedidos[0]  # o exemplo antigo era copiado pela IA
 
 
 def test_titulo_repetido_pede_outro_com_mais_temperatura(ctx_shorts, ollama):
-    ollama.titulos = [f"Título número {i // 2}" for i in range(200)]  # cada um vem duas vezes
+    ollama.titulos = [TITULOS_DISTINTOS[i // 2] for i in range(60)]  # cada um vem duas vezes
     for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
         rodar(etapa, ctx_shorts)
     titulos = [c.titulo for c in carregar_cortes(ctx_shorts.pastas.cortes_shorts)]
     assert len(titulos) > 1 and len(set(titulos)) == len(titulos)
     temperaturas = [
-        c["options"]["temperature"] for c in ollama.chamadas if "slug" in json.dumps(c["format"])
+        c["options"]["temperature"]
+        for c in ollama.chamadas
+        if '"titulo"' in json.dumps(c["format"])
     ]
     assert max(temperaturas) >= 0.5
 
 
+def test_titulo_igual_ou_parecido_pede_outro_dizendo_o_motivo(ctx_shorts, ollama):
+    # a IA insiste no mesmo título e depois num quase igual; só então traz um diferente
+    ollama.titulos = [
+        TITULOS_DISTINTOS[0],  # 1º corte
+        TITULOS_DISTINTOS[0],  # 2º corte, no pedido completo: igual
+        "Acaz queimou os filhos no fogo",  # a nova tentativa: parecido
+        TITULOS_DISTINTOS[1],  # a seguinte serve
+    ]
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    titulos = [c.titulo for c in cortes]
+    assert titulos[:2] == [TITULOS_DISTINTOS[0], TITULOS_DISTINTOS[1]]
+    assert len(set(titulos)) == len(titulos)
+    assert cortes[1].slug.startswith("quando_o_profeta")  # o arquivo acompanha o título que ficou
+    so_titulo = [
+        c["messages"][1]["content"]
+        for c in ollama.chamadas
+        if '"titulo"' in json.dumps(c["format"]) and "slug" not in json.dumps(c["format"])
+    ]
+    assert "já foram recusados" not in so_titulo[0].split("TRECHO")[0]
+    assert "é igual ao título" in so_titulo[0]  # a IA é avisada do porquê
+    assert "é parecido demais" in so_titulo[1] and "Acaz queimou os filhos no fogo" in so_titulo[1]
+
+
+def test_titulo_generico_tambem_e_recusado_e_o_log_conta(ctx_shorts, ollama, caplog):
+    caplog.set_level("INFO")
+    ollama.titulos = ["Deus punirá o pecado", TITULOS_DISTINTOS[2]]
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    assert cortes[0].titulo == TITULOS_DISTINTOS[2]
+    assert "Título recusado (generico): “Deus punirá o pecado”" in caplog.text
+
+
+def test_selecionar_de_novo_troca_o_titulo_repetido_que_a_ia_criou(ctx_shorts, ollama):
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    assert len(cortes) >= 3
+    # a IA de uma versão antiga repetiu o título do 1º corte no 2º e no 3º; a pessoa editou o 3º
+    cache = ler_json(ctx_shorts.pastas.metadados)
+    repetido = cortes[0].titulo
+    cache[str(cortes[1].id)]["titulo"] = repetido
+    cortes[1].titulo = repetido
+    cortes[2].titulo = repetido  # só nos cortes: o do cache continua o da IA, então foi edição
+    escrever_json_atomico(ctx_shorts.pastas.metadados, cache)
+    etapas_mod.gravar_cortes(ctx_shorts.pastas.cortes_shorts, cortes)
+    ollama.chamadas.clear()
+    rodar(SelecionarShorts(), ctx_shorts)
+    refeitos = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    assert refeitos[0].titulo == repetido
+    assert refeitos[1].titulo != repetido  # o repetido da IA ganhou outro
+    assert refeitos[2].titulo == repetido  # o que a pessoa escreveu fica como está
+
+
+def test_refazer_titulo_nao_volta_igual_nem_parecido_com_o_de_outro_short():
+    falso = OllamaFalso()
+    falso.titulos = ["Acaz queimou os filhos no fogo", TITULOS_DISTINTOS[1]]
+    novo = cliente(falso).refazer(
+        "titulo", "Sermão", "o texto do trecho", "outra", 40,
+        titulos_usados=["Acaz queimou os próprios filhos"],
+    )  # fmt: skip
+    assert novo == TITULOS_DISTINTOS[1]
+    assert len(falso.chamadas) == 2
+    segundo = falso.chamadas[1]["messages"][1]["content"]
+    assert "já foram recusados" in segundo and "Acaz queimou os filhos no fogo" in segundo
+    assert "Títulos já criados" in segundo and "Acaz queimou os próprios filhos" in segundo
+
+
+def test_os_pedidos_de_titulo_pedem_especifico_e_nao_trazem_exemplo_para_copiar():
+    falso = OllamaFalso()
+    c = cliente(falso)
+    c.metadados("Sermão", "texto", "outra", 40)
+    c.refazer("titulo", "Sermão", "texto", "outra", 40)
+    for chamada in falso.chamadas:
+        pedido = chamada["messages"][1]["content"]
+        assert "ESPECÍFICO" in pedido and "genérico" in pedido and "Varie a forma" in pedido
+        assert not any(titulo in pedido for titulo in TITULOS_DISTINTOS)
+
+
+def test_selecionar_de_novo_nao_perde_o_que_ja_foi_postado(ctx_shorts, ollama):
+    for etapa in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts()):
+        rodar(etapa, ctx_shorts)
+    cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    cortes[1].postado, cortes[1].postado_em = True, "2026-11-02"
+    etapas_mod.gravar_cortes(ctx_shorts.pastas.cortes_shorts, cortes)
+    rodar(SelecionarShorts(), ctx_shorts)
+    refeitos = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
+    assert [c.postado for c in refeitos] == [i == 1 for i in range(len(refeitos))]
+    assert refeitos[1].postado_em == "2026-11-02"
+
+
 def test_titulos_ja_criados_sobrevivem_a_uma_queda_no_meio(ctx_shorts, ollama):
     ctx_shorts.opcoes.shorts_candidatos_ia = 14  # para sobrarem 4 ou mais cortes distintos
-    ollama.titulos = [f"Título número {i}" for i in range(100)]
+    ollama.titulos = list(TITULOS_DISTINTOS)
     for etapa in (AnalisarShorts(), AvaliarShorts()):
         rodar(etapa, ctx_shorts)
     pedidos = []
@@ -755,7 +896,7 @@ def test_titulos_ja_criados_sobrevivem_a_uma_queda_no_meio(ctx_shorts, ollama):
     refeitos = [c for c in ollama.chamadas if "slug" in json.dumps(c["format"])]
     cortes = carregar_cortes(ctx_shorts.pastas.cortes_shorts)
     assert len(refeitos) == len(cortes) - 3
-    assert [c.titulo for c in cortes][:3] == [f"Título número {i}" for i in range(3)]
+    assert [c.titulo for c in cortes][:3] == TITULOS_DISTINTOS[:3]
 
 
 def test_titulo_guardado_nao_vale_se_o_texto_do_corte_mudou(ctx_shorts, ollama):

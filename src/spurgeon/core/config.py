@@ -428,6 +428,9 @@ class ConfigApp(BaseModel):
     ultimo_projeto: str = ""
     #: oferece o passo a passo (tutorial) quando o programa abre
     tutorial_ao_abrir: bool = True
+    #: consulta o GitHub ao abrir e avisa se há versão nova (a única conexão que o programa faz
+    #: sem a pessoa pedir)
+    atualizacao_ao_abrir: bool = True
 
     @model_validator(mode="before")
     @classmethod

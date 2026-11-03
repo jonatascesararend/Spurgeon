@@ -70,7 +70,8 @@ progresso e um log detalhado) e **Studio Shorts**.
 - Windows 10 (1809 ou mais novo) ou 11, de 64 bits
 - Espaço em disco: para um sermão de 65 min, ~6 GB livres além do vídeo original, mais ~20 GB
   para o ambiente e os modelos (Whisper ~1,6 GB, Ollama e seu modelo ~7 GB)
-- Internet na instalação (depois o programa roda offline)
+- Internet na instalação (depois o programa roda offline). A única conexão que ele faz sozinho
+  é a consulta de atualização ao abrir (veja abaixo), que dá para desligar
 
 **Não é preciso instalar nada antes:** o `instalar.bat` confere e instala o que faltar (Visual C++,
 uv, Python 3.11 com as bibliotecas, FFmpeg, Ollama e os modelos de IA); veja os passos em
@@ -86,6 +87,14 @@ iniciar.bat           abre o aplicativo (sem janela preta; o instalador também 
 
 Opções do instalador (`.\instalar.bat -SemModelos -SemOllama -SemAtalhos -Silencioso`): veja o
 [COMO_INSTALAR.txt](COMO_INSTALAR.txt).
+
+**Atualizações:** ao abrir, o programa compara a sua versão (`src/spurgeon/__init__.py`) com a da
+branch `main` no GitHub. Se houver uma mais nova, uma faixa amarela pisca no alto da janela; um
+clique baixa o ZIP da `main`, troca só o código, os scripts e os documentos (projetos, modelos,
+marca d'água e vocabulário ficam como estão), roda o instalador se as bibliotecas mudaram e
+reabre. Numa pasta com `.git` (clone) ele não troca nada: use `git pull`. A consulta se desliga
+no rodapé ("Procurar atualizações ao abrir"). **Para uma versão chegar às pessoas, suba o
+`__version__` antes do push.**
 
 Coloque o vídeo em `Downloads/` (ou escolha outro arquivo), marque o que quer gerar e clique em
 **Iniciar**. A janela mostra o tempo estimado antes de começar. Na qualidade padrão (Máxima),

@@ -24,6 +24,7 @@ import time
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from tkinter import BooleanVar, StringVar, TclError
 
@@ -35,9 +36,11 @@ from spurgeon.core.ffmpeg import InfoMidia
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.render import previa
 from spurgeon.render.shorts import (
+    PASTA_DOS_POSTADOS,
     SITUACAO_ALTERADO,
     SITUACAO_NOVO,
     SITUACAO_PRONTO,
+    aplicar_marcas_de_postado,
     ler_registro,
     situacao_do_short,
 )
@@ -81,7 +84,7 @@ from spurgeon.shorts.edicao import (
     resumir,
     tirar_palavras,
 )
-from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes, nome_do_sermao
+from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes, gravar_postado, nome_do_sermao
 from spurgeon.shorts.livre import ContextoDaIA, preparar_cliente
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS
 from spurgeon.shorts.marcas import Detectado, categoria_de_cada_frase, trechos_detectados
@@ -93,6 +96,7 @@ from spurgeon.shorts.pausas import (
 )
 from spurgeon.shorts.pontuacao import PARTES, ROTULO_ALERTA
 from spurgeon.shorts.selecao import nome_de_arquivo
+from spurgeon.shorts.titulos import GENERICO, IGUAL, PARECIDO, problema_do_titulo
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 from spurgeon.transcricao.verificador import (
     atualizar_vocabulario_compartilhado,
@@ -145,6 +149,8 @@ _LIMITE_DO_HISTORICO = 200  # quantos passos de desfazer cada corte guarda
 _CAMPOS_DO_HISTORICO = ("inicio", "fim", "texto", "saltos", "legenda", "editado", "pausa_s")
 _MANTER_A_IA_S = "3m"  # o Ollama solta o modelo da memória depois deste tempo parado
 _ROTULO_DO_CAMPO = {"titulo": "o título", "descricao": "a descrição", "hashtags": "as hashtags"}
+
+_PASTA = f"shorts_gerados/{PASTA_DOS_POSTADOS}"  # onde ficam os Shorts já postados
 
 ORDEM_NOTA = "Maior nota"
 ORDEM_HORARIO = "Horário"
@@ -211,6 +217,33 @@ def resumir_palavras(palavras, limite: int = 150) -> str:
 def rotulo_da_origem(corte: Corte) -> str:
     """`gerado automaticamente` ou `gerado manualmente` (o que a análise ou a pessoa criou)."""
     return ROTULOS_ORIGEM.get(corte.origem, ROTULOS_ORIGEM[ORIGEM_AUTOMATICA])
+
+
+def texto_do_postado(corte: Corte, *, tem_arquivo: bool, alterado: bool) -> str:
+    """O que a tela diz de um Short já postado ("" se ele não foi marcado)."""
+    if not corte.postado:
+        return ""
+    try:
+        quando = f" em {date.fromisoformat(corte.postado_em):%d/%m/%Y}"
+    except ValueError:
+        quando = ""
+    if not tem_arquivo:
+        return f"✔ Marcado como postado{quando}. Ainda não há arquivo: ele já sai em {_PASTA}."
+    texto = f"✔ Postado{quando}. O arquivo está em {_PASTA}."
+    if alterado:
+        texto += " ⚠ O corte mudou depois: um vídeo novo seria outro."
+    return texto
+
+
+def aviso_do_titulo(titulo: str, outros: list[str], sermao: str) -> str:
+    """O aviso sob o campo Título quando ele repete, lembra demais o de outro Short marcado ou é
+    genérico demais ("" se está bem). A abertura repetida não avisa: é só um estilo."""
+    if not titulo.strip():
+        return ""
+    problema = problema_do_titulo(titulo, outros, sermao=sermao)
+    if problema is None or problema.tipo not in (IGUAL, PARECIDO, GENERICO):
+        return ""
+    return f"⚠ Este título {problema.motivo}."
 
 
 def trecho_da_legenda(palavras: list[Palavra], corte: Corte, limite: int = _TRECHO_NA_LISTA) -> str:
@@ -552,10 +585,38 @@ class EditorDeCortes(ctk.CTkFrame):
         self._var_hashtags = StringVar()
         self._botoes_da_ia: dict[str, ctk.CTkButton] = {}
         self._situacao_da_ia: dict[str, ctk.CTkLabel] = {}
+        self._var_postado = BooleanVar(value=False)
         self._cabeca_do_campo(d, 5, "Título", "titulo")
-        self._campo_titulo = ctk.CTkEntry(d, textvariable=self._var_titulo)
+        quadro_titulo = ctk.CTkFrame(d, fg_color="transparent")
+        quadro_titulo.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 6))
+        quadro_titulo.columnconfigure(0, weight=1)
+        self._campo_titulo = ctk.CTkEntry(quadro_titulo, textvariable=self._var_titulo)
         dica(self._campo_titulo, "O título do Short (também o nome do arquivo). Edite à vontade.")
-        self._campo_titulo.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 6))
+        self._campo_titulo.grid(row=0, column=0, sticky="ew")
+        self._aviso_do_titulo = RotuloQueSome(
+            quadro_titulo, anchor="w", justify="left", wraplength=420, text_color=_COR_ALERTA,
+            text="",
+        )  # fmt: skip
+        self._aviso_do_titulo.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        linha_postado = ctk.CTkFrame(quadro_titulo, fg_color="transparent")
+        linha_postado.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        linha_postado.columnconfigure(1, weight=1)
+        self._check_postado = ctk.CTkCheckBox(
+            linha_postado, text="Já postado no YouTube", variable=self._var_postado,
+            command=self._ao_marcar_postado,
+        )  # fmt: skip
+        self._check_postado.grid(row=0, column=0, sticky="w")
+        dica(
+            self._check_postado,
+            "Marque quando já publicou este Short no YouTube, para se organizar. Grava na hora "
+            f"(sem precisar salvar) e move o arquivo para {_PASTA}, dentro da pasta do "
+            "projeto. Desmarcar o traz de volta.",
+        )
+        self._rotulo_postado = ctk.CTkLabel(
+            linha_postado, text="", anchor="w", justify="left", wraplength=300,
+            text_color=_COR_SUAVE, font=ctk.CTkFont(size=12),
+        )  # fmt: skip
+        self._rotulo_postado.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         self._cabeca_do_campo(d, 7, "Descrição", "descricao")
         self._campo_descricao = ctk.CTkTextbox(d, height=64, wrap="word")
         self._campo_descricao.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 6))
@@ -565,6 +626,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._campo_hashtags.grid(row=10, column=0, sticky="ew", padx=8, pady=(0, 8))
         for variavel in (self._var_titulo, self._var_hashtags):
             variavel.trace_add("write", lambda *_a: self._marcar_mudanca())
+        self._var_titulo.trace_add("write", lambda *_a: self._atualizar_aviso_do_titulo())
         self._campo_descricao.bind("<KeyRelease>", lambda _e: self._marcar_mudanca())
 
         self._rotulo_tempo = ctk.CTkLabel(d, anchor="w", font=ctk.CTkFont(weight="bold"))
@@ -1056,6 +1118,7 @@ class EditorDeCortes(ctk.CTkFrame):
         sufixo += " · ✎ legenda" if corte.legenda else ""
         sufixo += " · ⚠ contexto" if corte.alerta_contexto else ""
         sufixo += f" · ⚠ mais de {DURACAO_MAXIMA_S:g} s" if passa_do_limite(corte) else ""
+        sufixo += " · ✔ postado no YouTube" if corte.postado else ""
         situacao = _ROTULO_SITUACAO[self.situacao(corte)]
         trecho = trecho_da_legenda(self._palavras, corte)
         return {
@@ -1136,6 +1199,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._cortes[i].incluir = self._marcas[i].get()
         self._houve_mudanca()
         self._atualizar_resumo()
+        self._atualizar_aviso_do_titulo()
 
     def _andar(self, passo: int) -> None:
         """Seleciona o corte seguinte (ou anterior) da lista, na ordem em que ela aparece."""
@@ -1175,6 +1239,9 @@ class EditorDeCortes(ctk.CTkFrame):
         longos = sum(1 for c in self._cortes if c.incluir and passa_do_limite(c))
         if longos:
             texto += f" · ⚠ {longos} com mais de {DURACAO_MAXIMA_S:g} s"
+        postados = sum(1 for c in self._cortes if c.postado)
+        if postados:
+            texto += f" · ✔ {postados} já postado{'s' if postados > 1 else ''}"
         self._resumo.configure(text=texto)
 
     def _pintar_atual(self) -> None:
@@ -1261,6 +1328,7 @@ class EditorDeCortes(ctk.CTkFrame):
         )
         self._rotulo_motivo.configure(text=f"IA: {corte.motivo}" if corte.motivo else "")
         self._var_titulo.set(corte.titulo)
+        self._mostrar_postado(corte)
         self._campo_descricao.delete("1.0", "end")
         self._campo_descricao.insert("1.0", corte.descricao)
         self._var_hashtags.set(" ".join(corte.hashtags))
@@ -1271,6 +1339,62 @@ class EditorDeCortes(ctk.CTkFrame):
             situacao.configure(text="")
         self._atualizar_botoes_da_ia()
         self._mostrar_previa(corte)
+
+    def _mostrar_postado(self, corte: Corte, falhas: list[str] | None = None) -> None:
+        """A caixa "Já postado no YouTube" e o texto ao lado dela (e o que não deu para mover)."""
+        self._var_postado.set(corte.postado)
+        texto = texto_do_postado(
+            corte,
+            tem_arquivo=self._existem.get(str(corte.id), False),
+            alterado=self.situacao(corte) == SITUACAO_ALTERADO,
+        )
+        cor = _COR_OK if corte.postado else _COR_SUAVE
+        if falhas:
+            texto += (
+                f"\n⚠ Não consegui mover: {'; '.join(falhas)}. Feche o arquivo e tente de novo."
+            )
+            cor = _COR_ALERTA
+        self._configurar(self._rotulo_postado, text=texto, text_color=cor)
+
+    def _atualizar_aviso_do_titulo(self) -> None:
+        """Avisa sob o título quando ele repete, lembra demais o de outro Short marcado ou é
+        genérico. Só vale para um Short marcado (um desmarcado não vai ser publicado)."""
+        texto = ""
+        if self._atual is not None and self._cortes and self._cortes[self._atual].incluir:
+            outros = [
+                c.titulo for i, c in enumerate(self._cortes)
+                if i != self._atual and c.incluir and c.titulo.strip()
+            ]  # fmt: skip
+            texto = aviso_do_titulo(
+                self._var_titulo.get(), outros, nome_do_sermao(self._pastas.raiz)
+            )
+        with contextlib.suppress(TclError):
+            self._configurar(self._aviso_do_titulo, text=texto)
+
+    def _ao_marcar_postado(self) -> None:
+        """A pessoa marcou ou desmarcou "Já postado no YouTube": grava só isso, na hora, e leva o
+        arquivo já renderizado para `postados/` (ou o traz de volta). Se o corte ainda não está no
+        arquivo (foi criado agora), a marca entra no próximo "Salvar"."""
+        if self._atual is None or self._carregando or self._tela_desatualizada:
+            return
+        corte = self._cortes[self._atual]
+        corte.postado = bool(self._var_postado.get())
+        corte.postado_em = date.today().isoformat() if corte.postado else ""
+        falhas: list[str] = []
+        try:
+            gravado = gravar_postado(
+                self._pastas.cortes_shorts, corte.id, corte.postado, corte.postado_em
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            gravado = False
+        if gravado:
+            falhas = aplicar_marcas_de_postado(self._pastas, [corte]).falhas
+            self.recarregar_registro(reordenar=False)
+        else:
+            self._houve_mudanca()
+        self._atualizar_linha(self._atual)
+        self._atualizar_resumo()
+        self._mostrar_postado(corte, falhas)
 
     def _mostrar_legenda(self, corte: Corte) -> None:
         self._texto.delete("1.0", "end")
@@ -2444,6 +2568,11 @@ class EditorDeCortes(ctk.CTkFrame):
             usados.add(corte.slug)
         gravar_cortes(self._pastas.cortes_shorts, self._cortes)
         self._mudou = False
+        marcas = aplicar_marcas_de_postado(self._pastas, self._cortes)
+        if marcas.movidos:
+            self.recarregar_registro(reordenar=False)
+            if self._atual is not None:
+                self._mostrar_postado(self._cortes[self._atual], marcas.falhas)
         self._atualizar_resumo()
         return True
 

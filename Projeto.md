@@ -14,7 +14,7 @@ A aplicação é um aplicativo desktop nativo para Windows (Python + CustomTkint
 * **Público:** v1 para o PC do autor (por enquanto, o mesmo PC de desenvolvimento); depois, instalação em outros PCs. Por isso a detecção de hardware é requisito real, não enfeite.
 * **Material de entrada:** vídeos de 45 min a 1h30, somente fala (sem música), câmera fixa em 16:9, pastor sempre no centro do quadro e sem se mover.
 * **Um vídeo por vez** (sem fila na v1).
-* **100% offline** depois de instalar as dependências e baixar os modelos.
+* **100% offline** depois de instalar as dependências e baixar os modelos. A única conexão que o programa faz sozinho é a consulta de atualização ao abrir (`core/atualizacao.py`), que a pessoa pode desligar.
 * **Sem player de vídeo embutido** na interface. A revisão é feita sobre texto e tempos; as únicas imagens são quadros de exemplo (corte, zoom e tratamento de cor) e uma prévia de 15 s que abre no player do Windows (Fase 8).
 * **Idioma:** somente pt-BR (Whisper `language="pt"`, spaCy em português, prompts do LLM em português).
 * **Teologia:** o conteúdo é de teologia reformada calvinista; isso orienta o vocabulário do Whisper e as regras de contexto dos cortes.
@@ -385,6 +385,7 @@ O app cria a estrutura abaixo automaticamente. `Downloads/` é a pasta de entrad
     ├── 📁 shorts_gerados/
     │   ├── 🎬 short_01_<nome_dado_pelo_llm>.mp4
     │   ├── 📄 short_01_<nome_dado_pelo_llm>.txt   ← título, descrição e hashtags
+    │   ├── 📁 postados/    ← os Shorts marcados como "já postado no YouTube" no Studio (o .mp4 e o .txt)
     │   └── ...
     └── 📁 _work/                      ← intermediários (os pesados são apagados ao concluir; os .json da análise ficam)
 ```
@@ -896,3 +897,91 @@ baixados na instalação (com pergunta), os das opções: Whisper `large-v3-turb
 e-mail o copia; (45) o ícone do atalho é um quadrado azul com "play" que gerei (troque `recursos/studio_spurgeon.ico`
 se quiser outro); (46) o `iniciar.bat` não usa mais `uv run`, então não atualiza as bibliotecas sozinho: depois de
 atualizar o programa, rode o `instalar.bat` de novo.
+
+### Rodada 1.7 (2026-11-02): instalação sem tropeços, aviso de atualização, "já postado" e títulos que não se repetem
+
+Pedido: (1) numa instalação do zero, o instalador mandou instalar à mão o uv e o Ollama (`winget install astral-sh.uv` e
+`Ollama.Ollama`), foi preciso rodar o `instalar` três vezes e o Windows bloqueou aplicativos; (2) um aviso de atualização
+que sempre puxe a versão corrigida do GitHub, no alto da tela, piscando em amarelo, conferido a cada abertura; (3) no
+Studio Shorts, uma caixa "já postado no YouTube" que também marque o arquivo na pasta do projeto (no meio da rodada o
+autor pediu: separar fisicamente numa subpasta de Shorts já postados); (4) títulos dos Shorts menos parecidos e menos
+genéricos, e nunca iguais ou "muito parecidos" com outro.
+
+1. **Instalação: a causa era o GitHub desatualizado.** `origin/main` ainda estava na v1.1.1; os commits 1.3 a 1.6 (com o
+   `instalar.ps1` que baixa tudo) nunca subiram. Quem baixou do GitHub pegou o `instalar.bat` e o `COMO_INSTALAR.txt`
+   antigos, que mandavam instalar o uv e o Ollama à mão. **O principal conserto é o `git push`** (as credenciais não
+   estão nesta máquina). Além disso, o instalador foi endurecido: (a) **o `-Wait` do `Start-Process` no instalador do
+   Ollama foi trocado por `-PassThru` + `WaitForExit(20 min)`:** testado no PowerShell 5.1 com um instalador de mentira que
+   sai e deixa um filho rodando, o `-Wait` segurou 12,1 s (o filho inteiro) e o `WaitForExit` voltou em 0,2 s; o
+   instalador real do Ollama abre o aplicativo da bandeja no fim, o que explica a instalação "travada" que faz a pessoa
+   fechar a janela e rodar de novo (causa provável, **não verificada com o instalador real**); (b) **plano B pelo winget**
+   para o uv (`astral-sh.uv`) e o Ollama (`Ollama.Ollama`) quando o download direto falha; (c) **`Unblock-File`** nos
+   arquivos do programa e no que é extraído (tira a marca "baixado da internet", o `Zone.Identifier` que o SmartScreen
+   usa; testado de verdade); (d) **aviso do Controle Inteligente de Aplicativos** (`VerifiedAndReputablePolicyState` 1 ou
+   2) com o caminho para desligar; (e) três tentativas nos downloads; (f) o `instalar.bat` chama o `find.exe` do
+   Windows pelo caminho inteiro (o `find` do Git para Windows quebrava o teste de "esperar tecla"); (g) `COMO_INSTALAR.txt`
+   explica o SmartScreen do `instalar.bat` ("Mais informações" > "Executar assim mesmo"), "Desbloquear" o ZIP antes de
+   extrair e o que fazer com o Controle Inteligente. **Não testado:** o instalador real do Ollama, o `winget` instalando
+   de verdade, o SmartScreen e o Controle Inteligente ligados (neste PC o valor é 0), um Windows limpo.
+
+2. **Aviso de atualização** (`core/atualizacao.py`, `ui/aviso_de_atualizacao.py`, `ui/app.py`). Ao abrir (1,5 s depois de a
+   janela aparecer, em segundo plano), lê o `__version__` de `src/spurgeon/__init__.py` na `main`
+   (`raw.githubusercontent.com`, sem a API) e compara com o da versão em uso. Mais nova: uma **faixa amarela por cima
+   das abas** pisca (amarelo vivo ↔ âmbar, a cada 0,6 s) com "Atualizar agora" e ✕ (dispensa até a próxima abertura).
+   Sem internet, nada aparece e nada reclama. Clicar: confirma, baixa o ZIP da `main`, troca só `src/`, os scripts e
+   documentos da raiz e os recursos que ainda não existem (nunca sobrescreve `recursos/`, projetos, modelos, a marca
+   d'água nem o vocabulário), com **cópia do que trocou** em `modelos/ferramentas/atualizacao/anterior/` e **desfazer tudo
+   se algo falhar no meio**; o `__init__.py` com a versão é o último a ser trocado. Pede o instalador (`instalar.bat
+   -Silencioso -SemModelos -SemOllama -SemAtalhos -AguardarPid N -Abrir`, numa janela que espera o programa fechar e o
+   reabre) **só se as bibliotecas mudaram**: compara `pyproject.toml` e `uv.lock` sem a linha de versão do próprio
+   programa (que muda a cada release). Num clone com `.git` não troca nada (oferece abrir a página do GitHub). A faixa
+   fica fixa durante o download e volta a piscar se falhar. Opção "Procurar atualizações ao abrir" no rodapé
+   (`ConfigApp.atualizacao_ao_abrir`, ligada). `JanelaPrincipal(config)` não consulta nada (só `executar()` passa
+   `verificar_atualizacao=True`), então nenhum teste toca a internet.
+
+3. **Já postado no YouTube** (`Corte.postado`, `Corte.postado_em`; `render/shorts.aplicar_marcas_de_postado`;
+   `ui/studio_shorts.py`). Caixa sob o título, no detalhe do corte: marcar **grava na hora só esse campo**
+   (`etapas.gravar_postado`, sem levar junto o que está em edição) e **move o `.mp4` e o `.txt` para
+   `shorts_gerados/postados/`**; desmarcar traz de volta (para `shorts_gerados/`, ou `desmarcados/` se o corte está
+   desmarcado). O registro `shorts_renderizados.json` acompanha (`arquivo` = `postados/short_01_x.mp4`), então o corte
+   continua "renderizado"; o `.txt` ganha a primeira linha "JÁ POSTADO NO YOUTUBE (marcado em dd/mm/aaaa)". Um arquivo
+   aberto em outro programa não se move no Windows: vira aviso na tela e a marca fica gravada (a próxima renderização
+   acerta). `ShortPlanejado.video`/`.texto` já levam `postados/`, então um Short postado que for renderizado de novo
+   nasce na subpasta, e o organizador não manda um postado para `desmarcados/`. A lista mostra "✔ postado no YouTube" e o
+   resumo, "N já postado(s)". Refazer a seleção mantém a marca (`_criar_metadados`). Cortes sem arquivo só guardam a marca.
+
+4. **Títulos que não se repetem** (`shorts/titulos.py`, `shorts/llm.py`, `shorts/etapas.py`). **A causa, nos projetos reais:**
+   no sermão 07 havia 25 cortes com "Quem deveria fazer justiça pratica o mal" 4 vezes e "Quem deveria julgar pratica o
+   mal" 6 vezes; no sermão 01, 20 de 31 títulos abriam com "Por que". O `metadados_sem_repetir` só comparava texto idêntico,
+   tentava de novo **só 2 vezes e aceitava o último mesmo repetido**, e o prompt só levava os 12 títulos mais recentes.
+   Agora: `semelhanca` mede palavras de conteúdo (sem artigos e verbos de ligação, radical de 5 letras, palavras amplas como
+   "Deus", "palavra" e "pecado" pesando 0,5); **igual** (só pontuação, caixa e acento), **parecido** (≥ 0,55: Jaccard ou
+   contenção com ≥ 2 palavras em comum), **genérico** (menos de 2 palavras específicas, ou só repete o título do sermão) e
+   **abertura saturada** (a mesma abertura de 2 palavras em ≥ 3 títulos e ≥ 30% deles). O limite foi calibrado com os 60
+   títulos reais (o do Catecismo, com 4 títulos distintos, não dá nenhum falso alarme). `escolher_titulo` pede **só o
+   título** de novo (rápido), até 3 vezes, **dizendo à IA o motivo de cada recusa** e soltando a temperatura (0,5, 0,8, 1,0);
+   se nenhum servir, fica o de **menor gravidade** (nunca um igual se houve outro). Vale na geração automática, no Shorts
+   livre e no "Refazer com IA" do título; o prompt leva até 30 títulos usados, pede título **específico**, de forma variada
+   e sem exemplos. Reaproveitar um título que a IA fez antes e que repete outro já criado o refaz (um título que a pessoa
+   escreveu ou editou nunca é trocado). Sob o campo Título, o Studio avisa quando o título é igual, parecido ou genérico
+   em relação aos outros Shorts **marcados** (serve também aos duplicados que já existem e aos digitados à mão).
+
+**Escolhas que fiz sozinho na rodada 1.7 (confirmar ou mudar):** (47) a consulta compara só o `__version__` da `main` (não
+commits): **quem publica precisa subir a versão**, e o desenvolvedor, com a versão à frente do GitHub, nunca vê o aviso;
+(48) o `__version__` foi para **1.7.0** (estava em 1.2.0 enquanto as rodadas já iam em 1.6; daqui a numeração das rodadas e a
+do código voltam a coincidir); (49) a atualização troca `src/`, scripts e documentos da raiz e **só acrescenta** recursos
+novos; `tests/` não vai e arquivos apagados do repositório não são removidos; (50) clone com `.git` não se atualiza
+sozinho; (51) o "já postado" **grava na hora** (diferente dos outros campos do Studio, que esperam "Salvar") e usa a
+**subpasta `postados/`** (pedido do autor), sem sufixo no nome; (52) limites dos títulos: semelhança 0,55, 3 tentativas
+extras, abertura repetida em ≥ 3 títulos e ≥ 30%; a "abertura" só bloqueia na geração (a tela não avisa dela, é só
+estilo); **não** há regra de "o título tem de usar palavras do trecho" (nenhum dos 60 títulos reais a acusaria, e
+sinônimos gerariam tentativas de ~1 min à toa); (53) a consulta de atualização é uma **opção ligada** no rodapé, por causa da
+promessa de "tudo offline"; (54) o instalador tenta o `winget` como plano B, mas nunca como primeira opção (versões e
+hashes fixados são mais previsíveis).
+
+**Pendências do autor (rodada 1.7):** (a) **`git push -u origin main --tags`**: sem isso nada disto chega a outros PCs e o
+GitHub continua com o instalador antigo (v1.1.1); (b) quem já instalou a v1.1.1 não tem o atualizador: precisa baixar de
+novo **uma vez** (depois, o próprio programa avisa); (c) testar num Windows limpo: SmartScreen, Controle Inteligente de
+Aplicativos, o instalador real do Ollama e o `winget`; (d) rodar "Selecionar" de novo nos projetos antigos troca os títulos
+repetidos que a IA criou (os que a pessoa editou ficam); (e) o `recursos/cortador de vídeo.py` (arquivo do autor, não
+rastreado) tem 2 avisos do `ruff` e não foi tocado.

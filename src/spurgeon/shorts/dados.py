@@ -178,6 +178,10 @@ class Corte:
     #: encurta as pausas da fala deste Short a partir deste tamanho, em segundos (de 0,1 a 10);
     #: 0 = não corta pausa nenhuma
     pausa_s: float = 0.0
+    #: a pessoa já publicou este Short no YouTube (para se organizar); o arquivo renderizado leva
+    #: `_POSTADO` no nome. `postado_em` é a data (AAAA-MM-DD) em que ela marcou
+    postado: bool = False
+    postado_em: str = ""
 
     @property
     def janela_s(self) -> float:

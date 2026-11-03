@@ -1,7 +1,8 @@
 # Studio Spurgeon
 
 Aplicativo desktop (Windows, Python 3.11, CustomTkinter, só pt-BR) que transforma sermões
-longos em vídeo limpo + legendas + Shorts verticais. Tudo local e offline.
+longos em vídeo limpo + legendas + Shorts verticais. Tudo local e offline (a única conexão sozinha é a
+consulta de atualização ao abrir, desligável).
 
 **Leia o [Projeto.md](Projeto.md) antes de mexer:** ele tem as decisões, a ordem do pipeline
 e o roadmap por fase. Se uma decisão mudar, atualize o Projeto.md junto com o código.
@@ -226,6 +227,27 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   `UV_PYTHON_PREFERENCE=only-managed`; rode com `-Silencioso -SemOllama -SemAtalhos` (o Ollama e os atalhos mexem no
   PC de verdade). `platformdirs` ignora variáveis de ambiente: para isolar o `config.toml` use um `.pth` no
   `site-packages` do `.venv` de teste que troque `platformdirs.user_config_path`.
+- Atualização pelo GitHub (`core/atualizacao.py`, `ui/aviso_de_atualizacao.py`): compara o `__version__` da `main`
+  (raw.githubusercontent) com o do código; **suba `__version__` (e rode `uv lock`) a cada push que deve chegar às pessoas**.
+  Troca só `src/`, scripts/documentos da raiz e recursos NOVOS (nunca sobrescreve `recursos/`), com desfazer se falhar, e só
+  roda o instalador se `pyproject.toml`/`uv.lock` mudaram SEM contar a linha de versão do projeto. Clone com `.git` não
+  atualiza sozinho. Só `executar()` consulta (`verificar_atualizacao=True`); testes nunca tocam a internet (troque
+  `app_mod.consultar_atualizacao`/`baixar_e_atualizar`/`reabrir_programa`). A faixa fica numa linha própria acima das abas
+  (`faixa` → `aviso_de_atualizacao` + `linha_das_abas`). `instalar.ps1` aceita `-AguardarPid N` e `-Abrir`.
+- Já postado no YouTube: `Corte.postado`/`postado_em`; marcar no Studio grava só esse campo na hora
+  (`etapas.gravar_postado`) e move o `.mp4` e o `.txt` para `shorts_gerados/postados/` por
+  `render/shorts.aplicar_marcas_de_postado` (desmarcar devolve: `shorts_gerados/`, ou `desmarcados/` se o corte está
+  desmarcado). `ShortPlanejado.video`/`.texto` já levam o prefixo `postados/`; o registro guarda `postados/arq.mp4`.
+  Depois de mover, chame `EditorDeCortes.recarregar_registro(reordenar=False)` (senão o corte parece "novo").
+- Títulos dos Shorts (`shorts/titulos.py`): igual/parecido/genérico/abertura repetida, sem IA. `ClienteLLM.melhorar_titulo`
+  pede só o título de novo (até 3 vezes), dizendo o motivo da recusa; `refazer("titulo")` e `metadados_sem_repetir` o usam.
+  Clientes de IA falsos nos testes precisam de `melhorar_titulo` (e títulos realistas e distintos, como
+  `TITULOS_DISTINTOS` em `tests/test_shorts.py`: "Título número 1/2" agora seria barrado como parecido). Nunca ponha
+  exemplos de título nos prompts (`REGRAS_DO_TITULO`).
+- Scripts de edição em Python: `Path.write_text` no Windows troca `\n` por `\r\n` e arquivos inteiros ficam em CRLF (o
+  `.gitattributes` quer LF nos `.py`); use `read_bytes().decode()`/`write_bytes()`. `Path.read_text(newline=)` só existe
+  no Python 3.13. Confira com `git ls-files --eol` (o `grep $'\r'` do Git Bash não é confiável). No Git Bash o `find` é
+  o do Git, não o do Windows (por isso o `instalar.bat` usa `%SystemRoot%\System32\find.exe`).
 - Aviso do canto superior direito: `ui/contato.py` (`AvisoDeContato`, e-mail como `mailto:`; botão direito copia),
   dentro da faixa das abas, visível nas duas abas.
 

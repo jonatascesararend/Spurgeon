@@ -57,7 +57,9 @@ def test_abrir_projeto_poe_o_zoom_e_a_legenda_do_projeto_na_tela(tela):
 
 
 def test_as_abas_ficam_no_alto_da_janela_sobre_as_duas_colunas(tela):
-    faixa = tela._abas.master.grid_info()
+    # as abas moram numa linha dentro da faixa do alto (o aviso de atualização fica acima delas)
+    assert tela._abas.master.master is tela._faixa_das_abas
+    faixa = tela._faixa_das_abas.grid_info()
     assert int(faixa["row"]) == 0 and int(faixa["columnspan"]) == 2
     assert int(tela._coluna.grid_info()["row"]) == 1 and int(tela._direita.grid_info()["row"]) == 1
 

@@ -688,3 +688,161 @@ def test_sem_tarefas_o_botao_da_previa_fica_desligado(editor):
     editor.selecionar(editor._ordem[0])
     assert str(editor._botao_previa.cget("state")) == "disabled"
     editor.gerar_previa()  # não faz nada, nem quebra
+
+
+# --- já postado no YouTube -----------------------------------------------------------------
+
+
+def _renderizar_o_primeiro(editor, pastas):
+    """Põe o 1º corte como já renderizado (arquivo e registro) e devolve o corte."""
+    corte = editor._cortes[0]
+    pastas.shorts.mkdir(parents=True, exist_ok=True)
+    (pastas.shorts / "short_01_x.mp4").write_bytes(b"x")
+    (pastas.shorts / "short_01_x.txt").write_text("publicar", encoding="utf-8")
+    escrever_json_atomico(
+        pastas.shorts_renderizados,
+        {
+            str(corte.id): {
+                "arquivo": "short_01_x.mp4",
+                "assinatura": "a",
+                **detalhes_do_registro(corte),
+            }
+        },
+    )
+    editor.recarregar_registro()
+    editor.selecionar(0)
+    return corte
+
+
+@pytest.mark.gui
+def test_marcar_postado_grava_na_hora_move_o_arquivo_e_aparece_na_lista(editor, pastas):
+    corte = _renderizar_o_primeiro(editor, pastas)
+    assert not editor._var_postado.get() and editor._rotulo_postado.cget("text") == ""
+    editor._var_postado.set(True)
+    editor._ao_marcar_postado()
+    # gravado no arquivo sem precisar salvar, e o resto do que estava em edição não foi junto
+    gravados = carregar_cortes(pastas.cortes_shorts)
+    assert gravados[0].postado and gravados[0].postado_em and not gravados[1].postado
+    assert not editor.mudou
+    # o arquivo foi para postados/, o registro acompanhou e o corte continua "renderizado"
+    assert (pastas.shorts / "postados" / "short_01_x.mp4").exists()
+    assert (
+        (pastas.shorts / "postados" / "short_01_x.txt").read_text("utf-8").startswith("JÁ POSTADO")
+    )
+    assert (
+        ler_registro(pastas.shorts_renderizados)[str(corte.id)]["arquivo"]
+        == "postados/short_01_x.mp4"
+    )
+    assert editor.situacao(corte) == SITUACAO_PRONTO
+    # a tela diz
+    assert "postados" in editor._rotulo_postado.cget("text")
+    assert "postado no YouTube" in editor._rotulos_da_linha[0]["info"].cget("text")
+    assert "1 já postado" in editor._resumo.cget("text")
+
+
+@pytest.mark.gui
+def test_desmarcar_postado_traz_o_arquivo_de_volta(editor, pastas):
+    corte = _renderizar_o_primeiro(editor, pastas)
+    editor._var_postado.set(True)
+    editor._ao_marcar_postado()
+    editor._var_postado.set(False)
+    editor._ao_marcar_postado()
+    assert (pastas.shorts / "short_01_x.mp4").exists()
+    assert not (pastas.shorts / "postados" / "short_01_x.mp4").exists()
+    assert not carregar_cortes(pastas.cortes_shorts)[0].postado
+    assert editor.situacao(corte) == SITUACAO_PRONTO
+    assert editor._rotulo_postado.cget("text") == ""
+    assert "já postado" not in editor._resumo.cget("text")
+
+
+@pytest.mark.gui
+def test_postado_sem_arquivo_renderizado_so_grava_a_marca(editor, pastas):
+    editor.selecionar(0)
+    editor._var_postado.set(True)
+    editor._ao_marcar_postado()
+    assert carregar_cortes(pastas.cortes_shorts)[0].postado
+    assert not (pastas.shorts / "postados").exists()
+    assert "Ainda não há arquivo" in editor._rotulo_postado.cget("text")
+
+
+@pytest.mark.gui
+def test_corte_novo_que_ainda_nao_foi_salvo_leva_a_marca_no_proximo_salvar(editor, pastas):
+    novo = type(editor._cortes[0]).de_dict({**editor._cortes[0].para_dict(), "id": 777_000})
+    editor.adicionar_corte(novo)
+    editor._mudou = False
+    editor._var_postado.set(True)
+    editor._ao_marcar_postado()
+    assert editor.mudou  # não está no arquivo: espera o "Salvar"
+    assert editor.salvar(exigir_ate_o_limite=False)
+    assert next(c for c in carregar_cortes(pastas.cortes_shorts) if c.id == 777_000).postado
+
+
+@pytest.mark.gui
+def test_salvar_move_os_arquivos_dos_cortes_marcados_como_postados(editor, pastas):
+    corte = _renderizar_o_primeiro(editor, pastas)
+    corte.postado = True  # marcado em memória (como numa carga antiga) e salvo pelo botão
+    editor._houve_mudanca()
+    assert editor.salvar(exigir_ate_o_limite=False)
+    assert (pastas.shorts / "postados" / "short_01_x.mp4").exists()
+    assert editor.situacao(corte) == SITUACAO_PRONTO
+
+
+@pytest.mark.gui
+def test_arquivo_preso_avisa_na_tela_e_a_marca_fica_gravada(editor, pastas, monkeypatch):
+    from spurgeon.render import shorts as render_shorts
+
+    _renderizar_o_primeiro(editor, pastas)
+
+    def preso(origem, destino):
+        raise PermissionError(13, "usado por outro processo")
+
+    monkeypatch.setattr(render_shorts, "_mover_par", preso)
+    editor._var_postado.set(True)
+    editor._ao_marcar_postado()
+    assert carregar_cortes(pastas.cortes_shorts)[0].postado
+    assert (pastas.shorts / "short_01_x.mp4").exists()
+    assert "Não consegui mover" in editor._rotulo_postado.cget("text")
+
+
+def test_texto_do_postado_conforme_o_estado_do_corte():
+    from spurgeon.ui.studio_shorts import texto_do_postado
+
+    comum = corte_exemplo()
+    assert texto_do_postado(comum, tem_arquivo=True, alterado=False) == ""
+    postado = type(comum).de_dict(
+        {**comum.para_dict(), "postado": True, "postado_em": "2026-11-02"}
+    )
+    com_arquivo = texto_do_postado(postado, tem_arquivo=True, alterado=False)
+    assert "02/11/2026" in com_arquivo and "shorts_gerados/postados" in com_arquivo
+    assert "Ainda não há arquivo" in texto_do_postado(postado, tem_arquivo=False, alterado=False)
+    assert "O corte mudou depois" in texto_do_postado(postado, tem_arquivo=True, alterado=True)
+    sem_data = type(comum).de_dict({**comum.para_dict(), "postado": True})
+    assert "em " not in texto_do_postado(sem_data, tem_arquivo=True, alterado=False).split(".")[0]
+
+
+def test_aviso_do_titulo_so_fala_de_repetido_parecido_ou_generico():
+    from spurgeon.ui.studio_shorts import aviso_do_titulo
+
+    outros = ["Acaz queimou os próprios filhos", "Jotão não entrou no templo"]
+    assert aviso_do_titulo("Quando um rei ímpio governa o povo sofre", outros, "") == ""
+    assert aviso_do_titulo("   ", outros, "") == ""
+    assert "é igual ao título “Jotão não entrou no templo”" in aviso_do_titulo(
+        "jotão não entrou no templo!", outros, ""
+    )
+    assert "parecido demais" in aviso_do_titulo("Acaz queimou seus filhos no fogo", outros, "")
+    assert "genérico" in aviso_do_titulo("Deus punirá o pecado", outros, "")
+
+
+@pytest.mark.gui
+def test_o_aviso_do_titulo_aparece_ao_repetir_o_de_outro_short_marcado(editor):
+    editor.selecionar(0)
+    outro = editor._cortes[1].titulo
+    assert editor._aviso_do_titulo.cget("text") == ""
+    editor._var_titulo.set(outro)
+    assert f"é igual ao título “{outro}”" in editor._aviso_do_titulo.cget("text")
+    editor._cortes[1].incluir = False  # um Short desmarcado não conta
+    editor._atualizar_aviso_do_titulo()
+    assert editor._aviso_do_titulo.cget("text") == ""
+    editor._cortes[1].incluir = True
+    editor._var_titulo.set("Quando um rei ímpio governa o povo sofre")
+    assert editor._aviso_do_titulo.cget("text") == ""
