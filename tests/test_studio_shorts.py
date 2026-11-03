@@ -16,6 +16,7 @@ from spurgeon.render.shorts import (
     SITUACAO_PRONTO,
     detalhes_do_registro,
     ler_registro,
+    planejar_shorts,
     situacao_do_short,
 )
 from spurgeon.shorts.edicao import indices_das_palavras
@@ -736,7 +737,7 @@ def test_marcar_postado_grava_na_hora_move_o_arquivo_e_aparece_na_lista(editor, 
     assert editor.situacao(corte) == SITUACAO_PRONTO
     # a tela diz
     assert "postados" in editor._rotulo_postado.cget("text")
-    assert "postado no YouTube" in editor._rotulos_da_linha[0]["info"].cget("text")
+    assert "✔ postado" in editor._rotulos_da_linha[0]["info"].cget("text")
     assert "1 já postado" in editor._resumo.cget("text")
 
 
@@ -783,7 +784,10 @@ def test_salvar_move_os_arquivos_dos_cortes_marcados_como_postados(editor, pasta
     corte.postado = True  # marcado em memória (como numa carga antiga) e salvo pelo botão
     editor._houve_mudanca()
     assert editor.salvar(exigir_ate_o_limite=False)
-    assert (pastas.shorts / "postados" / "short_01_x.mp4").exists()
+    # o arquivo vai para a subpasta já com o nome que o corte tem (e não o do teste, "x")
+    nome = next(s for s in planejar_shorts(editor._cortes) if s.corte.id == corte.id).video
+    assert nome.startswith("postados/") and (pastas.shorts / nome).exists()
+    assert not (pastas.shorts / "short_01_x.mp4").exists()
     assert editor.situacao(corte) == SITUACAO_PRONTO
 
 

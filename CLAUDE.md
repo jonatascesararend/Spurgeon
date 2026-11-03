@@ -1,8 +1,9 @@
 # Studio Spurgeon
 
 Aplicativo desktop (Windows, Python 3.11, CustomTkinter, só pt-BR) que transforma sermões
-longos em vídeo limpo + legendas + Shorts verticais. Tudo local e offline (a única conexão sozinha é a
-consulta de atualização ao abrir, desligável).
+longos em vídeo limpo + legendas + Shorts verticais. Tudo local e offline (as únicas conexões sozinhas são a
+consulta de atualização ao abrir, desligável, e a fila de postagens do Instagram, que só tem o que a pessoa
+agendou). As redes (YouTube, Meta, TikTok) só são usadas quando a pessoa pede.
 
 **Leia o [Projeto.md](Projeto.md) antes de mexer:** ele tem as decisões, a ordem do pipeline
 e o roadmap por fase. Se uma decisão mudar, atualize o Projeto.md junto com o código.
@@ -234,10 +235,15 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   atualiza sozinho. Só `executar()` consulta (`verificar_atualizacao=True`); testes nunca tocam a internet (troque
   `app_mod.consultar_atualizacao`/`baixar_e_atualizar`/`reabrir_programa`). A faixa fica numa linha própria acima das abas
   (`faixa` → `aviso_de_atualizacao` + `linha_das_abas`). `instalar.ps1` aceita `-AguardarPid N` e `-Abrir`.
-- Já postado no YouTube: `Corte.postado`/`postado_em`; marcar no Studio grava só esse campo na hora
-  (`etapas.gravar_postado`) e move o `.mp4` e o `.txt` para `shorts_gerados/postados/` por
-  `render/shorts.aplicar_marcas_de_postado` (desmarcar devolve: `shorts_gerados/`, ou `desmarcados/` se o corte está
-  desmarcado). `ShortPlanejado.video`/`.texto` já levam o prefixo `postados/`; o registro guarda `postados/arq.mp4`.
+- Já postado e agendado, e as pastas deles: `Corte.postado`/`postado_em`; marcar no Studio grava só esse campo na
+  hora (`etapas.gravar_postado`) e move o `.mp4` e o `.txt` para `shorts_gerados/postados/` por
+  `render/shorts.aplicar_marcas_de_postado`. Um Short com `agendado_para` mora em `shorts_gerados/agendados/`
+  (`PASTA_DOS_AGENDADOS`); ao vencer vira postado e segue para `postados/`; tirar a marca devolve: `shorts_gerados/`, ou
+  `desmarcados/` se o corte está desmarcado. Postado vale mais que agendado, e agendado mais que desmarcado
+  (`pasta_do_estado`). `ShortPlanejado.video`/`.texto` já levam o prefixo (`postados/` ou `agendados/`) e o registro
+  guarda `postados/arq.mp4`. O `.txt` abre com "JÁ POSTADO" ou "AGENDADO PARA …". Depois de mover, chame
+  `EditorDeCortes.recarregar_registro(reordenar=False)` (senão o corte parece "novo"). A fila das redes não guarda o
+  caminho do arquivo (`publicacao/pacote.arquivo_do_short` lê o registro), por isso mover não a quebra.
   Depois de mover, chame `EditorDeCortes.recarregar_registro(reordenar=False)` (senão o corte parece "novo").
 - Títulos dos Shorts (`shorts/titulos.py`): igual/parecido/genérico/abertura repetida, sem IA. `ClienteLLM.melhorar_titulo`
   pede só o título de novo (até 3 vezes), dizendo o motivo da recusa; `refazer("titulo")` e `metadados_sem_repetir` o usam.
@@ -248,10 +254,46 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   `.gitattributes` quer LF nos `.py`); use `read_bytes().decode()`/`write_bytes()`. `Path.read_text(newline=)` só existe
   no Python 3.13. Confira com `git ls-files --eol` (o `grep $'\r'` do Git Bash não é confiável). No Git Bash o `find` é
   o do Git, não o do Windows (por isso o `instalar.bat` usa `%SystemRoot%\System32\find.exe`).
+- Publicar nas redes (`publicacao/`, pesquisa e limites em [Integracoes.md](Integracoes.md)): cada rede é uma
+  `Plataforma` (`modelo.py`) com `problemas`, `publicar`, `retomar` (fila local) e `consultar`; `agenda.py` tem
+  `criar_plataformas`, `publicar_em` (uma rede de cada vez; uma que falha não impede as outras e todo resultado,
+  inclusive o erro, vai para `_work/postagens.json`) e o `Agendador`; `fila.py` varre TODOS os projetos. Os estados
+  são `enviado`, `agendado` (a rede guarda o horário), `na_fila` (o Spurgeon guarda: Instagram, com o aplicativo
+  aberto), `rascunho`, `assistido` (TikTok) e `erro`. Segredos só pelo `Cofre` (`integracoes.json` ao lado do
+  `config.toml`, DPAPI do Windows): NUNCA no `config.toml` nem em log. HTTP só por `Transporte` (`rede.py`); os
+  testes usam `tests/falso_de_rede.TransporteFalso` e `sem_dormir` (`com_tentativas` e os laços de espera usam
+  `time.sleep`): nenhum teste toca a internet nem tem credencial. Relógio sempre injetável (`relogio=`). Nada
+  disso foi provado com contas reais: o que falta confirmar está no fim do Integracoes.md.
+- Aba Integrações (`ui/integracoes.py`): um `CartaoDaConta` por conta (a Meta junta Instagram e Facebook); segredo
+  guardado nunca volta para a caixa (placeholder "guardado"), campo secreto vazio no Salvar NÃO apaga; Conectar
+  roda em `Tarefas` (OAuth de desktop em `oauth.py`: loopback `127.0.0.1` + PKCE; o TikTok exige a porta 53682 e o
+  PKCE em hexadecimal). A aba ocupa a janela toda (`_trocar_aba`), como o Studio.
+- Postar pelo Studio (`ui/postagem.py`): `LinhaDeAgendamento` (caixa "Agendado para" + data + hora + previsão,
+  ao lado do "Já postado") e `JanelaDePostagem` (escolhe redes e horário, envia em segundo plano com o andamento
+  lido por `after`, nunca por widget na thread). `Corte.agendado_para` (`AAAA-MM-DDTHH:MM`, hora do computador)
+  grava na hora (`gravar_campos_do_corte`, só aquele campo, como o "já postado") e leva o arquivo para `agendados/`
+  (`EditorDeCortes._gravar_agendamento`; ao abrir o projeto os agendados fora da pasta são acertados); passada a hora o
+  Short vira postado sozinho (`shorts/agendamento.aplicar_vencimento`, conferido ao abrir o projeto e a cada 30 s, sem
+  perguntar à rede). Agendar nas redes guarda o horário no Short; publicar agora marca como já postado; rascunho
+  e passo assistido não mudam nada. Testes do Studio sem aba/`publicacao` escondem o botão de postar.
+- Calendário e relógio (`ui/seletores_de_horario.py`): `BotaoDoCalendario` (📅) e `BotaoDoRelogio` (🕒) ficam ao lado
+  dos campos de data e de hora da `LinhaDeAgendamento` e da `JanelaDePostagem` e abrem uma `JanelaDeSeletor` com
+  `CalendarioMensal` ou `RelogioDePonteiros` (hora em dois anéis, 00 a 11 fora e 12 a 23 dentro; depois os minutos só
+  em blocos de 15). Desenhados em `Canvas`; a geometria (`hora_do_ponto`, `minuto_do_ponto`, `celula_do_ponto`) são
+  funções puras: teste por elas, sem Tk. Os botões entregam a escolha por `ao_escolher` e quem os usa escreve nos
+  campos (na linha, `_ao_escolher_o_dia`/`_ao_escolher_a_hora` já marcam o agendamento e avisam uma vez só). A
+  janelinha segura o foco e o devolve à janela de antes (a de postagem é modal). O texto digitado continua valendo
+  (`shorts/agendamento.ler_data`/`ler_hora`).
+- Título e arquivo: o nome do arquivo vem do `Corte.slug`. O Studio guarda o título que o nome tinha
+  (`_titulo_do_nome`): se o título muda, `salvar()` zera o `slug` e ele é refeito a partir do título novo (título
+  que a IA deu e a pessoa não mexeu mantém o nome curto da IA). `render/shorts.sincronizar_arquivos` renomeia em
+  duas fases o `.mp4` e o `.txt` já renderizados, move para `postados/` ou `agendados/`, reescreve o `.txt` com os textos de agora
+  e NUNCA sobrescreve nem perde arquivo (nome ocupado ou arquivo preso viram `falhas`). A lista da esquerda
+  acompanha o que se digita (`_espelhar_titulo_na_lista`, só fora de `_carregando`/`_tela_desatualizada`).
 - Aviso do canto superior direito: `ui/contato.py` (`AvisoDeContato`, e-mail como `mailto:`; botão direito copia),
   dentro da faixa das abas, visível nas duas abas.
 
-## Hardware desta máquina (alvo da v1)
+## Hardware de referência (a máquina de desenvolvimento)
 
 i7-6800K (12 threads), 15,8 GB de RAM, GTX 760 de 2 GB sem CUDA utilizável e sem NVENC.
-O caminho só com CPU é o principal; cuidado com tempos e memória.
+Os tempos do Projeto.md foram medidos nela. O caminho só com CPU é o principal; cuidado com tempos e memória.

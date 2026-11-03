@@ -39,6 +39,7 @@ from spurgeon.render.marca import (
     trecho_do_filtro,
 )
 from spurgeon.render.video_longo import recortes_de_quadros
+from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
@@ -55,11 +56,26 @@ MICRO_FADE_S = 0.01
 _TOLERANCIA_DE_DURACAO_S = 0.6
 
 
-#: a subpasta de `shorts_gerados/` onde ficam os Shorts que a pessoa marcou como já postados no
-#: YouTube (o arquivo é movido para lá ao marcar no Studio Shorts, e volta ao desmarcar)
+#: a subpasta de `shorts_gerados/` onde ficam os Shorts já postados (marcados à mão ou porque a
+#: hora agendada passou); o arquivo é movido para lá no Studio Shorts, e volta ao desmarcar
 PASTA_DOS_POSTADOS = "postados"
+#: a subpasta dos Shorts com horário agendado (o arquivo vai para lá ao agendar, e daí para
+#: `postados/` quando a hora passa ou o Short é marcado como postado; volta se o horário sai)
+PASTA_DOS_AGENDADOS = "agendados"
 #: a subpasta dos Shorts tirados da seleção (volta quando forem marcados de novo)
 PASTA_DOS_DESMARCADOS = "desmarcados"
+#: as subpastas que um Short ocupa por causa do seu estado, não da seleção
+_PASTAS_DE_ESTADO = (PASTA_DOS_POSTADOS, PASTA_DOS_AGENDADOS)
+
+
+def pasta_do_estado(corte: Corte) -> str:
+    """A subpasta de `shorts_gerados/` que o estado do corte pede: postado, agendado ou "" (a
+    pasta principal). Postado vale mais que agendado."""
+    if corte.postado:
+        return PASTA_DOS_POSTADOS
+    if corte.agendado_para:
+        return PASTA_DOS_AGENDADOS
+    return ""
 
 
 @dataclass(frozen=True)
@@ -73,8 +89,10 @@ class ShortPlanejado:
 
     @property
     def _prefixo(self) -> str:
-        """O caminho dentro de `shorts_gerados/`: um Short já postado mora em `postados/`."""
-        return f"{PASTA_DOS_POSTADOS}/" if self.corte.postado else ""
+        """O caminho dentro de `shorts_gerados/`: um Short já postado mora em `postados/` e um
+        agendado em `agendados/`."""
+        pasta = pasta_do_estado(self.corte)
+        return f"{pasta}/" if pasta else ""
 
     @property
     def video(self) -> str:
@@ -93,10 +111,12 @@ def planejar_shorts(cortes: list[Corte]) -> list[ShortPlanejado]:
 
 def texto_de_publicacao(corte: Corte) -> str:
     """O .txt que acompanha cada Short: o que colar na hora de publicar."""
-    linhas = [
-        f"JÁ POSTADO NO YOUTUBE{_quando_foi_postado(corte)}",
-        "",
-    ] if corte.postado else []  # fmt: skip
+    linhas = []
+    marcado_para = ler_horario(corte.agendado_para)
+    if corte.postado:
+        linhas = [f"JÁ POSTADO{_quando_foi_postado(corte)}", ""]
+    elif marcado_para is not None:
+        linhas = [f"AGENDADO PARA {rotulo_do_horario(marcado_para)}", ""]
     linhas += [
         f"Título: {corte.titulo}",
         "",
@@ -434,15 +454,19 @@ class ResultadoDasMarcas:
 
 
 def aplicar_marcas_de_postado(pastas: PastasProjeto, cortes: Sequence[Corte]) -> ResultadoDasMarcas:
-    """Move os Shorts já renderizados para `postados/` (ou os tira de lá), conforme o `postado` de
-    cada corte (o `.mp4` e o `.txt`), e acerta o registro.
+    """Move os Shorts já renderizados para `postados/` ou `agendados/` (ou os tira de lá),
+    conforme o `postado` e o `agendado_para` de cada corte (o `.mp4` e o `.txt`), e acerta o
+    registro.
 
-    Marcar leva o arquivo de onde estiver para `shorts_gerados/postados/`. Desmarcar o devolve a
-    `shorts_gerados/` (ou a `desmarcados/`, se o corte está desmarcado). Quem ainda não tem arquivo
-    não muda nada: ao ser renderizado ele já vai para o lugar certo (`ShortPlanejado.video`).
+    Marcar como postado leva o arquivo de onde estiver para `shorts_gerados/postados/`; agendar o
+    leva para `shorts_gerados/agendados/` (quando a hora passa, o corte vira postado e ele segue
+    para `postados/`). Tirar a marca o devolve a `shorts_gerados/` (ou a `desmarcados/`, se o
+    corte está desmarcado). Postado vale mais que agendado, e agendado mais que desmarcado. Quem
+    ainda não tem arquivo não muda nada: ao ser renderizado ele já vai para o lugar certo
+    (`ShortPlanejado.video`).
 
     Um arquivo aberto em outro programa não pode ser movido no Windows: vai para `falhas`, sem
-    interromper os outros (o lugar certo é acertado na próxima renderização).
+    interromper os outros (o lugar certo é acertado na próxima vez).
     """
     registro = ler_registro(pastas.shorts_renderizados)
     resultado = ResultadoDasMarcas([], [])
@@ -455,10 +479,10 @@ def aplicar_marcas_de_postado(pastas: PastasProjeto, cortes: Sequence[Corte]) ->
         atual = pastas.shorts / relativo
         if not atual.is_file():
             continue
-        em_postados = relativo.parent.as_posix() == PASTA_DOS_POSTADOS
-        if corte.postado:
-            pasta_nova = Path(PASTA_DOS_POSTADOS)
-        elif em_postados:
+        pasta_do_corte = pasta_do_estado(corte)
+        if pasta_do_corte:
+            pasta_nova = Path(pasta_do_corte)
+        elif relativo.parent.as_posix() in _PASTAS_DE_ESTADO:
             pasta_nova = Path() if corte.incluir else Path(PASTA_DOS_DESMARCADOS)
         else:
             continue
@@ -475,12 +499,76 @@ def aplicar_marcas_de_postado(pastas: PastasProjeto, cortes: Sequence[Corte]) ->
             continue
         entrada["arquivo"] = (pasta_nova / atual.name).as_posix()
         texto = novo.with_suffix(".txt")
-        if texto.exists():  # o .txt de publicação diz se já foi postado
+        if texto.exists():  # o .txt de publicação diz se já foi postado ou quando vai ao ar
             escrever_texto_atomico(texto, texto_de_publicacao(corte))
         resultado.movidos.append(atual.name)
         mudou = True
     if mudou:
         escrever_json_atomico(pastas.shorts_renderizados, registro)
+    return resultado
+
+
+def renomear_prontos(
+    pasta: Path, planejados: list[ShortPlanejado], registro: Registro
+) -> ResultadoDasMarcas:
+    """Põe cada Short já renderizado no nome e na pasta que o corte tem agora (título, número
+    e `postados/` ou `agendados/`) e acerta o registro. Em duas fases, porque os números trocam
+    de lugar (o 2 vira 1 e o 3 vira 2).
+
+    Um arquivo aberto em outro programa não se move no Windows, e um nome que já está ocupado não
+    é sobrescrito: vão para `falhas` (o arquivo fica como está), sem parar os outros.
+    """
+    resultado = ResultadoDasMarcas([], [])
+    renomes = []
+    for curto in planejados:
+        entrada = registro.get(str(curto.corte.id))
+        if entrada and entrada["arquivo"] != curto.video and (pasta / entrada["arquivo"]).exists():
+            renomes.append((pasta / entrada["arquivo"], curto, entrada))
+    provisorios = []
+    for atual, curto, entrada in renomes:
+        provisorio = pasta / f"{curto.video}.mover"
+        try:
+            _mover_par(atual, provisorio)
+        except OSError as erro:
+            resultado.falhas.append(f"{atual.name} ({erro.strerror or erro})")
+            continue
+        provisorios.append((provisorio, atual, curto, entrada))
+    for provisorio, atual, curto, entrada in provisorios:
+        destino = pasta / curto.video
+        if destino.exists():  # outro arquivo no lugar: desfaz, não sobrescreve
+            _mover_par(provisorio, atual)
+            resultado.falhas.append(f"{atual.name} (já existe {destino.name})")
+            continue
+        provisorio.replace(destino)
+        texto = provisorio.with_suffix(".txt")
+        if texto.exists():
+            texto.replace(destino.with_suffix(".txt"))
+        entrada["arquivo"] = curto.video
+        resultado.movidos.append(destino.name)
+    return resultado
+
+
+def sincronizar_arquivos(pastas: PastasProjeto, cortes: Sequence[Corte]) -> ResultadoDasMarcas:
+    """Depois de salvar no Studio: os Shorts já renderizados passam a ter o nome do título de
+    agora e a pasta certa (`postados/` ou `agendados/`), e o `.txt` ao lado diz o título, a
+    descrição e as hashtags de agora. O que não deu para mover vai para `falhas`.
+    """
+    registro = ler_registro(pastas.shorts_renderizados)
+    planejados = planejar_shorts(list(cortes))
+    resultado = renomear_prontos(pastas.shorts, planejados, registro)
+    if resultado.movidos:
+        escrever_json_atomico(pastas.shorts_renderizados, registro)
+    for curto in planejados:
+        entrada = registro.get(str(curto.corte.id))
+        if not entrada or not (pastas.shorts / entrada["arquivo"]).is_file():
+            continue
+        texto = (pastas.shorts / entrada["arquivo"]).with_suffix(".txt")
+        novo = texto_de_publicacao(curto.corte)
+        if not texto.exists() or texto.read_text(encoding="utf-8") != novo:
+            escrever_texto_atomico(texto, novo)
+    marcas = aplicar_marcas_de_postado(pastas, cortes)  # postados, agendados e desmarcados
+    resultado.movidos += marcas.movidos
+    resultado.falhas += marcas.falhas
     return resultado
 
 
@@ -492,7 +580,10 @@ def organizar_pasta(
     Um Short pronto cujo número mudou (a seleção mudou) só é renomeado; um que foi desmarcado vai
     para `desmarcados/` e volta quando for marcado de novo. Restos `.parcial` são apagados.
     """
-    for resto in (*pasta.glob("*.parcial"), *pasta.glob(f"{PASTA_DOS_POSTADOS}/*.parcial")):
+    for resto in (
+        *pasta.glob("*.parcial"),
+        *(p for sub in _PASTAS_DE_ESTADO for p in pasta.glob(f"{sub}/*.parcial")),
+    ):
         resto.unlink(missing_ok=True)
     marcados = {str(s.corte.id): s for s in planejados}
 
@@ -506,26 +597,11 @@ def organizar_pasta(
             _mover_par(atual, novo)
             entrada["arquivo"] = f"{PASTA_DOS_DESMARCADOS}/{atual.name}"
 
-    # em duas fases, porque os números trocam de lugar (o 2 vira 1 e o 3 vira 2)
-    renomes = []
-    for id_do_corte, curto in marcados.items():
-        entrada = registro.get(id_do_corte)
-        if entrada and entrada["arquivo"] != curto.video and (pasta / entrada["arquivo"]).exists():
-            renomes.append((pasta / entrada["arquivo"], curto, entrada))
-    provisorios = []
-    for atual, curto, entrada in renomes:
-        provisorio = pasta / f"{curto.video}.mover"
-        _mover_par(atual, provisorio)
-        provisorios.append((provisorio, curto, entrada))
-    for provisorio, curto, entrada in provisorios:
-        destino = pasta / curto.video
-        provisorio.replace(destino)
-        texto = provisorio.with_suffix(".txt")
-        if texto.exists():
-            texto.replace(destino.with_suffix(".txt"))
-        entrada["arquivo"] = curto.video
-    if renomes:
-        ctx.log.info("%d Shorts já prontos mudaram de número no nome.", len(renomes))
+    renomeados = renomear_prontos(pasta, planejados, registro)
+    for aviso in renomeados.falhas:
+        ctx.log.warning("Não consegui renomear um Short pronto: %s", aviso)
+    if renomeados.movidos:
+        ctx.log.info("%d Shorts já prontos mudaram de nome ou de número.", len(renomeados.movidos))
     escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
 
 
@@ -642,7 +718,7 @@ class RenderizarShorts(Etapa):
                 fontes is not None, marca,
             )  # fmt: skip
             destino = pasta / curto.video
-            destino.parent.mkdir(parents=True, exist_ok=True)  # `postados/` pode não existir
+            destino.parent.mkdir(parents=True, exist_ok=True)  # as subpastas podem não existir
             escrever_texto_atomico(pasta / curto.texto, texto_de_publicacao(curto.corte))
             pronto = registro.get(str(curto.corte.id))
             if destino.exists() and pronto and pronto["assinatura"] == assinatura:

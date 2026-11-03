@@ -55,6 +55,10 @@ from spurgeon.core.projeto import (
     ler_nome_e_data,
     nome_pasta_projeto,
 )
+from spurgeon.publicacao.agenda import criar_plataformas
+from spurgeon.publicacao.cofre import Cofre
+from spurgeon.publicacao.fila import projetos_com_fila, rodar_fila
+from spurgeon.publicacao.modelo import ERRO
 from spurgeon.render.shorts import assinatura_visual
 from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.ui import dialogos, dicas
@@ -79,9 +83,11 @@ from spurgeon.ui.formulario import (
     para_opcoes,
     shorts_do_formulario,
 )
+from spurgeon.ui.integracoes import AbaIntegracoes
 from spurgeon.ui.painel_entrada import PainelEntrada
 from spurgeon.ui.painel_execucao import EstadoUI, PainelExecucao
 from spurgeon.ui.painel_opcoes import NOMES_DAS_PAGINAS, PainelOpcoes
+from spurgeon.ui.postagem import ContextoDePublicacao
 from spurgeon.ui.presets import RepositorioDePresets
 from spurgeon.ui.quadros import FonteDeQuadros
 from spurgeon.ui.revisao import abrir_revisao
@@ -101,6 +107,9 @@ _INTERVALO_MS = 100
 _CICLOS_POR_SEGUNDO = 1000 // _INTERVALO_MS
 ABA_PROCESSAMENTO = "Processamento"
 ABA_STUDIO = "Studio Shorts"
+ABA_INTEGRACOES = "Integrações"
+_FILA_PRIMEIRA_MS = 8000  # a fila de postagens começa pouco depois de a janela aparecer
+_FILA_MS = 60_000  # e anda a cada minuto
 _ABERTURA_MS = 600  # a janela monta e aparece antes da reabertura e da oferta do passo a passo
 _ENTRE_REABRIR_E_OFERTAR_MS = 300
 _ATUALIZACAO_MS = 1500  # a consulta ao GitHub começa depois de a janela aparecer
@@ -161,6 +170,10 @@ class JanelaPrincipal(ctk.CTk):
         self._abertura_agendada: str | None = None
         self._secoes_do_tutorial: set[str] = set()  # seções que o passo a passo abriu
         self._vista_antes: tuple[str, str] | None = None  # a aba e a página de antes dele
+        self.cofre = Cofre()  # as chaves das redes (criptografadas pelo Windows)
+        self._plataformas = criar_plataformas(self.cofre)
+        self._fila_agendada: str | None = None
+        self._fila_rodando = False
 
         self.title("Studio Spurgeon")
         self._ajustar_tamanho()
@@ -173,6 +186,8 @@ class JanelaPrincipal(ctk.CTk):
         self._agendar_abertura(oferecer_tutorial, reabrir_ultimo)
         if verificar_atualizacao and self.config_app.atualizacao_ao_abrir:
             self.after(_ATUALIZACAO_MS, self._verificar_atualizacao)
+        if verificar_atualizacao:  # a abertura de verdade também anda a fila de postagens
+            self._fila_agendada = self.after(_FILA_PRIMEIRA_MS, self._rodar_a_fila)
 
     # --- montagem -----------------------------------------------------------------------------
     def _ajustar_tamanho(self) -> None:
@@ -199,7 +214,9 @@ class JanelaPrincipal(ctk.CTk):
         linha_das_abas = ctk.CTkFrame(faixa, fg_color="transparent")
         linha_das_abas.pack(side="bottom", fill="x")
         self._abas = ctk.CTkSegmentedButton(
-            linha_das_abas, values=[ABA_PROCESSAMENTO, ABA_STUDIO], command=self._trocar_aba
+            linha_das_abas,
+            values=[ABA_PROCESSAMENTO, ABA_STUDIO, ABA_INTEGRACOES],
+            command=self._trocar_aba,
         )
         self._abas.pack(side="left")
         self.contato = AvisoDeContato(linha_das_abas)  # no canto direito, nas duas abas
@@ -211,6 +228,9 @@ class JanelaPrincipal(ctk.CTk):
                 ABA_PROCESSAMENTO: "As opções do sermão, à esquerda, e o andamento do "
                 "processamento, à direita.",
                 ABA_STUDIO: lambda: self._dica_da_aba_studio(),
+                ABA_INTEGRACOES: "Liga as contas do YouTube, do Instagram, do Facebook e do "
+                "TikTok da igreja (as chaves ficam criptografadas neste computador) para o "
+                "Studio Shorts postar e agendar cada Short em todas as redes de uma vez.",
             },
         )
 
@@ -295,7 +315,15 @@ class JanelaPrincipal(ctk.CTk):
             origem_da_previa=self.origem_da_previa,
             contexto_da_ia=self._contexto_da_ia,
             definir_ajustes=self._definir_ajustes_do_short,
+            publicacao=ContextoDePublicacao(
+                plataformas=lambda: self._plataformas,
+                tarefas=self.tarefas,
+                registrar=self._registrar_atividade,
+            ),
         )
+        self.integracoes = AbaIntegracoes(
+            self, plataformas=self._plataformas, cofre=self.cofre, tarefas=self.tarefas
+        )  # filho da janela, como o Studio: ocupa a janela toda quando a aba está aberta
         self._abas.set(ABA_PROCESSAMENTO)
         self._trocar_aba(ABA_PROCESSAMENTO)
         self._atualizar_aba_studio()
@@ -783,16 +811,76 @@ class JanelaPrincipal(ctk.CTk):
 
     # --- projetos abertos e Studio Shorts -----------------------------------------------------
     def _trocar_aba(self, nome: str) -> None:
-        """Processamento: as opções à esquerda e o andamento à direita. Studio Shorts: só ele, na
-        janela inteira (mais espaço para editar as legendas)."""
+        """Processamento: as opções à esquerda e o andamento à direita. Studio Shorts e
+        Integrações: só eles, na janela inteira (mais espaço para editar as legendas e para as
+        chaves das redes)."""
         if nome == ABA_STUDIO:
             self._coluna.grid_remove()
             self._direita.grid_remove()
+            self.integracoes.grid_remove()
             self.studio.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(8, 0))
+        elif nome == ABA_INTEGRACOES:
+            self._coluna.grid_remove()
+            self._direita.grid_remove()
+            self.studio.grid_remove()
+            self.integracoes.grid(
+                row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(8, 0)
+            )
+            self.integracoes.atualizar()
         else:
             self.studio.grid_remove()
+            self.integracoes.grid_remove()
             self._coluna.grid()
             self._direita.grid()
+
+    # --- fila de postagens ------------------------------------------------------------
+    def _registrar_atividade(self, texto: str) -> None:
+        self.integracoes.registrar(texto)
+
+    def _rodar_a_fila(self) -> None:
+        """De minuto em minuto: avança a fila de postagens de todos os projetos (o Instagram
+        não agenda pela API: o Spurgeon publica na hora marcada, com o aplicativo aberto)."""
+        self._fila_agendada = None
+        if self._encerrando:
+            return
+        if self._fila_rodando:
+            self._reagendar_a_fila()
+            return
+        self._fila_rodando = True
+        projetos = self.config_app.pastas.projetos
+        plataformas = self._plataformas
+
+        def trabalho() -> list:
+            mudancas: list = []
+            rodar_fila(
+                plataformas, projetos, ao_mudar=lambda p, i, r: mudancas.append((p.raiz.name, i, r))
+            )
+            return mudancas
+
+        self.tarefas.rodar(trabalho, self._fila_andou, self._fila_falhou)
+
+    def _reagendar_a_fila(self) -> None:
+        if not self._encerrando:
+            self._fila_agendada = self.after(_FILA_MS, self._rodar_a_fila)
+
+    def _fila_andou(self, mudancas: list) -> None:
+        self._fila_rodando = False
+        for projeto, id_do_corte, resultado in mudancas:
+            nome = self._plataformas[resultado.plataforma].nome
+            linha = f"{projeto}, Short {id_do_corte}: {nome} {resultado.rotulo}"
+            if resultado.estado == ERRO:
+                linha += f". {resultado.detalhe}"
+            elif resultado.aviso:
+                linha += f". ⚠ {resultado.aviso}"
+            self.integracoes.registrar(linha)
+        if mudancas:
+            self.studio.atualizar_redes()
+        self._reagendar_a_fila()
+
+    def _fila_falhou(self, erro: Exception) -> None:
+        self._fila_rodando = False
+        self.integracoes.registrar(f"Fila de postagens: {erro}")
+        self._reagendar_a_fila()
 
     def _motivo_do_bloqueio(self) -> str | None:
         estado = self.execucao.estado
@@ -1413,6 +1501,17 @@ class JanelaPrincipal(ctk.CTk):
 
     # --- fechar -------------------------------------------------------------------------------
     def _ao_fechar(self) -> None:
+        na_fila = len(projetos_com_fila(self.config_app.pastas.projetos))
+        if na_fila and not dialogos.confirmar(
+            self,
+            "Sair do aplicativo?",
+            f"Há postagens na fila do Spurgeon em {na_fila} projeto{'s' if na_fila > 1 else ''} "
+            "(o Instagram não agenda pela API). Elas só saem enquanto o aplicativo está aberto. "
+            "Sair mesmo assim?",
+            sim="Sair",
+            nao="Continuar",
+        ):
+            return
         if self.executor.ativo:
             if not dialogos.confirmar(
                 self,

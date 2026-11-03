@@ -317,19 +317,27 @@ def gravar_cortes(caminho: Path, cortes: list[Corte]) -> None:
     escrever_json_atomico(caminho, [c.para_dict() for c in cortes])
 
 
-def gravar_postado(caminho: Path, id_do_corte: int, postado: bool, quando: str = "") -> bool:
-    """Grava só o "já postado" de um corte no arquivo, sem levar junto o resto do que a tela tem
-    em edição. Devolve False se o corte não está no arquivo (ainda não foi salvo)."""
+def gravar_campos_do_corte(caminho: Path, id_do_corte: int, **campos) -> bool:
+    """Grava só estes campos de um corte no arquivo, sem levar junto o resto do que a tela tem
+    em edição (o "já postado" e o "agendado para" valem na hora). Devolve False se o corte não
+    está no arquivo (ainda não foi salvo)."""
     if not caminho.exists():
         return False
     cortes = carregar_cortes(caminho)
     for corte in cortes:
         if corte.id == id_do_corte:
-            corte.postado = postado
-            corte.postado_em = quando if postado else ""
+            for nome, valor in campos.items():
+                setattr(corte, nome, valor)
             gravar_cortes(caminho, cortes)
             return True
     return False
+
+
+def gravar_postado(caminho: Path, id_do_corte: int, postado: bool, quando: str = "") -> bool:
+    """Grava só o "já postado" de um corte (e a data), sem o resto da edição."""
+    return gravar_campos_do_corte(
+        caminho, id_do_corte, postado=postado, postado_em=quando if postado else ""
+    )
 
 
 def cortes_manuais_guardados(caminho: Path) -> list[Corte]:
@@ -423,6 +431,8 @@ class SelecionarShorts(Etapa):
                 antigo = None  # a análise foi refeita: o número é o mesmo, mas o trecho é outro
             if antigo is not None and antigo.postado:
                 corte.postado, corte.postado_em = True, antigo.postado_em  # não se perde ao refazer
+            if antigo is not None and antigo.agendado_para:
+                corte.agendado_para = antigo.agendado_para
             guardado = cache.get(str(corte.id))
             if antigo is not None and _repete_um_ja_criado(antigo.titulo, titulos, guardado, marca):
                 ctx.log.info("O título do corte %d repete um já criado; criando outro.", numero)

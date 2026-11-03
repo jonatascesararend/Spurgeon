@@ -1,21 +1,32 @@
 # Guia de Projeto: Studio Spurgeon de Cortes e Otimização de Vídeos (Sermões, Aulas e Shorts)
 
-> **Versão 5 — 2026-10-15: versão 1.2 do aplicativo.** A 1.0 (Fases 0 a 6) foi testada com o sermão real de 65 min; a 1.1 (Fase 7) acrescentou a marca d'água, os modos "só Shorts" e "só vinhetas", a abertura de projetos, a aba **Studio Shorts** e o verificador de português; a 1.2 (Fase 8) traz o corte do começo e do fim do vídeo com prévia, o zoom, o tratamento de imagem, o fade e a escolha do arquivo das vinhetas, o modelo do Ollama em lista, Shorts de até 180 s e a legenda do Studio que acompanha os ajustes.
-> As decisões da pré-entrevista estão confirmadas pelo autor; a seção 6 registra as decisões, as escolhas feitas sem consulta e as pendências.
+> **Estado: versão 1.8 do aplicativo (2026-11-03).** Este guia reúne a arquitetura, o roadmap por fase (as Fases 0 a 9 estão concluídas) e, na seção 6, as decisões confirmadas pelo autor, as escolhas feitas sem consulta e as pendências, rodada por rodada. O que o programa faz, para quem usa, está no [README.md](README.md); a instalação, no [COMO_INSTALAR.txt](COMO_INSTALAR.txt); a pesquisa sobre as redes, no [Integracoes.md](Integracoes.md).
+>
+> | Versão | O que trouxe |
+> |---|---|
+> | 1.0 | Fases 0 a 6: do vídeo bruto ao vídeo longo limpo e aos Shorts; testada com um sermão real de 65 min |
+> | 1.1 | Fase 7: marca d'água, modos "Só Shorts" e "Só vinhetas", abrir projetos, aba **Studio Shorts** e verificador de português |
+> | 1.2 | Fase 8: corte do começo e do fim com prévia, zoom, tratamento de imagem, fade, escolha das vinhetas e Shorts de até 180 s |
+> | 1.3 | Fase 9: janela reorganizada, elementos do YouTube sobre a prévia, log detalhado e **Shorts livre** |
+> | 1.4 | Studio Shorts com tabela de frases editável, aba que ocupa a janela toda e "Refazer com IA" por campo |
+> | 1.5 | Saltos, marca-texto e borracha, pausas por Short, desfazer e refazer, 17 categorias, dicionário, dicas e passo a passo |
+> | 1.6 | Aviso de contato, abertura sem console e instalador para um PC zerado |
+> | 1.7 | Atualização pelo GitHub, instalador reforçado, "já postado" e títulos sem repetição |
+> | 1.8 | Título que renomeia o arquivo, "agendado para" (com calendário, relógio e as pastas `agendados/` e `postados/`) e a aba **Integrações** para postar nas redes |
 
 ---
 
 ## 1. Visão Geral da Arquitetura
 
-A aplicação é um aplicativo desktop nativo para Windows (Python + CustomTkinter, tema escuro, somente pt-BR). Ela detecta as especificações do PC, recomenda o tamanho do faster-whisper compatível com a máquina e usa os recursos disponíveis (CPU, RAM, GPU) conforme o limite escolhido pelo usuário.
+A aplicação é um aplicativo desktop nativo para Windows (Python + CustomTkinter, tema escuro, somente pt-BR). Ela transforma um sermão longo em vídeo limpo, legendas e Shorts verticais e, depois, posta e agenda os Shorts nas redes da igreja. Detecta as especificações do PC, recomenda o tamanho do faster-whisper compatível com a máquina e usa os recursos disponíveis (CPU, RAM, GPU) conforme o limite escolhido pelo usuário.
 
 ### 1.1 Escopo e premissas
 
-* **Público:** v1 para o PC do autor (por enquanto, o mesmo PC de desenvolvimento); depois, instalação em outros PCs. Por isso a detecção de hardware é requisito real, não enfeite.
+* **Público:** igrejas e equipes de mídia que gravam sermões e aulas, em computadores comuns com Windows 10 ou 11 de 64 bits. O programa nasceu e foi medido no PC de desenvolvimento do autor (seção 5); desde a 1.6 o `instalar.bat` prepara outros computadores. Como cada computador é diferente, a detecção de hardware é requisito real, não enfeite.
 * **Material de entrada:** vídeos de 45 min a 1h30, somente fala (sem música), câmera fixa em 16:9, pastor sempre no centro do quadro e sem se mover.
-* **Um vídeo por vez** (sem fila na v1).
-* **100% offline** depois de instalar as dependências e baixar os modelos. A única conexão que o programa faz sozinho é a consulta de atualização ao abrir (`core/atualizacao.py`), que a pessoa pode desligar.
-* **Sem player de vídeo embutido** na interface. A revisão é feita sobre texto e tempos; as únicas imagens são quadros de exemplo (corte, zoom e tratamento de cor) e uma prévia de 15 s que abre no player do Windows (Fase 8).
+* **Um vídeo por vez** (não há fila de vários vídeos).
+* **100% offline** depois de instalar as dependências e baixar os modelos. As conexões que o programa faz sozinho são a consulta de atualização ao abrir (`core/atualizacao.py`), que a pessoa pode desligar, e a fila de postagens (`publicacao/fila.py`), que só existe se a pessoa agendou um Short no Instagram; as redes (YouTube, Meta, TikTok) só são usadas quando a pessoa pede.
+* **Sem player de vídeo completo** na interface. A revisão é feita sobre texto e tempos; as imagens são quadros de exemplo (corte, zoom e tratamento de cor), uma prévia de 15 s de cada ponta do vídeo que abre no player do Windows (Fase 8) e a prévia em miniatura de cada Short no Studio, que tem um miniplayer próprio (`ui/miniplayer.py`: quadros por FFmpeg e som por `winsound`).
 * **Idioma:** somente pt-BR (Whisper `language="pt"`, spaCy em português, prompts do LLM em português).
 * **Teologia:** o conteúdo é de teologia reformada calvinista; isso orienta o vocabulário do Whisper e as regras de contexto dos cortes.
 
@@ -70,6 +81,8 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 [10] Finalizar: apagar os intermediários pesados de _work/, registrar resumo no log
 ```
 
+**Depois do pipeline (Studio Shorts e redes).** O pipeline termina nos arquivos de `shorts_gerados/`. Dali em diante, a pessoa trabalha no **Studio Shorts** (ajusta o corte e a legenda, renderiza só o que falta, marca "agendado para" ou "já postado") e na aba **Integrações** (liga as contas), e o botão "Postar nas redes…" envia cada Short ao YouTube, Instagram, Facebook e TikTok, agora ou no horário escolhido (`publicacao/`; decisões na Rodada 1.8 e pesquisa no [Integracoes.md](Integracoes.md)). O arquivo de cada Short acompanha o seu estado: `shorts_gerados/` (pronto), `agendados/` (com horário marcado), `postados/` (já foi ao ar) e `desmarcados/` (fora da seleção).
+
 **Modos (v1.1).** O mesmo pipeline roda em três modos (`OpcoesProcessamento.modo`): `completo` (tudo o que estiver marcado); `so_shorts` (os passos do vídeo longo ficam de fora, e a transcrição e a análise já feitas são aproveitadas); `so_vinhetas` (só a etapa `adicionar_vinhetas`: codifica a introdução e a vinheta com o mesmo preset do vídeo, emenda sem recodificar o vídeo principal e desloca o `.srt`; o resultado é `video_longo_com_vinhetas.mp4`). `Pipeline.ativas` filtra as etapas pelo modo, e o registro das etapas fora do modo fica em `estado.etapas_guardadas`, para não se perder o que já foi feito.
 
 **Por que transcrever uma vez antes de cortar silêncio:** o .srt sempre bate com o vídeo final, os Shorts saem do material original, e não é preciso retranscrever depois de cortar. O vínculo entre as duas linhas do tempo é um **mapa de tempo** (lista de trechos mantidos → função `t_original → t_editado`).
@@ -88,26 +101,33 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 | Pós-correção de termos | `rapidfuzz` | Compara a transcrição com o vocabulário teológico. |
 | Hardware | `psutil`, `nvidia-ml-py` (opcional), `ctranslate2` | Só recomenda; nunca bloqueia. |
 | Config / pastas | `pydantic` + TOML, `platformdirs` | Config do usuário fora do repositório. |
+| Imagens | `pillow` | Marca d'água (ler a imagem e tirar o fundo) e os elementos do YouTube desenhados sobre as prévias. |
+| Redes | `urllib` (por `publicacao/rede.py`) | Sem SDK de rede social: OAuth de desktop (loopback + PKCE) e HTTP próprio, testado só com respostas simuladas. Chaves no cofre do Windows (DPAPI, por `ctypes`), fora do `config.toml`. |
 | Qualidade | `pytest`, `ruff`, `pre-commit` | Fixture: vídeo de 20 s gerado pelo FFmpeg (não versionado). |
 
-Gerenciamento: **Python 3.11**, `uv` com lockfile, `pyproject.toml` com extras opcionais (`[ui]`, `[ai]`) e o grupo `dev` (instalado por padrão; o `instalar.bat` usa `--no-dev`).
+Gerenciamento: **Python 3.11**, `uv` com lockfile, `pyproject.toml` com extras opcionais (`[ui]`, `[transcricao]`, `[shorts]` e `[ai]`, que repete os de IA) e o grupo `dev` (instalado por padrão; o `instalar.bat` usa `--no-dev`).
 
 ### 1.6 Estrutura do repositório
 
 ```
 Spurgeon/
-├── Projeto.md
+├── README.md                   ← o que o programa faz, para quem usa
+├── COMO_INSTALAR.txt           ← instalação passo a passo, sem termos técnicos
+├── Projeto.md                  ← este guia: arquitetura, roadmap e decisões
+├── Integracoes.md              ← pesquisa e limites de cada rede (YouTube, Meta, TikTok)
+├── CLAUDE.md                   ← convenções e armadilhas do código, para quem desenvolve
 ├── pyproject.toml
-├── iniciar.bat                 ← abre o app pelo pythonw (sem console; v1: sem .exe)
+├── iniciar.bat                 ← abre o app pelo pythonw (sem console; ainda sem .exe)
 ├── instalar.bat                ← chama o instalar.ps1
 ├── instalar.ps1                ← instala o que faltar num PC zerado (Visual C++, uv, Python, FFmpeg, Ollama, modelos, atalhos)
 ├── src/spurgeon/
-│   ├── core/                   ← config, log, estado, hardware, pipeline, ffmpeg, mapa de tempo
+│   ├── core/                   ← config, log, estado, hardware, pipeline, ffmpeg, mapa de tempo, atualização
 │   ├── audio/                  ← extrair, limpar, normalizar
 │   ├── transcricao/            ← whisper, vocabulário, srt, dicionário e verificador de português
-│   ├── shorts/                 ← nlp, llm, candidatos, metadados, edição dos cortes, busca e Shorts livre
-│   ├── render/                 ← video_longo, shorts, ass, marca d'água, vinhetas
-│   └── ui/                     ← janela principal, abas, painéis de revisão, Studio Shorts
+│   ├── shorts/                 ← nlp, llm, candidatos, metadados, edição dos cortes, busca, Shorts livre e agendamento
+│   ├── render/                 ← video_longo, shorts, ass, marca d'água, vinhetas, prévias
+│   ├── publicacao/             ← cofre de chaves, OAuth, YouTube, Instagram, Facebook, TikTok, agenda e fila
+│   └── ui/                     ← janela principal, abas, painéis de revisão, Studio Shorts, Integrações, calendário e relógio
 ├── tests/
 ├── Downloads/                  ← ENTRADA: vídeos brutos          (ignorado no git)
 ├── recursos/                   ← introdução, vinheta, vocabulário, fontes, marca d'água, dicionários
@@ -138,7 +158,7 @@ Instalado: Python 3.11.9, uv 0.13.0, FFmpeg 9.0.2 e Ollama 0.40.3. Núcleo em `s
 * Instalar Python 3.11, `uv`, FFmpeg e Ollama (via `winget`); `git init` e commit inicial.
 * Criar a estrutura da seção 1.6, `pyproject.toml`, `ruff`, `pytest` e `pre-commit`.
 * Implementar o **núcleo**: configuração (pydantic + TOML), log por projeto, `estado.json`, mapa de tempo, wrapper do FFmpeg, detecção de hardware e a pré-verificação.
-* Criar `instalar.bat` e `iniciar.bat` (opção mais leve para a v1).
+* Criar `instalar.bat` e `iniciar.bat` (a opção mais leve, enquanto não há um `.exe`).
 * Testar as opções do DeepFilterNet no Windows e escolher uma (**feito**). Resultado:
   * `deepfilternet` (PyPI) **não importa** com o torch/torchaudio atual (`torchaudio.backend` foi removido) e exigiria um torch antigo.
   * `deepfilternet-slim` traz só a DLL e o modelo, sem API de áudio; é Alpha e de terceiro.
@@ -300,7 +320,7 @@ Etapas em `src/spurgeon/transcricao/`: `transcrever` → `revisar_transcricao` (
 
 ### Fase 5: Renderização e Estilização Visual (FFmpeg + legendas ASS) — concluída em 2026-10-13
 
-O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motivo: o MoviePy 2.x tem mudanças incompatíveis com a v1 e renderiza frame a frame em Python, o que é lento e pesado com legendas por palavra. O MoviePy fica de fora da v1.
+O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motivo: o MoviePy 2.x tem mudanças incompatíveis com a série 1.x e renderiza frame a frame em Python, o que é lento e pesado com legendas por palavra. O MoviePy fica de fora.
 
 * **Qualidade de saída (preset personalizável):**
 
@@ -343,7 +363,7 @@ O motor é o **FFmpeg direto** (chamado pelo Python) com legendas **ASS**. Motiv
     * **Posição:** terço central da tela, na parte inferior dele (cerca de 62% da altura, configurável), longe dos elementos de interface dos Shorts (título e botões na parte baixa).
     * Frases de até 2 linhas, com quebra em limites de palavra.
   * Renderiza **um Short por vez** (sem paralelismo) para não estourar a RAM.
-* **Sem logo, marca d'água nem título fixo** na v1.
+* **Sem logo, marca d'água nem título fixo** na versão 1.0 (a marca d'água entrou na 1.1: veja a Fase 7).
 
 **Implementação (concluída em 2026-10-13).** Módulos em `src/spurgeon/render/`: `filtros.py` (HDR→SDR, recorte 9:16, codec), `video_longo.py`, `shorts.py`, `legenda.py` (ASS). As etapas `renderizar_shorts` e `renderizar_video_longo` rodam **depois** de toda a análise e das revisões humanas, para a pessoa responder tudo no começo e deixar as horas de renderização rodando sozinha.
 
@@ -569,9 +589,11 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 
 ---
 
-## 4. Fora do Escopo da v1
+## 4. Fora do Escopo (por enquanto)
 
-* Player de vídeo embutido na interface (a prévia de 15 s abre no player do Windows); fila de vários vídeos.
+* Player de vídeo completo na interface (há a prévia de 15 s das pontas, que abre no player do Windows, e o miniplayer dos Shorts no Studio); fila de vários vídeos.
+* Publicação direta no TikTok pela API: a auditoria da rede recusa aplicativos só para a própria conta, então o fluxo é assistido. O Instagram não agenda pela API: o Spurgeon guarda o horário e só publica com o aplicativo aberto (detalhes no [Integracoes.md](Integracoes.md)).
+* Cancelar ou reagendar, pela tela, um Short já agendado numa rede (no código só existe `YouTube.reagendar`).
 * Enquadramento com rastreamento de rosto ou fundo desfocado (hoje: recorte central fixo).
 * Título fixo no vídeo; introdução e vinheta nos Shorts. (A marca d'água entrou na 1.1.)
 * Remoção de muletas de fala ("é...", "hum").
@@ -609,10 +631,10 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 
 ## 5. Hardware: pontos de atenção
 
-* **O PC-alvo da v1 é este PC de desenvolvimento.** Inspecionado em 2026-10-12: i7-6800K (6 núcleos/12 threads físicos), **15,8 GB de RAM**, **GTX 760 de 2 GB** (driver 456.71), **36 GB livres** no C:, placa-mãe Huananzhi X99 e Virtualization-based Security ativo (`HypervisorPresent=True`).
-* **Limite de processadores corrigido em 2026-10-12.** Antes o Windows enxergava só 2 processadores lógicos, embora a BIOS já informasse 6 núcleos e 12 threads. Depois de reiniciar o PC, `NUMBER_OF_PROCESSORS=12`. Não sei qual ajuste resolveu (BIOS, `msconfig` ou `bcdedit`). Se o número voltar a cair, reveja essas três.
+* **Máquina de referência: o PC onde o programa foi desenvolvido.** Todos os tempos deste guia foram medidos nela; outros computadores entram pelo instalador (rodadas 1.6 e 1.7). Inspecionada em 2026-10-12: i7-6800K (6 núcleos/12 threads físicos), **15,8 GB de RAM**, **GTX 760 de 2 GB** (driver 456.71), **36 GB livres** no C:, placa-mãe Huananzhi X99 e Virtualization-based Security ativo (`HypervisorPresent=True`).
+* **Limite de processadores corrigido em 2026-10-12.** Antes o Windows enxergava só 2 processadores lógicos, embora a BIOS já informasse 6 núcleos e 12 threads. Depois de reiniciar o PC, `NUMBER_OF_PROCESSORS=12`. Não se identificou qual ajuste resolveu (BIOS, `msconfig` ou `bcdedit`). Se o número voltar a cair, reveja essas três.
 * A GTX 760 provavelmente não roda o faster-whisper atual (CUDA 12 + cuDNN 9; a compatibilidade ainda precisa de teste na Fase 3). O **NVENC está confirmado como indisponível** (teste real com o FFmpeg 9.0.2, no `spurgeon doctor`): o encode é em libx264 na CPU. O **caminho só com CPU é o principal** desta máquina.
-* Mesmo com 12 threads, o caminho só com CPU deixa o encode `veryslow` (medido: ~4 vezes a duração do vídeo), o Whisper e o LLM de 8B lentos (estes dois ainda não medi). Os avisos de tempo da interface continuam sendo requisitos, não extras.
+* Mesmo com 12 threads, o caminho só com CPU deixa o encode `veryslow` (medido: ~4 vezes a duração do vídeo), o Whisper (48 min para 65 min de áudio) e o LLM de 8B (~1 h para os Shorts de um sermão) lentos: um sermão inteiro leva cerca de 8 h na qualidade Máxima (medida da Fase 5). Os avisos de tempo da interface continuam sendo requisitos, não extras.
 * Recomendação inicial por hardware, para esta e futuras máquinas (a validar com benchmark):
 
   | Hardware | Whisper | LLM |
@@ -627,7 +649,7 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 
 ### Confirmadas pelo autor (2026-10-12)
 
-* **PC-alvo da v1:** o mesmo PC de desenvolvimento (seção 5).
+* **Máquina de referência:** o PC de desenvolvimento (seção 5); outros computadores entram pelo instalador (rodadas 1.6 e 1.7).
 * **Legenda dos Shorts:** frase visível, com a palavra falada em amarelo, uma por vez.
 * **Posição da legenda:** parte baixa do terço central (≈62% da altura).
 * **Pausa:** padrão 10 s, faixa de 0,5 a 30 s, com pausa residual de 1,0 s em cada corte.
@@ -648,14 +670,14 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 
 3. **Tamanho mínimo da pausa a cortar:** no sermão real o padrão de 10 s não corta nada (a maior pausa tem 5,3 s). Manter 10 s como padrão, ou usar um valor menor (por exemplo 2 s, que corta 10 pausas e 17 s)? A remoção de silêncios encurta menos de 1 minuto em 65 mesmo em 1 s, então vale também decidir se ela continua ligada por padrão.
 
-### Escolhas que fiz sozinho na Fase 4 a 6 (confirmar ou mudar)
+### Escolhas feitas sem consulta na Fase 4 a 6 (confirmar ou mudar)
 
 4. **Recorte 9:16 deslocado +4% para a direita (padrão):** a câmera fixa deixa o pregador e a cruz a ~54% da largura; com 0% o ombro esquerdo encosta na borda. Opção avançada "Deslocamento do recorte".
 5. **Legendas dinâmicas desligadas por padrão** (a resposta "Legendas dinâmicas = Não" foi lida como "não vem marcada"): ligue em "O que gerar" ou com `--legendas`. Os Shorts do sermão real foram gerados com elas.
 6. **Shorts numerados pela ordem em que aparecem no sermão** (`short_01_…`), não pela nota.
 7. **Todos os cortes sugeridos vêm marcados** (20) e as reservas desmarcadas (8), como pedido; a nota mínima para vir marcado é 45 (opção avançada).
 8. **Espaço em disco:** este PC tem pouco espaço no C: (7 a 10 GB livres durante o desenvolvimento). O vídeo longo em Máxima ocupa ~2,7 GB e os 20 Shorts ~1,2 GB; a junção tem um modo econômico, mas o modelo do Ollama (5 GB) e o do Whisper (1,5 GB) pesam. Se for processar vários sermões, vale liberar espaço ou mover `Projetos/` para outro disco.
-9. **(1.1) "Se for PNG, remover o fundo":** li o pedido como "PNG com transparência vale como está; se não for PNG, ou o PNG não tiver transparência, ofereça remover o fundo". Remover o fundo só funciona bem com fundo liso; a prévia mostra o resultado antes de renderizar.
+9. **(1.1) "Se for PNG, remover o fundo":** o pedido foi lido como "PNG com transparência vale como está; se não for PNG, ou o PNG não tiver transparência, ofereça remover o fundo". Remover o fundo só funciona bem com fundo liso; a prévia mostra o resultado antes de renderizar.
 10. **(1.1) Português:** o verificador usa o dicionário `pt_BR` do LibreOffice (aceita algumas formas de Portugal, como "facto" ou "aspeto", mas recusa as grafias do acordo europeu como "perceção"). Não é um corretor gramatical completo (seção da Fase 7).
 11. **(1.1) Legenda corrigida** só aparece no vídeo com as "Legendas dinâmicas" ligadas; sem elas a correção fica guardada no corte.
 12. **(1.1) Modos persistem como "Tudo":** o modo escolhido vale só para aquela execução; o aplicativo sempre abre em "Tudo" e lembra o que for a marca d'água e as demais opções.
@@ -666,22 +688,24 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 14. **(1.2) Zoom também nos Shorts (ligado, dá para desligar):** o recorte 9:16 sai de dentro da área do zoom, e o "Deslocamento do recorte" se soma ao centro do zoom. Com o zoom em 100% nada muda. O mesmo vale para o tratamento de imagem; a introdução e a vinheta nunca são tratadas.
 15. **(1.2, superado em 18/10 pela mescla; veja "Mescla da introdução e da vinheta") Fade passando pelo preto** (e não fusão entre as imagens), porque as partes do vídeo longo são emendadas sem recodificar. No modo "Só vinhetas" o fade vale só do lado da introdução e da vinheta.
 16. **(1.2) A prévia de 15 s abre no player do Windows** (o CustomTkinter não tem player); a tela mostra o quadro exato de cada corte.
-17. **(1.2) Peso dos Shorts por duração:** 10 pontos de 50 a 75 s, caindo em linha reta até 2 pontos aos 180 s, e 25% das vagas da IA reservadas aos trechos de 90 s ou mais. Os números (75 s, 2 pontos, 25%) são escolhas minhas: se os Shorts longos estiverem sobrando ou faltando, mude `pontos_de_duracao` e `COTA_DE_LONGOS` em `shorts/analise.py`.
+17. **(1.2) Peso dos Shorts por duração:** 10 pontos de 50 a 75 s, caindo em linha reta até 2 pontos aos 180 s, e 25% das vagas da IA reservadas aos trechos de 90 s ou mais. Os números (75 s, 2 pontos, 25%) foram escolhidos sem consulta: se os Shorts longos estiverem sobrando ou faltando, mude `pontos_de_duracao` e `COTA_DE_LONGOS` em `shorts/analise.py`.
 18. **(1.2) Configuração antiga:** um `config.toml` com o 60 s de antes passa para 180 s sozinho (uma vez). Projetos já criados mantêm as opções que tinham (60 s) até a pessoa mudar na tela.
 19. **(1.2) Sugestão automática de cor é uma heurística** (histograma, saturação e dominante de cor de 5 quadros), com a metade da força na correção de cor e limite de ±45. Vale como ponto de partida; **ainda não foi comparada olho a olho no sermão real** (o zoom e o tratamento só foram testados com vídeos sintéticos e o HDR de teste).
 
 ### Pedidos da rodada 1.2 (todos feitos: veja a Fase 8)
 
-1. Ao selecionar o vídeo para iniciar o projeto, dar a opção de cortar o início do vído e o final, para iniciar no segundo correto e terminar antes do "fim absoluto", e se for possível incluir uma preview de 15 segundos de início para ver onde de fato via começar o vídeo depois do corte, fazer o mesmo, uma preview de 15 segundos antes do fim para ver onde o vídeo vai acabar, isso só ficaria habilitado na parte de inclusão do vídeo.
+Os pedidos desta rodada e da 1.3 estão como o autor os escreveu, só com a ortografia corrigida.
 
-2. Na parte de adicionar o vídeo dar a opção de "ajustar o zoom" (em % para ficar mais fácil) no caso pega um frame do vídeo e mostra em área sombreada o que vai ser cortado para "aproximar" mais a câmera do pregador, também coloque a opção de salvar o preset. 
+1. Ao selecionar o vídeo para iniciar o projeto, dar a opção de cortar o início do vídeo e o final, para iniciar no segundo correto e terminar antes do "fim absoluto", e se for possível incluir uma preview de 15 segundos de início para ver onde de fato vai começar o vídeo depois do corte, fazer o mesmo, uma preview de 15 segundos antes do fim para ver onde o vídeo vai acabar, isso só ficaria habilitado na parte de inclusão do vídeo.
 
-3. Também se for possível adicionar uma etapa de "tratamento de imagem" com alguns comandos básics de configuração como saturação, correção de cor, brilho, contraste, realçe de brancos o sombras, pode usar isso com um frame de exemplo do vídeo com uma divisão rolável no meio do frame para o origina na esquerda e o editado na direitta, faça um botãozinho de sugestão automática e outro de salvar preset, para ficar salvo no grograma o estilo dos vídeos.
+2. Na parte de adicionar o vídeo dar a opção de "ajustar o zoom" (em % para ficar mais fácil) no caso pega um frame do vídeo e mostra em área sombreada o que vai ser cortado para "aproximar" mais a câmera do pregador, também coloque a opção de salvar o preset.
 
-4. Na parte de adicionar a vinheta tem a possibilidade e habilitar "fade in" de vídeo e áudio entre a vinheta e o vídeo? e também a opção de selecionar o arquivo tanto de início quanto de fim.
+3. Também se for possível adicionar uma etapa de "tratamento de imagem" com alguns comandos básicos de configuração como saturação, correção de cor, brilho, contraste, realce de brancos ou sombras, pode usar isso com um frame de exemplo do vídeo com uma divisão rolável no meio do frame para o original na esquerda e o editado na direita, faça um botãozinho de sugestão automática e outro de salvar preset, para ficar salvo no programa o estilo dos vídeos.
+
+4. Na parte de adicionar a vinheta tem a possibilidade de habilitar "fade in" de vídeo e áudio entre a vinheta e o vídeo? e também a opção de selecionar o arquivo tanto de início quanto de fim.
 5. Nas opções avançadas coloque o modelo do Ollama como caixa de seleção suspensa, e não digitado. também coloque uma legendinha abaixo de cada opção avançada para explicar o que ela faz.
 6. De modo geral limite o tamanho do shorts para 180 segundos, dando um peso maior para gerações por volta de 60 segundos, mas sem descartar os 180 segundos que ainda geram oportunidade de shorts valiosos.
-7. No studio de shorts também quando adicionarmos ou removermos uma frase, também atualiza a caixa da legenda do short para ver como ficaria a frase que adicionamos ou removemos, também que o texto vá "correndo" para frente ou para trás para irmos vendo o que tem para t´ras ainda do texto ou para frente.
+7. No studio de shorts também quando adicionarmos ou removermos uma frase, também atualiza a caixa da legenda do short para ver como ficaria a frase que adicionamos ou removemos, também que o texto vá "correndo" para frente ou para trás para irmos vendo o que tem para trás ainda do texto ou para frente.
 
 ### Pedidos da rodada 1.3 (todos feitos: veja a Fase 9)
 
@@ -692,7 +716,7 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 5. No Studio Shorts, uma aba **"Shorts livre"**: o texto inteiro da legenda numa caixa, com busca (palavras parecidas ou tema), para o autor escolher o trecho; o sistema faz o Short como os outros (título, legenda, hashtags e nota) e o joga no Studio com a anotação **"gerado manualmente"** (os automáticos ganham **"gerado automaticamente"**).
 6. No Studio Shorts, a **prévia tem de vir também com a legenda**.
 
-### Escolhas que fiz sozinho na rodada 1.3 (confirmar ou mudar)
+### Escolhas feitas sem consulta na rodada 1.3 (confirmar ou mudar)
 
 20. **(1.3) A lacuna de 21 min da transcrição teve causa, achada na rodada 1.3.1** (leitura bloqueante do stdin no trabalhador travando os `import` pesados; veja a seção "Rodada 1.3.1"). A explicação "disco ou antivírus" que este item dava antes estava errada.
 21. **(1.3) Numeração:** "Corte e enquadramento" virou o cartão 3 (e o Tratamento, a Marca e a Revisão seguem 4, 5 e 6). Os outros cartões não escondem nada por modo (só o "O que gerar"); eles só ficam apagados, como antes.
@@ -751,7 +775,7 @@ Seis pedidos do autor, todos feitos e testados.
 5. **Studio Shorts é uma aba separada que ocupa a janela toda** (`ui/app.py`): a faixa `Processamento | Studio Shorts` foi para uma linha própria no alto da janela (não muda de lugar ao trocar de aba); Processamento mostra as opções à esquerda e o andamento à direita; Studio Shorts esconde os dois e ocupa a janela. A coluna da lista ficou mais estreita e o detalhe, mais largo.
 6. **Refazer título, descrição e hashtags com a IA**, um botão ("↻ Refazer com IA") para cada campo, a partir do **texto do Short como está agora** (a legenda, com as correções), não do trecho original (`ClienteLLM.refazer`, um pedido por campo, só o campo pedido volta). Roda em segundo plano (~1 min na CPU), um por vez; o resultado entra no campo e só vai para o arquivo ao salvar.
 
-#### Escolhas que fiz sozinho na rodada 1.4 (confirmar ou mudar)
+#### Escolhas feitas sem consulta na rodada 1.4 (confirmar ou mudar)
 
 26. **(1.4, o corte das pausas foi revertido na 1.5: passou a ser de cada Short) A altura da legenda e o corte das pausas são opções de todos os Shorts, não de um Short só.** Mexer na prévia de um muda os outros (e a tela de opções, que guarda o valor); a prévia guardada dos outros cortes passa a "versão anterior". Por Short seria um campo novo em `Corte` e nas assinaturas; fiz global porque a câmera é fixa e a altura da legenda já era global.
 27. **(1.4) "Cortar pausas" = encurtar, não sumir com a pausa:** o limiar vem da tela (1,0 s) e o que sobra é 0,4 s (ou metade do limiar, se for menor que 0,8 s). Mudar o resíduo é `RESIDUAL_DA_PAUSA_S`. As pausas são medidas pelos tempos das palavras da transcrição (não pelas janelas RMS do áudio), então uma pausa que o Whisper "estica" na palavra anterior pode ser subestimada.
@@ -778,18 +802,18 @@ Treze pedidos do autor, todos feitos e testados (o autor pediu para trabalhar a 
 12. **Passo a passo na primeira abertura** (`ui/tutorial.py`, 28 passos): pergunta "Quer ver o passo a passo?" com a caixinha "não mostrar de novo"; um contorno amarelo marca o que cada passo explica; o rodapé da janela tem a caixinha "Mostrar o passo a passo ao abrir" e o botão "Como usar".
 13. **O painel de português do Studio** ocupava 380 a 500 px à toa (a barra de rolagem da lista pede 200 px por padrão); agora tem só o tamanho do que mostra (cerca de 66 px sem avisos).
 
-#### Escolhas que fiz sozinho na rodada 1.5 (confirmar ou mudar)
+#### Escolhas feitas sem consulta na rodada 1.5 (confirmar ou mudar)
 
 32. **(1.5) O corte das pausas voltou a ser de cada Short**, como o autor pediu; a decisão 26 da 1.4 ("global") ficou valendo só para a altura da legenda. Config e projetos antigos com `shorts_cortar_pausas` e `shorts_pausa_s` carregam normalmente (o pydantic ignora os campos).
 33. **(1.5) A borracha não deixa o Short sem palavras:** se tudo fosse apagado, sobra o que estava (nada acontece). No Shorts livre, apagar tudo limpa a escolha.
 34. **(1.5) Desfazer não vale para o texto digitado nas caixas de uma linha** (título, hashtags, tempos): ali o Ctrl+Z é o do próprio campo. Na tabela e na legenda, o Ctrl+Z é o do corte.
 35. **(1.5) A cor do trecho detectado no Shorts livre é a do trecho de MAIOR nota que cobre a frase** (empate: o mais curto). Os candidatos que a IA não avaliou não aparecem (só os ~40 avaliados). O sublinhado dos Shorts feitos tem a cor da categoria do Short.
 36. **(1.5) Um Short do Shorts livre com pedaços de fora usa para a nota e para a IA a duração líquida** (sem os pedaços), mas as pontas continuam as do silêncio do trecho todo.
-37. **(1.5) O vocabulário (`recursos/vocabulario_teologico.txt`) foi mexido por um teste meu e perdeu 3 termos que o autor tinha guardado** (veja o achado abaixo).
+37. **(1.5) O vocabulário (`recursos/vocabulario_teologico.txt`) foi sobrescrito por um teste do próprio projeto e perdeu 3 termos que o autor tinha guardado** (veja o achado abaixo).
 
 #### Achado: um teste novo sobrescreveu o vocabulário do autor (2026-10-20, à noite)
 
-Ao escrever o teste do dicionário usei `Pastas(raiz=tmp_path)`, mas `Pastas` não tem o campo `raiz` (o pydantic o ignora), então o teste escreveu e apagou termos no `recursos/vocabulario_teologico.txt` **de verdade**. O arquivo foi restaurado a partir do último commit (227 linhas), **mas as 3 linhas que o autor tinha acrescentado depois do commit (termos guardados por "Está certa: guardar no vocabulário") foram perdidas**: não há outra cópia. É preciso guardá-las de novo (agora o botão "Dicionário…" do Studio ajuda). **Correção:** `tests/conftest.py` ganhou um fixture automático (`vocabulario_do_usuario_protegido`) que restaura o arquivo e reprova qualquer teste que o altere; os testes do dicionário usam pastas dentro de `tmp_path`.
+Um teste novo do dicionário usava `Pastas(raiz=tmp_path)`, mas `Pastas` não tem o campo `raiz` (o pydantic o ignora), então o teste escreveu e apagou termos no `recursos/vocabulario_teologico.txt` **de verdade**. O arquivo foi restaurado a partir do último commit (227 linhas), **mas as 3 linhas que o autor tinha acrescentado depois do commit (termos guardados por "Está certa: guardar no vocabulário") foram perdidas**: não há outra cópia. É preciso guardá-las de novo (agora o botão "Dicionário…" do Studio ajuda). **Correção:** `tests/conftest.py` ganhou um fixture automático (`vocabulario_do_usuario_protegido`) que restaura o arquivo e reprova qualquer teste que o altere; os testes do dicionário usam pastas dentro de `tmp_path`.
 
 **Testes:** arquivos novos `test_studio_ferramentas.py`, `test_saltos_do_corte.py`, `test_pausas_do_short.py`, `test_marcas_do_sermao.py`, `test_categorias.py`, `test_tutorial_e_ajuda.py`, `test_estabilidade_e_dicas.py`, e casos novos em `test_shorts_livre.py` e `test_shorts_livre_ui.py`.
 
@@ -818,7 +842,7 @@ Reproduzido com cliques e arrastos de mouse simulados numa janela de verdade (`e
    (`selectbackground`), que continua visível quando o foco sai.
 6. As mesmas regras (cursor, aviso sob o mouse, elástico, `vale`) valem no Shorts livre, pelo mesmo `Pincel`.
 
-**Escolhas que fiz sozinho:** (38) o duplo clique numa palavra cinza continua movendo o começo ou o fim (era o
+**Escolhas feitas sem consulta:** (38) o duplo clique numa palavra cinza continua movendo o começo ou o fim (era o
 combinado: "a seta seleciona normal e corta com 2 cliques"); (39) a borracha e o marca-texto têm o mesmo cursor
 (`xterm`), e o que os diferencia é o botão aceso e a cor do aviso.
 
@@ -828,12 +852,12 @@ Pedido (com prints do aplicativo aberto): no Studio normal, pintar a frase com o
 o Shorts livre funcionava. Pediram a mesma experiência nos dois, com a legenda colorida de categorias, e que a
 tela do Shorts livre parasse de "dar bugs visuais" ao passar o mouse.
 
-1. **Causa do texto que sumia (um defeito meu, da rodada 1.5).** Em `EditorDeCortes._depois_de_mudar` o aviso à aba
+1. **Causa do texto que sumia (um defeito da rodada 1.5).** Em `EditorDeCortes._depois_de_mudar` o aviso à aba
    (`ao_mudar` → `pendentes()` → `_guardar_detalhe()`) vinha ANTES de a caixa da legenda mostrar o corte novo; a
    legenda velha era gravada por cima da nova e as palavras que entraram sumiam do Short e da tabela. Só acontecia
    com a aba (nos testes do editor sozinho, não): valia para o marca-texto, a borracha, os botões de palavra e frase
    e o desfazer, e deixava o Short com "✎ legenda" sem a pessoa ter corrigido nada. **Correção:** o detalhe é refeito
-   primeiro e `_tela_desatualizada` impede a cópia nesse meio tempo. Conferi as 18 legendas gravadas dos projetos
+   primeiro e `_tela_desatualizada` impede a cópia nesse meio tempo. Foram conferidas as 18 legendas gravadas dos projetos
    reais: todas são correções de verdade (nenhuma tem o defeito), mas **um aplicativo que estava aberto antes desta
    correção guarda o defeito na memória: feche-o sem salvar (ou use "Descartar alterações") e abra de novo.**
 2. **A borracha não achava palavras num Short com a legenda corrigida** (14 dos 31 Shorts do projeto real): as linhas
@@ -847,7 +871,7 @@ tela do Shorts livre parasse de "dar bugs visuais" ao passar o mouse.
    num quadro de tamanho fixo (duas linhas, texto cortado em 180 letras). A barra da categoria também perdia a cor
    dentro do trecho escolhido (a etiqueta azul pintava a letra de branco); agora só pinta o fundo.
 
-**Escolha que fiz sozinho:** (40) os marcadores "corta aqui" e "continua aqui" continuam na tabela do Studio (o
+**Escolha feita sem consulta:** (40) os marcadores "corta aqui" e "continua aqui" continuam na tabela do Studio (o
 Shorts livre risca as palavras no próprio texto, mas ali a tabela é uma frase por linha e é editável).
 
 ### Rodada 1.6 (2026-10-30): aviso de contato, abertura sem console e instalador para um PC zerado
@@ -877,7 +901,7 @@ de comando aberta no fundo; (3) conferir e **testar** se o instalar vai mesmo in
    lê os `.pth` com a página de código local (cp1252), o `.pth` da instalação editável perdia o caminho e
    `import spurgeon` falhava em silêncio, ou seja, o programa inteiro não abriria. O instalador grava um
    `sitecustomize.py` no `site-packages` que acha `src` pela posição do arquivo. (b) O `ffmpeg -filters` do FFmpeg 9 usa
-   2 colunas de flags (antes 3); a minha primeira checagem recusava o FFmpeg bom.
+   2 colunas de flags (antes 3); a primeira checagem do instalador recusava o FFmpeg bom.
 5. **Como foi testado.** *De verdade*, numa cópia isolada do projeto ("PC zerado" simulado: `PATH` só com as pastas do
    Windows, perfil e `TEMP` numa pasta com espaço e acento, sem Python do sistema): download do uv e do FFmpeg com hash
    conferido, Python 3.11.17 gerenciado, 76 pacotes, `spurgeon doctor` sem `[ERRO]`, deep-filter e Whisper tiny
@@ -890,7 +914,7 @@ de comando aberta no fundo; (3) conferir e **testar** se o instalar vai mesmo in
    um Windows 10 real e um PC sem internet. Para a prova completa: Windows Sandbox ou uma VM com Windows limpo, rodando
    `instalar.bat`.
 
-**Escolhas que fiz sozinho na rodada 1.6 (confirmar ou mudar):** (41) o instalador baixa os programas direto, sem
+**Escolhas feitas sem consulta na rodada 1.6 (confirmar ou mudar):** (41) o instalador baixa os programas direto, sem
 `winget`, com versões e hashes fixados (o `winget` pode faltar e falha por conta própria); (42) a cópia do FFmpeg da
 pasta do programa vale mais que a do PATH, e só é baixada se o PC não tiver um FFmpeg completo; (43) os modelos são
 baixados na instalação (com pergunta), os das opções: Whisper `large-v3-turbo` e `qwen3:8b`; (44) o botão direito no
@@ -966,7 +990,7 @@ genéricos, e nunca iguais ou "muito parecidos" com outro.
    escreveu ou editou nunca é trocado). Sob o campo Título, o Studio avisa quando o título é igual, parecido ou genérico
    em relação aos outros Shorts **marcados** (serve também aos duplicados que já existem e aos digitados à mão).
 
-**Escolhas que fiz sozinho na rodada 1.7 (confirmar ou mudar):** (47) a consulta compara só o `__version__` da `main` (não
+**Escolhas feitas sem consulta na rodada 1.7 (confirmar ou mudar):** (47) a consulta compara só o `__version__` da `main` (não
 commits): **quem publica precisa subir a versão**, e o desenvolvedor, com a versão à frente do GitHub, nunca vê o aviso;
 (48) o `__version__` foi para **1.7.0** (estava em 1.2.0 enquanto as rodadas já iam em 1.6; daqui a numeração das rodadas e a
 do código voltam a coincidir); (49) a atualização troca `src/`, scripts e documentos da raiz e **só acrescenta** recursos
@@ -985,3 +1009,93 @@ novo **uma vez** (depois, o próprio programa avisa); (c) testar num Windows lim
 Aplicativos, o instalador real do Ollama e o `winget`; (d) rodar "Selecionar" de novo nos projetos antigos troca os títulos
 repetidos que a IA criou (os que a pessoa editou ficam); (e) o `recursos/cortador de vídeo.py` (arquivo do autor, não
 rastreado) tem 2 avisos do `ruff` e não foi tocado.
+
+### Rodada 1.8 (2026-11-03): o título que renomeia, "agendado para" e a aba Integrações (postar em todas as redes)
+
+Pedido: (1) mudar o título de um Short no Studio deve renomeá-lo também na lista da esquerda e o arquivo (senão os títulos
+editados ficavam com o nome sugerido pela IA); (2) a marca "Short agendado" e a previsão de postagem ao lado do "já postado",
+mudando sozinha quando a hora passa; (3) uma aba de **integrações** com as chaves do YouTube, da Meta e do TikTok, para o
+Studio agendar a postagem pela API em todas as redes vinculadas de uma vez (a ideia: o Spurgeon ser a plataforma de onde a
+igreja posta em todas as redes, de forma simples), **pesquisando antes como cada plataforma funciona e as alternativas**.
+A pesquisa (02/11/2026, documentação oficial) e o que ainda precisa de conta real estão em [Integracoes.md](Integracoes.md).
+
+55. **Título que renomeia** (`ui/studio_shorts.py`, `render/shorts.py`). **A causa:** o nome do arquivo vem de `Corte.slug` e o
+    `salvar()` fazia `corte.slug or corte.titulo`, então o `slug` que a IA deu prevalecia para sempre sobre o título que a
+    pessoa escrevia; e a lista só se refazia ao recarregar. Agora: (a) a lista acompanha o que se digita
+    (`_espelhar_titulo_na_lista`); (b) o Studio guarda o título que o nome tinha (`_titulo_do_nome`) e, se ele mudou, o `slug` é
+    refeito do título novo ao salvar (título que a IA deu e a pessoa não mexeu mantém o nome curto dela, então nada é renomeado
+    à toa); (c) `sincronizar_arquivos` renomeia o `.mp4` e o `.txt` já renderizados (em duas fases, como `organizar_pasta`, que
+    passou a usar o mesmo `renomear_prontos`), move para `postados/` se for o caso, reescreve o `.txt` com título, descrição e
+    hashtags de agora e **nunca sobrescreve**: nome ocupado ou arquivo aberto em outro programa viram `falhas` (aviso na tela;
+    o arquivo fica como estava e o título fica salvo). Só o nome muda: o Short continua "renderizado" (a assinatura não leva o título).
+
+56. **Agendado para** (`Corte.agendado_para`, `shorts/agendamento.py`, `ui/postagem.LinhaDeAgendamento`). Caixa "Agendado para
+    [dd/mm/aaaa] [hh:mm]" ao lado do "Já postado" (que agora vale para qualquer rede: o rótulo e o `.txt` dizem "JÁ POSTADO", não
+    mais "no YouTube"), com "em 2 dias e 6 h" ao lado. Marcar sem horário sugere amanhã às 18:00; só se guarda um horário
+    válido e futuro; grava na hora (só esse campo). **Passada a hora o Short vira "já postado" sozinho** (na data marcada, e
+    o arquivo vai para `postados/`): conferido ao abrir o projeto e a cada 30 s. **Sem perguntar à rede**: é a previsão da
+    pessoa que vira fato; o resultado de cada rede continua visível ("Instagram com erro") sob a caixa. Marcar "já postado" à
+    mão tira o agendamento. A lista mostra "📅 agendado 05/11 18:30" e o resumo, "N agendado(s)".
+
+57. **Integrações: o que a pesquisa mudou** (resumo; detalhes e fontes em Integracoes.md). **YouTube:** pela API, com envio
+    resumível do arquivo e agendamento nativo (`privacyStatus=private` + `publishAt`); a cota folgou em 2026 (100 envios/dia); o
+    risco é a trava de projetos novos (a documentação se contradiz: o Spurgeon lê o status de volta e avisa). **Instagram:** envia
+    o arquivo local (login do Facebook + `rupload`), mas **a API não agenda**: fila local (cria o envio 45 min antes e publica na
+    hora, com o aplicativo aberto; o aplicativo avisa ao sair se há fila). **Facebook:** Reel de Página de 3 a 90 s, agenda
+    sozinho (10 min a 29 dias); Short maior não entra. **TikTok:** a publicação direta exige uma auditoria que recusa app só para
+    a própria conta, e o sandbox só publica privado; a API não agenda. **Intermediários** (Upload-Post, Zernio, Ayrshare) já têm
+    apps auditados e publicam nas quatro redes com uma chave (US$ 12 a 149 por mês).
+
+58. **Arquitetura.** Pacote novo `src/spurgeon/publicacao/`: `cofre.py` (DPAPI do Windows por `ctypes`, sem dependência nova),
+    `rede.py` (`Transporte` com `urllib`, trocável nos testes), `oauth.py` (loopback + PKCE), `modelo.py` (`Pacote`, `Resultado`,
+    `Plataforma`), `youtube.py`, `meta.py` (`Instagram` e `Facebook`), `tiktok.py`, `intermediario.py` (`UploadPost`), `agenda.py`
+    (registro por projeto em `_work/postagens.json`, `publicar_em`, `Agendador`) e `fila.py` (todos os projetos). Interface:
+    `ui/integracoes.py` (a 3ª aba, `ABA_INTEGRACOES`, janela toda), `ui/postagem.py` e a fila de minuto em minuto em
+    `JanelaPrincipal._rodar_a_fila` (só na abertura de verdade, como a consulta de atualização).
+
+**Escolhas feitas sem consulta na rodada 1.8 (confirmar ou mudar):** (59) **cada igreja usa as PRÓPRIAS chaves** (cria o app em cada
+rede); o programa não leva chave embutida nem servidor; (60) YouTube pede o escopo `youtube` (e não só `youtube.upload`, porque
+reagendar e apagar o exigem) e o passo a passo manda "Publicar app" no Google para o login não cair a cada 7 dias; (61) a Meta
+usa **token colado do Explorador da Graph API** (trocado por um de longa duração e depois pelo token da Página, que não expira),
+porque o redirecionamento OAuth em `localhost` da Meta não está confirmado; (62) **TikTok: fluxo assistido por padrão**
+(copia a legenda, abre a pasta e o TikTok Studio), envio aos rascunhos opcional (avançado, não confirmado com conta pública),
+**publicação direta NÃO implementada**; (63) **Upload-Post como segundo caminho opcional** ("traga sua chave"), implementado
+sem conta real: confira com um Short de teste; (64) publicar agora com sucesso marca "já postado"; agendar na rede guarda o
+horário; rascunho e assistido não marcam nada; (65) o Short alterado depois de renderizado não posta (manda renderizar); (66)
+ao sair com postagens na fila o aplicativo pergunta; (67) a fila só anda **com o aplicativo aberto** (para o Instagram); (68)
+`__version__` 1.8.0; (69) os resultados por rede ficam em `postagens.json`, não no `Corte`.
+
+**Acrescentado ainda na rodada 1.8 (pedido do autor depois da primeira entrega):**
+
+70. **Calendário e relógio de ponteiros** (`ui/seletores_de_horario.py`). Ao lado dos campos de data e de hora da
+    linha "Agendado para" (e da janela "Postar nas redes…") ficam os botões 📅 e 🕒, que abrem uma janelinha logo
+    abaixo deles. O **calendário** mostra o mês (semana de domingo a sábado, nomes em português sem depender do
+    `locale`), com hoje contornado, os dias que já passaram apagados e a navegação entre meses (não volta antes do mês de
+    hoje). O **relógio de ponteiros** pede a hora e depois os minutos: o anel de fora vai de 00 a 11 e o de dentro de 12 a
+    23 (24 horas, como se escreve o horário); escolhida a hora, passa sozinho para os minutos, que só existem em blocos
+    de **15** (00, 15, 30, 45); escolhido o bloco, o horário já vale e a janelinha fecha. Tocar na hora ou nos minutos do
+    alto volta ao passo. Os campos continuam aceitando digitação (qualquer minuto). Desenhados em `Canvas` (o
+    aplicativo só tem tema escuro, como os outros `Canvas`); a geometria (qual hora, qual minuto, qual dia está sob o
+    clique) fica em funções puras testadas sem Tk. Escolher por eles **já marca o agendamento** (sem data, amanhã; sem
+    hora, 18:00) e avisa uma vez só. `JanelaDeSeletor` devolve o foco à janela de antes (a de postagem é modal).
+
+71. **Pastas `agendados/` e `postados/`** (`render/shorts.py`: `PASTA_DOS_AGENDADOS`, `pasta_do_estado`,
+    `aplicar_marcas_de_postado`). O arquivo de cada Short acompanha o estado: ao **agendar**, o `.mp4` e o `.txt` já
+    renderizados vão para `shorts_gerados/agendados/`; passada a hora (ou marcando "já postado") seguem para
+    `postados/`; tirar o horário os devolve a `shorts_gerados/`. O `.txt` diz "AGENDADO PARA 04/11/2026 às 18:00" (ou
+    "JÁ POSTADO"). Vale também para o que se agenda pelo "Postar nas redes…", ao abrir um projeto com agendamentos
+    antigos e ao renderizar (o Short sai direto na pasta certa). O registro das redes não guarda o caminho do arquivo (a
+    fila refaz o pacote pelo registro dos Shorts renderizados), então mover não quebra uma postagem na fila.
+
+**Escolhas feitas sem consulta nestes dois itens (confirmar ou mudar):** (72) a pasta dos já postados continua se chamando
+`postados` (o autor falou em "publicados"; o nome vem da 1.7, dos projetos que já a têm e do rótulo "Já postado" da tela:
+trocar exige migrar os arquivos e o registro, então não foi feito); (73) postado vale mais que agendado e agendado mais que
+desmarcado (um Short agendado que sai da seleção fica em `agendados/`); (74) o relógio só oferece blocos de 15 minutos, mas
+a digitação aceita qualquer minuto; (75) o mostrador de 24 horas tem dois anéis (00 a 11 fora, 12 a 23 dentro) em vez de 12
+horas com "manhã/tarde"; (76) os dias que já passaram não se escolhem no calendário; (77) uma pasta travada por outro programa não
+desfaz o agendamento: o horário vale, o aviso aparece sob a linha e o arquivo é acertado na próxima vez.
+
+**O que só o autor consegue fazer (nada foi testado com conta real):** criar os apps (YouTube, Meta, e opcionalmente TikTok e
+Upload-Post) seguindo o "Como conseguir as chaves" de cada cartão e rodar os seis testes de verdade do fim do
+[Integracoes.md](Integracoes.md): a trava do YouTube, o agendamento do YouTube, a visibilidade dos posts da Meta em modo
+Desenvolvimento, o limite diário do Instagram, o rascunho do TikTok e o Upload-Post.

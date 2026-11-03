@@ -70,9 +70,9 @@ def test_o_short_postado_mora_em_postados_e_os_outros_na_pasta_principal():
 def test_o_texto_de_publicacao_diz_que_ja_foi_postado():
     postado = _corte(1, postado=True, postado_em="2026-11-02")
     texto = texto_de_publicacao(postado)
-    assert texto.startswith("JÁ POSTADO NO YOUTUBE (marcado em 02/11/2026)\n\nTítulo: Título 1")
+    assert texto.startswith("JÁ POSTADO (marcado em 02/11/2026)\n\nTítulo: Título 1")
     sem_data = texto_de_publicacao(_corte(1, postado=True))
-    assert sem_data.startswith("JÁ POSTADO NO YOUTUBE\n\n")
+    assert sem_data.startswith("JÁ POSTADO\n\n")
     assert "POSTADO" not in texto_de_publicacao(_corte(1))
 
 
@@ -95,7 +95,7 @@ def test_marcar_move_o_mp4_e_o_txt_para_postados_e_acerta_o_registro(pastas):
     assert not (pastas.shorts / "short_01_corte_1.txt").exists()
     assert (pastas.shorts / PASTA_DOS_POSTADOS / "short_01_corte_1.mp4").read_bytes() == b"video"
     texto = (pastas.shorts / PASTA_DOS_POSTADOS / "short_01_corte_1.txt").read_text("utf-8")
-    assert texto.startswith("JÁ POSTADO NO YOUTUBE (marcado em 02/11/2026)")
+    assert texto.startswith("JÁ POSTADO (marcado em 02/11/2026)")
     assert _arquivo_no_registro(pastas, corte) == "postados/short_01_corte_1.mp4"
 
 

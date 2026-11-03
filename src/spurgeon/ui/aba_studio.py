@@ -20,6 +20,7 @@ from spurgeon.ui import dialogos
 from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.dicas import dica
+from spurgeon.ui.postagem import ContextoDePublicacao
 from spurgeon.ui.shorts_livre import PainelShortsLivre
 from spurgeon.ui.studio_shorts import EditorDeCortes, OrigemDaPrevia
 
@@ -48,6 +49,7 @@ class AbaStudioShorts(ctk.CTkFrame):
         origem_da_previa: Callable[[], OrigemDaPrevia | None] | None = None,
         contexto_da_ia: Callable[[], ContextoDaIA | None] | None = None,
         definir_ajustes: Callable[..., None] | None = None,
+        publicacao: ContextoDePublicacao | None = None,
     ):
         """`definir_ajustes(legenda=…)` grava na tela principal a opção dos Shorts que se acerta
         olhando a prévia (a altura da legenda; o corte das pausas é de cada Short)."""
@@ -55,6 +57,7 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._tarefas = tarefas
         self._contexto_da_ia = contexto_da_ia or (lambda: None)
         self._definir_ajustes = definir_ajustes
+        self._publicacao = publicacao
         self._origem_da_previa = origem_da_previa
         self._ao_renderizar = ao_renderizar
         self._pastas_do_app = pastas_do_app
@@ -191,6 +194,7 @@ class AbaStudioShorts(ctk.CTkFrame):
             origem_da_previa=self._origem_da_previa,
             definir_ajustes=self._definir_ajustes,
             contexto_da_ia=self._contexto_da_ia if self._tarefas is not None else None,
+            publicacao=self._publicacao,
         )
         self._editor.grid(row=0, column=0, sticky="nsew")
         self._editor.bloquear(self._motivo_bloqueio)
@@ -230,6 +234,11 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._editor.adicionar_corte(corte)
         self.salvar(exigir_ate_o_limite=False)
         self.mostrar_painel(PAINEL_CORTES)
+
+    def atualizar_redes(self) -> None:
+        """A fila de postagens andou: o resumo das redes do Short aberto se refaz."""
+        if self._editor is not None:
+            self._editor.atualizar_redes()
 
     def recarregar(self) -> None:
         """Relê os cortes e o que já foi renderizado (depois de um processamento)."""

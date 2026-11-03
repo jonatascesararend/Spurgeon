@@ -24,7 +24,7 @@ import time
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import BooleanVar, StringVar, TclError
 
@@ -34,15 +34,25 @@ from spurgeon.core.config import OpcoesProcessamento, Pastas
 from spurgeon.core.erros import Cancelado
 from spurgeon.core.ffmpeg import InfoMidia
 from spurgeon.core.projeto import PastasProjeto
+from spurgeon.publicacao.agenda import resumo_das_redes
+from spurgeon.publicacao.modelo import AGENDADO, ENVIADO, NA_FILA, Relogio, agora_local
+from spurgeon.publicacao.pacote import pacote_do_corte, registro_do_projeto
 from spurgeon.render import previa
 from spurgeon.render.shorts import (
+    PASTA_DOS_AGENDADOS,
     PASTA_DOS_POSTADOS,
     SITUACAO_ALTERADO,
     SITUACAO_NOVO,
     SITUACAO_PRONTO,
     aplicar_marcas_de_postado,
     ler_registro,
+    sincronizar_arquivos,
     situacao_do_short,
+)
+from spurgeon.shorts.agendamento import (
+    aplicar_vencimento,
+    guardar_horario,
+    ler_horario,
 )
 from spurgeon.shorts.analise import palavras_da_janela, separar_frases
 from spurgeon.shorts.dados import (
@@ -84,7 +94,12 @@ from spurgeon.shorts.edicao import (
     resumir,
     tirar_palavras,
 )
-from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes, gravar_postado, nome_do_sermao
+from spurgeon.shorts.etapas import (
+    carregar_cortes,
+    gravar_campos_do_corte,
+    gravar_cortes,
+    nome_do_sermao,
+)
 from spurgeon.shorts.livre import ContextoDaIA, preparar_cliente
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS
 from spurgeon.shorts.marcas import Detectado, categoria_de_cada_frase, trechos_detectados
@@ -111,6 +126,12 @@ from spurgeon.ui.estabilidade import RotuloQueSome
 from spurgeon.ui.ferramentas_de_marca import FerramentasDeMarca
 from spurgeon.ui.legenda_de_categorias import LegendaDeCategorias, itens_da_legenda
 from spurgeon.ui.miniplayer import MiniPlayer
+from spurgeon.ui.postagem import (
+    ContextoDePublicacao,
+    JanelaDePostagem,
+    LinhaDeAgendamento,
+    preparar_assistido,
+)
 from spurgeon.ui.rolagem import QuadroRolavel
 from spurgeon.ui.tabela_de_frases import (
     COR_FORA,
@@ -151,6 +172,8 @@ _MANTER_A_IA_S = "3m"  # o Ollama solta o modelo da memória depois deste tempo 
 _ROTULO_DO_CAMPO = {"titulo": "o título", "descricao": "a descrição", "hashtags": "as hashtags"}
 
 _PASTA = f"shorts_gerados/{PASTA_DOS_POSTADOS}"  # onde ficam os Shorts já postados
+_PASTA_AGENDADOS = f"shorts_gerados/{PASTA_DOS_AGENDADOS}"  # e os que têm horário marcado
+_CONFERIR_AGENDAMENTO_MS = 30_000  # de quanto em quanto tempo se vê se alguma hora passou
 
 ORDEM_NOTA = "Maior nota"
 ORDEM_HORARIO = "Horário"
@@ -286,6 +309,8 @@ class EditorDeCortes(ctk.CTkFrame):
         origem_da_previa: Callable[[], OrigemDaPrevia | None] | None = None,
         definir_ajustes: Callable[..., None] | None = None,
         contexto_da_ia: Callable[[], ContextoDaIA | None] | None = None,
+        publicacao: ContextoDePublicacao | None = None,
+        relogio: Relogio = agora_local,
     ):
         """`definir_ajustes(legenda=…)` grava na tela principal a altura da legenda dos Shorts (a
         opção que a prévia usa); o valor atual vem de `origem_da_previa`. O corte das pausas é de
@@ -297,6 +322,12 @@ class EditorDeCortes(ctk.CTkFrame):
         self._origem_da_previa = origem_da_previa
         self._definir_ajustes = definir_ajustes
         self._contexto_da_ia = contexto_da_ia
+        self._publicacao = publicacao  # as redes para postar; sem ele, o botão de postar some
+        self._relogio = relogio
+        self._agendamento_pendente: str | None = None  # o `after` que vê se uma hora passou
+        #: o título que o nome do arquivo de cada corte tinha quando foi feito: se o título muda,
+        #: o arquivo passa a se chamar como o título novo (e não como o que a IA sugeriu)
+        self._titulo_do_nome: dict[int, str] = {}
         self._refazendo: tuple[int, str] | None = None  # (id do corte, campo) que a IA está criando
         self._inicio_da_ia = 0.0
         self._pastas_do_app = pastas_do_app
@@ -373,8 +404,13 @@ class EditorDeCortes(ctk.CTkFrame):
         self._deteccoes = self._mapa_de_frases = self._tempos_das_palavras = None
         self._indices_dos_cortes = {}
         self._marcas = [BooleanVar(value=c.incluir) for c in self._cortes]
+        self._titulo_do_nome = {c.id: c.titulo for c in self._cortes}
         self._atual = None
         self._mudou = False
+        agendados = [c for c in self._cortes if c.agendado_para]
+        if agendados:  # agendados antes de existir a pasta (ou com o arquivo fora dela)
+            with contextlib.suppress(OSError, ValueError, KeyError):
+                aplicar_marcas_de_postado(self._pastas, agendados)
         self.recarregar_registro(reordenar=False)
         self._atualizar_texto_introducao()
         self._reordenar()
@@ -382,6 +418,7 @@ class EditorDeCortes(ctk.CTkFrame):
             self.selecionar(self._ordem[0])
         else:
             self._limpar_detalhe()
+        self._conferir_agendamentos()  # e daqui em diante, de tempos em tempos
 
     def descartar_alteracoes(self) -> None:
         """Joga fora o que não foi salvo: relê os cortes do arquivo (a tela continua no mesmo corte,
@@ -591,7 +628,11 @@ class EditorDeCortes(ctk.CTkFrame):
         quadro_titulo.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 6))
         quadro_titulo.columnconfigure(0, weight=1)
         self._campo_titulo = ctk.CTkEntry(quadro_titulo, textvariable=self._var_titulo)
-        dica(self._campo_titulo, "O título do Short (também o nome do arquivo). Edite à vontade.")
+        dica(
+            self._campo_titulo,
+            "O título do Short (também o nome do arquivo). Edite à vontade: a lista da esquerda "
+            "acompanha na hora e o arquivo já renderizado é renomeado ao salvar.",
+        )
         self._campo_titulo.grid(row=0, column=0, sticky="ew")
         self._aviso_do_titulo = RotuloQueSome(
             quadro_titulo, anchor="w", justify="left", wraplength=420, text_color=_COR_ALERTA,
@@ -602,13 +643,14 @@ class EditorDeCortes(ctk.CTkFrame):
         linha_postado.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         linha_postado.columnconfigure(1, weight=1)
         self._check_postado = ctk.CTkCheckBox(
-            linha_postado, text="Já postado no YouTube", variable=self._var_postado,
+            linha_postado, text="Já postado", variable=self._var_postado,
             command=self._ao_marcar_postado,
         )  # fmt: skip
         self._check_postado.grid(row=0, column=0, sticky="w")
         dica(
             self._check_postado,
-            "Marque quando já publicou este Short no YouTube, para se organizar. Grava na hora "
+            "Marque quando já publicou este Short (em qualquer rede), para se organizar. "
+            "Grava na hora "
             f"(sem precisar salvar) e move o arquivo para {_PASTA}, dentro da pasta do "
             "projeto. Desmarcar o traz de volta.",
         )
@@ -617,6 +659,15 @@ class EditorDeCortes(ctk.CTkFrame):
             text_color=_COR_SUAVE, font=ctk.CTkFont(size=12),
         )  # fmt: skip
         self._rotulo_postado.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        self._linha_agendamento = LinhaDeAgendamento(
+            quadro_titulo,
+            ao_mudar=self._ao_agendar,
+            ao_postar=self._abrir_postagem,
+            relogio=self._relogio,
+        )
+        self._linha_agendamento.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        if self._publicacao is None:  # sem as redes (janela de aprovação) não há o que postar
+            self._linha_agendamento.botao_postar.grid_remove()
         self._cabeca_do_campo(d, 7, "Descrição", "descricao")
         self._campo_descricao = ctk.CTkTextbox(d, height=64, wrap="word")
         self._campo_descricao.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 6))
@@ -627,6 +678,7 @@ class EditorDeCortes(ctk.CTkFrame):
         for variavel in (self._var_titulo, self._var_hashtags):
             variavel.trace_add("write", lambda *_a: self._marcar_mudanca())
         self._var_titulo.trace_add("write", lambda *_a: self._atualizar_aviso_do_titulo())
+        self._var_titulo.trace_add("write", lambda *_a: self._espelhar_titulo_na_lista())
         self._campo_descricao.bind("<KeyRelease>", lambda _e: self._marcar_mudanca())
 
         self._rotulo_tempo = ctk.CTkLabel(d, anchor="w", font=ctk.CTkFont(weight="bold"))
@@ -1118,7 +1170,9 @@ class EditorDeCortes(ctk.CTkFrame):
         sufixo += " · ✎ legenda" if corte.legenda else ""
         sufixo += " · ⚠ contexto" if corte.alerta_contexto else ""
         sufixo += f" · ⚠ mais de {DURACAO_MAXIMA_S:g} s" if passa_do_limite(corte) else ""
-        sufixo += " · ✔ postado no YouTube" if corte.postado else ""
+        sufixo += " · ✔ postado" if corte.postado else ""
+        agendado = ler_horario(corte.agendado_para)
+        sufixo += f" · 📅 agendado {agendado:%d/%m %H:%M}" if agendado else ""
         situacao = _ROTULO_SITUACAO[self.situacao(corte)]
         trecho = trecho_da_legenda(self._palavras, corte)
         return {
@@ -1242,6 +1296,9 @@ class EditorDeCortes(ctk.CTkFrame):
         postados = sum(1 for c in self._cortes if c.postado)
         if postados:
             texto += f" · ✔ {postados} já postado{'s' if postados > 1 else ''}"
+        agendados = sum(1 for c in self._cortes if c.agendado_para)
+        if agendados:
+            texto += f" · 📅 {agendados} agendado{'s' if agendados > 1 else ''}"
         self._resumo.configure(text=texto)
 
     def _pintar_atual(self) -> None:
@@ -1329,6 +1386,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._rotulo_motivo.configure(text=f"IA: {corte.motivo}" if corte.motivo else "")
         self._var_titulo.set(corte.titulo)
         self._mostrar_postado(corte)
+        self._mostrar_agendamento(corte)
         self._campo_descricao.delete("1.0", "end")
         self._campo_descricao.insert("1.0", corte.descricao)
         self._var_hashtags.set(" ".join(corte.hashtags))
@@ -1341,7 +1399,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._mostrar_previa(corte)
 
     def _mostrar_postado(self, corte: Corte, falhas: list[str] | None = None) -> None:
-        """A caixa "Já postado no YouTube" e o texto ao lado dela (e o que não deu para mover)."""
+        """A caixa "Já postado" e o texto ao lado dela (e o que não deu para mover)."""
         self._var_postado.set(corte.postado)
         texto = texto_do_postado(
             corte,
@@ -1372,7 +1430,7 @@ class EditorDeCortes(ctk.CTkFrame):
             self._configurar(self._aviso_do_titulo, text=texto)
 
     def _ao_marcar_postado(self) -> None:
-        """A pessoa marcou ou desmarcou "Já postado no YouTube": grava só isso, na hora, e leva o
+        """A pessoa marcou ou desmarcou "Já postado": grava só isso, na hora, e leva o
         arquivo já renderizado para `postados/` (ou o traz de volta). Se o corte ainda não está no
         arquivo (foi criado agora), a marca entra no próximo "Salvar"."""
         if self._atual is None or self._carregando or self._tela_desatualizada:
@@ -1380,11 +1438,14 @@ class EditorDeCortes(ctk.CTkFrame):
         corte = self._cortes[self._atual]
         corte.postado = bool(self._var_postado.get())
         corte.postado_em = date.today().isoformat() if corte.postado else ""
+        if corte.postado:
+            corte.agendado_para = ""  # já foi ao ar: não está mais agendado
         falhas: list[str] = []
         try:
-            gravado = gravar_postado(
-                self._pastas.cortes_shorts, corte.id, corte.postado, corte.postado_em
-            )
+            gravado = gravar_campos_do_corte(
+                self._pastas.cortes_shorts, corte.id, postado=corte.postado,
+                postado_em=corte.postado_em, agendado_para=corte.agendado_para,
+            )  # fmt: skip
         except (OSError, ValueError, TypeError, KeyError):
             gravado = False
         if gravado:
@@ -1395,6 +1456,175 @@ class EditorDeCortes(ctk.CTkFrame):
         self._atualizar_linha(self._atual)
         self._atualizar_resumo()
         self._mostrar_postado(corte, falhas)
+        self._mostrar_agendamento(corte)
+
+    # --- agendar e postar nas redes -------------------------------------------------------
+    def _espelhar_titulo_na_lista(self) -> None:
+        """O título que se digita já aparece na lista da esquerda (o corte só o recebe em
+        `_guardar_detalhe`). Fora de uma edição de verdade (tela sendo preenchida) não faz nada."""
+        if self._atual is None or self._carregando or self._tela_desatualizada:
+            return
+        rotulos = self._rotulos_da_linha.get(self._atual)
+        if rotulos is None or not self._cortes:
+            return
+        texto = self._var_titulo.get().strip() or self._cortes[self._atual].texto[:60]
+        self._configurar(rotulos["titulo"], text=texto)
+
+    def _resultados_das_redes(self, corte: Corte) -> dict:
+        """O que cada rede já fez com este Short (vazio se não há o que mostrar)."""
+        if self._publicacao is None:
+            return {}
+        try:
+            return registro_do_projeto(self._pastas).do_corte(corte.id)
+        except (OSError, ValueError):
+            return {}
+
+    def _resumo_do_agendamento(self, corte: Corte, falhas: list[str] | None = None) -> str:
+        """Sob a linha do agendamento: onde está o arquivo, o que cada rede fez e o que não deu
+        para mover."""
+        linhas = []
+        if corte.agendado_para and self._existem.get(str(corte.id), False):
+            linhas.append(f"O arquivo está em {_PASTA_AGENDADOS}.")
+        redes = resumo_das_redes(self._resultados_das_redes(corte))
+        if redes:
+            linhas.append(redes)
+        if falhas:
+            linhas.append(
+                f"⚠ Não consegui mover: {'; '.join(falhas)}. Feche o arquivo e tente de novo."
+            )
+        return "\n".join(linhas)
+
+    def _mostrar_agendamento(self, corte: Corte) -> None:
+        self._linha_agendamento.carregar(corte.agendado_para, self._resumo_do_agendamento(corte))
+
+    def atualizar_redes(self) -> None:
+        """O registro das redes mudou (a fila do Spurgeon publicou, por exemplo): refaz o resumo."""
+        if self._atual is not None and self._cortes:
+            self._mostrar_agendamento(self._cortes[self._atual])
+
+    def _gravar_agendamento(self, corte: Corte, texto: str) -> None:
+        """Grava só o horário agendado (na hora, como o “já postado”), leva o arquivo já
+        renderizado para `agendados/` (ou o traz de volta, se o horário saiu) e refaz a lista."""
+        corte.agendado_para = texto
+        try:
+            gravado = gravar_campos_do_corte(
+                self._pastas.cortes_shorts, corte.id, agendado_para=texto
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            gravado = False
+        falhas: list[str] = []
+        if gravado:
+            falhas = aplicar_marcas_de_postado(self._pastas, [corte]).falhas
+            self.recarregar_registro(reordenar=False)
+        else:
+            self._houve_mudanca()  # o corte ainda não está no arquivo: entra no próximo "Salvar"
+        with contextlib.suppress(ValueError):
+            self._atualizar_linha(self._cortes.index(corte))
+        self._atualizar_resumo()
+        if self._atual is not None and self._cortes[self._atual] is corte:
+            self._linha_agendamento.resumo.configure(
+                text=self._resumo_do_agendamento(corte, falhas)
+            )  # só o texto: o que a pessoa está digitando nos campos não é reescrito
+
+    def _ao_agendar(self, texto: str) -> None:
+        """A pessoa marcou, mudou ou tirou o horário agendado do corte aberto."""
+        if self._atual is None or self._carregando or self._tela_desatualizada:
+            return
+        self._gravar_agendamento(self._cortes[self._atual], texto)
+
+    def _abrir_postagem(self) -> None:
+        """Abre a janela que envia este Short às redes (agora ou no horário marcado)."""
+        if self._atual is None or self._publicacao is None:
+            return
+        self._guardar_detalhe()
+        if self._mudou and not self.salvar(exigir_ate_o_limite=False):
+            return  # o que vai para as redes são os textos salvos
+        corte = self._cortes[self._atual]
+        if self.situacao(corte) == SITUACAO_ALTERADO:
+            dialogos.aviso(
+                self.winfo_toplevel(),
+                "Postar nas redes",
+                "O corte mudou depois de renderizado: o vídeo pronto não tem as suas edições. "
+                "Renderize de novo antes de postar.",
+            )
+            return
+        JanelaDePostagem(
+            self.winfo_toplevel(),
+            titulo_do_short=corte.titulo,
+            pacote=pacote_do_corte(self._pastas, corte),
+            plataformas=self._publicacao.plataformas(),
+            registro=registro_do_projeto(self._pastas),
+            id_do_corte=corte.id,
+            quando=self._linha_agendamento.horario(),
+            tarefas=self._publicacao.tarefas,
+            relogio=self._relogio,
+            ao_terminar=lambda r, q, id_=corte.id: self._terminou_a_postagem(id_, r, q),
+            ao_assistir=lambda r: preparar_assistido(self.winfo_toplevel(), r),
+        )
+
+    def _terminou_a_postagem(self, id_do_corte: int, resultados, quando: datetime | None) -> None:
+        """Depois de postar: agendado nas redes guarda o horário no Short; publicado agora o marca
+        como já postado. Rascunhos e passos assistidos não mudam nada (a pessoa decide)."""
+        corte = next((c for c in self._cortes if c.id == id_do_corte), None)
+        if corte is None or self._publicacao is None:
+            return
+        for r in resultados:
+            plataforma = self._publicacao.plataformas().get(r.plataforma)
+            nome = plataforma.nome if plataforma is not None else r.plataforma
+            self._publicacao.registrar(f"{nome}: “{corte.titulo}” {r.rotulo}")
+        if quando is not None and any(r.estado in (AGENDADO, NA_FILA) for r in resultados):
+            self._gravar_agendamento(corte, guardar_horario(quando))
+        elif quando is None and any(r.estado == ENVIADO for r in resultados) and not corte.postado:
+            self._marcar_como_postado(corte)
+        if self._atual is not None and self._cortes[self._atual] is corte:
+            self._mostrar_agendamento(corte)
+            self._mostrar_postado(corte)
+
+    def _marcar_como_postado(self, corte: Corte) -> None:
+        """Marca o corte como já postado hoje (como a caixa), sem mexer na tela aberta."""
+        corte.postado, corte.postado_em, corte.agendado_para = True, date.today().isoformat(), ""
+        with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
+            gravar_campos_do_corte(
+                self._pastas.cortes_shorts, corte.id, postado=True,
+                postado_em=corte.postado_em, agendado_para="",
+            )  # fmt: skip
+        aplicar_marcas_de_postado(self._pastas, [corte])
+        self.recarregar_registro(reordenar=False)
+        with contextlib.suppress(ValueError):
+            self._atualizar_linha(self._cortes.index(corte))
+        self._atualizar_resumo()
+
+    def _conferir_agendamentos(self) -> None:
+        """Passou a hora de um Short agendado: ele vira “já postado” sozinho (e o arquivo vai
+        para `postados/`). Roda ao abrir o projeto e depois a cada 30 s."""
+        if self._agendamento_pendente is not None:
+            with contextlib.suppress(TclError):
+                self.after_cancel(self._agendamento_pendente)
+            self._agendamento_pendente = None
+        agora = self._relogio()
+        venceram = [c for c in self._cortes if c.agendado_para and aplicar_vencimento(c, agora)]
+        for corte in venceram:
+            with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
+                gravar_campos_do_corte(
+                    self._pastas.cortes_shorts, corte.id, postado=True,
+                    postado_em=corte.postado_em, agendado_para="",
+                )  # fmt: skip
+        if venceram:
+            falhas = aplicar_marcas_de_postado(self._pastas, venceram).falhas
+            self.recarregar_registro(reordenar=False)
+            for i, corte in enumerate(self._cortes):
+                if corte in venceram:
+                    self._atualizar_linha(i)
+            self._atualizar_resumo()
+            if self._atual is not None:
+                self._mostrar_postado(self._cortes[self._atual], falhas)
+                self._mostrar_agendamento(self._cortes[self._atual])
+        else:
+            self._linha_agendamento.repintar()
+        with contextlib.suppress(TclError):
+            self._agendamento_pendente = self.after(
+                _CONFERIR_AGENDAMENTO_MS, self._conferir_agendamentos
+            )
 
     def _mostrar_legenda(self, corte: Corte) -> None:
         self._texto.delete("1.0", "end")
@@ -2349,7 +2579,7 @@ class EditorDeCortes(ctk.CTkFrame):
 
     def destroy(self) -> None:
         self._cancelar_previa.set()
-        for nome in ("_sincronizacao", "_acompanhar_a_tabela"):
+        for nome in ("_sincronizacao", "_acompanhar_a_tabela", "_agendamento_pendente"):
             pendente = getattr(self, nome)
             if pendente is not None:
                 with contextlib.suppress(TclError):
@@ -2564,15 +2794,20 @@ class EditorDeCortes(ctk.CTkFrame):
             return False
         usados: set[str] = set()
         for corte in self._cortes:
+            if corte.titulo != self._titulo_do_nome.get(corte.id, corte.titulo):
+                corte.slug = ""  # o título mudou: o arquivo passa a ter o nome dele, não o da IA
             corte.slug = nome_de_arquivo(corte.slug or corte.titulo, usados)
             usados.add(corte.slug)
+            self._titulo_do_nome[corte.id] = corte.titulo
         gravar_cortes(self._pastas.cortes_shorts, self._cortes)
         self._mudou = False
-        marcas = aplicar_marcas_de_postado(self._pastas, self._cortes)
-        if marcas.movidos:
+        arquivos = sincronizar_arquivos(self._pastas, self._cortes)  # nome, pasta e .txt
+        if arquivos.movidos:
             self.recarregar_registro(reordenar=False)
-            if self._atual is not None:
-                self._mostrar_postado(self._cortes[self._atual], marcas.falhas)
+        for i in range(len(self._cortes)):
+            self._atualizar_linha(i)
+        if self._atual is not None and (arquivos.movidos or arquivos.falhas):
+            self._mostrar_postado(self._cortes[self._atual], arquivos.falhas)
         self._atualizar_resumo()
         return True
 

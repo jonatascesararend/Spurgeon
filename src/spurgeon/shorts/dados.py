@@ -178,10 +178,14 @@ class Corte:
     #: encurta as pausas da fala deste Short a partir deste tamanho, em segundos (de 0,1 a 10);
     #: 0 = não corta pausa nenhuma
     pausa_s: float = 0.0
-    #: a pessoa já publicou este Short no YouTube (para se organizar); o arquivo renderizado leva
-    #: `_POSTADO` no nome. `postado_em` é a data (AAAA-MM-DD) em que ela marcou
+    #: a pessoa já publicou este Short em alguma rede (para se organizar); o arquivo renderizado
+    #: vai para `shorts_gerados/postados/`. `postado_em` é a data (AAAA-MM-DD) em que foi ao ar
     postado: bool = False
     postado_em: str = ""
+    #: a previsão de quando o Short vai ao ar (`AAAA-MM-DDTHH:MM`, hora do computador; vazio = sem
+    #: agendamento). O arquivo renderizado vai para `shorts_gerados/agendados/`; passada a hora, o
+    #: Short vira "já postado" sozinho e segue para `postados/` (`shorts/agendamento.py`)
+    agendado_para: str = ""
 
     @property
     def janela_s(self) -> float:

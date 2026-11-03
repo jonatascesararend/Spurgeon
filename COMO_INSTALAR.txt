@@ -2,12 +2,17 @@ STUDIO SPURGEON - COMO INSTALAR (versão simples)
 =================================================
 
 O que é: programa para Windows que transforma um sermão longo em vídeo limpo,
-legendas e Shorts. Tudo roda no seu computador, sem enviar nada para a internet.
+legendas e Shorts (vídeos verticais para YouTube, Instagram, Facebook e TikTok) e, se
+você quiser, posta e agenda os Shorts nas redes da igreja. Tudo roda no seu computador:
+o vídeo não é enviado a ninguém. O programa só usa a internet para consultar se há versão
+nova ao abrir (dá para desligar) e para postar nas redes, quando você mandar.
 
 Você precisa de:
   - Windows 10 (versão 1809 ou mais nova) ou Windows 11, de 64 bits
+  - 16 GB de memória (RAM) é o recomendado; com menos, o programa usa uma IA menor
   - uns 20 GB livres no disco (programas e modelos de IA) + uns 6 GB para cada sermão
   - internet durante a instalação (depois o programa funciona offline)
+  - placa de vídeo não é necessária
 
 Não precisa instalar mais nada antes: o instalador cuida de tudo (inclusive o uv e o
 Ollama; se um guia antigo mandou rodar "winget install" de alguma coisa, ignore).
@@ -15,16 +20,22 @@ Ollama; se um guia antigo mandou rodar "winget install" de alguma coisa, ignore)
 
 PASSO 1 - Pôr a pasta do Studio Spurgeon no computador
 ------------------------------------------------------
-Copie a pasta "Spurgeon" inteira para um lugar fácil, por exemplo:
+Se você recebeu a pasta "Spurgeon" pronta (num pen drive, por exemplo), copie-a inteira
+para um lugar fácil. Se não, baixe pelo navegador:
+
+    https://github.com/jonatascesararend/Spurgeon
+
+clique em "Code" > "Download ZIP". O ZIP traz uma pasta chamada "Spurgeon-main"; pode
+renomeá-la para "Spurgeon". Ponha a pasta num lugar fácil, por exemplo:
 
     C:\Spurgeon
 
 Evite pastas dentro do OneDrive ou do "Arquivos de Programas". (Nome de pasta com
 acento ou espaço funciona, por exemplo C:\Users\João\Documents\Spurgeon.)
 
-Se baixou a pasta como ZIP pelo navegador, ANTES de extrair clique com o botão direito
-no arquivo .zip > Propriedades > marque "Desbloquear" > OK. Isso evita quase todos os
-avisos do Windows descritos mais abaixo.
+ANTES de extrair o ZIP, clique com o botão direito no arquivo .zip > Propriedades >
+marque "Desbloquear" > OK. Isso evita quase todos os avisos do Windows descritos mais
+abaixo.
 
 
 PASSO 2 - Instalar
@@ -82,9 +93,14 @@ COMO USAR (resumo)
 4. O programa pausa em dois pontos para você revisar a transcrição e aprovar os
    cortes dos Shorts. Depois continua sozinho.
 5. O resultado fica em  Spurgeon\Projetos\AAAA-MM-DD_NomeDoSermao
+6. Para conferir e ajustar os Shorts (início, fim, legenda, título), abra a aba
+   "Studio Shorts" no alto da janela.
 
 Dica: a qualidade "Máxima" é lenta (horas). Para testar, escolha "Rápido" na
 aba "3 · Revisão e opções".
+
+Na primeira abertura o programa oferece um passo a passo; o botão "Como usar", no
+canto de baixo da janela, mostra de novo quando você quiser.
 
 
 OPCIONAL - Introdução e vinheta
@@ -96,6 +112,33 @@ os nomes:
     vinheta_final.mp4
 
 (ou escolha outros arquivos direto na tela, em "Introdução e vinheta final").
+
+
+OPCIONAL - Marca d'água
+-----------------------
+Na aba da esquerda "2 · Corte e imagem", em "Marca d'água", escolha o logotipo da
+igreja (de preferência um PNG com fundo transparente), o canto e o tamanho. Ela pode
+ir no vídeo longo, nos Shorts ou nos dois. As atualizações do programa não mexem nos
+seus arquivos de marca d'água, vinheta e vocabulário.
+
+
+OPCIONAL - Postar nas redes da igreja
+-------------------------------------
+Na aba "Integrações" ficam YouTube, Instagram, Facebook e TikTok. Cada igreja usa as
+PRÓPRIAS chaves: cada cartão tem a seção "Como conseguir as chaves" (clique para
+abrir), com o passo a passo de cada rede. As chaves ficam criptografadas neste computador. Depois, no
+"Studio Shorts", cada Short tem "Agendado para" e "Postar nas redes...". A data se
+escolhe num calendário e a hora num relógio de ponteiros (primeiro a hora, depois os
+minutos, de 15 em 15); também dá para digitar.
+
+Para ajudar a organizar os arquivos, o programa move cada Short sozinho: ao agendar, ele
+vai para a pasta "agendados" (dentro de "shorts_gerados", na pasta do projeto); quando a
+hora passa, ele vira "já postado" e vai para a pasta "postados".
+
+Lembre: o YouTube e o Facebook agendam sozinhos; o Instagram só publica na hora
+marcada se o Studio Spurgeon estiver aberto (ao fechar com postagens na fila, ele
+avisa); o TikTok é assistido (o programa copia a legenda e abre o TikTok Studio, e
+você agenda por lá). Os detalhes e os limites estão no arquivo Integracoes.md.
 
 
 ATUALIZAR O PROGRAMA
@@ -145,4 +188,17 @@ SE ALGO DEU ERRADO
 - Para conferir o ambiente a qualquer hora: abra o PowerShell na pasta Spurgeon e
   rode:  .venv\Scripts\python -m spurgeon doctor
 
-Mais detalhes: README.md e Projeto.md.
+
+DESINSTALAR
+-----------
+1. Apague a pasta Spurgeon (os projetos ficam dentro dela, em "Projetos": copie antes o
+   que quiser guardar) e os atalhos "Studio Spurgeon" da Área de Trabalho e do Menu
+   Iniciar.
+2. Apague a pasta %LOCALAPPDATA%\Spurgeon (cole no Explorer): ela guarda as suas
+   preferências, as chaves das redes e o registro de erros.
+3. O Ollama e o Visual C++ têm desinstalador próprio (Configurações > Aplicativos) e
+   podem ser mantidos: outros programas podem usá-los.
+
+
+Mais detalhes: README.md (o que o programa faz), Integracoes.md (postar nas redes) e
+Projeto.md (como foi feito e por quê).
