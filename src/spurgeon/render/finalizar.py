@@ -16,7 +16,12 @@ from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.render.filtros import ALTURA_SHORT, LARGURA_SHORT
 from spurgeon.render.mescla import mescla_em_s
-from spurgeon.render.shorts import DURACAO_MAXIMA_S, planejar_shorts
+from spurgeon.render.shorts import (
+    DURACAO_MAXIMA_S,
+    arquivo_do_short_pronto,
+    ler_registro,
+    planejar_shorts,
+)
 from spurgeon.shorts.etapas import carregar_cortes
 
 TOLERANCIA_VIDEO_S = 1.0
@@ -154,10 +159,14 @@ class Finalizar(Etapa):
             avisos.append("Nenhum corte foi aprovado: nenhum Short foi gerado.")
             return
         total_s = total_bytes = 0.0
+        registro = ler_registro(ctx.pastas.shorts_renderizados)
         for curto in planejados:
-            arquivo = ctx.pastas.shorts / curto.video
-            if not arquivo.exists():
-                problemas.append(f"O Short {curto.video} não foi gerado.")
+            arquivo = arquivo_do_short_pronto(ctx.pastas, curto, registro)
+            if arquivo is None:
+                if str(curto.corte.id) in registro:
+                    problemas.append(f"O Short {curto.video} não foi gerado.")
+                else:  # marcado no Studio depois de a renderização começar: fica para a próxima
+                    avisos.append(f"O Short {curto.video} ainda não foi renderizado.")
                 continue
             info = sondar(arquivo)
             if (info.largura, info.altura) != (LARGURA_SHORT, ALTURA_SHORT) or not info.tem_audio:
@@ -167,7 +176,7 @@ class Finalizar(Etapa):
                     f"{curto.video} tem {info.duracao_s:.1f} s "
                     f"(o limite é {DURACAO_MAXIMA_S - 0.5:g} s)."
                 )
-            if not (ctx.pastas.shorts / curto.texto).exists():
+            if not arquivo.with_suffix(".txt").exists():
                 avisos.append(f"Falta o texto de publicação {curto.texto}.")
             total_s += info.duracao_s
             total_bytes += arquivo.stat().st_size

@@ -22,7 +22,7 @@ import tempfile
 import threading
 import time
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -44,8 +44,10 @@ from spurgeon.render.shorts import (
     SITUACAO_ALTERADO,
     SITUACAO_NOVO,
     SITUACAO_PRONTO,
+    ResultadoDasMarcas,
     aplicar_marcas_de_postado,
     ler_registro,
+    pasta_do_estado,
     sincronizar_arquivos,
     situacao_do_short,
 )
@@ -53,6 +55,8 @@ from spurgeon.shorts.agendamento import (
     aplicar_vencimento,
     guardar_horario,
     ler_horario,
+    ler_postado_em,
+    rotulo_do_postado,
 )
 from spurgeon.shorts.analise import palavras_da_janela, separar_frases
 from spurgeon.shorts.dados import (
@@ -174,9 +178,21 @@ _ROTULO_DO_CAMPO = {"titulo": "o título", "descricao": "a descrição", "hashta
 _PASTA = f"shorts_gerados/{PASTA_DOS_POSTADOS}"  # onde ficam os Shorts já postados
 _PASTA_AGENDADOS = f"shorts_gerados/{PASTA_DOS_AGENDADOS}"  # e os que têm horário marcado
 _CONFERIR_AGENDAMENTO_MS = 30_000  # de quanto em quanto tempo se vê se alguma hora passou
+#: durante um processamento os arquivos ficam onde estão (o trabalhador guarda o registro deles na
+#: memória e o regrava a cada Short pronto): a mudança de pasta espera o fim
+_TEXTO_ADIADO = "O arquivo vai para {pasta} quando o processamento terminar."
 
 ORDEM_NOTA = "Maior nota"
 ORDEM_HORARIO = "Horário"
+#: o que a lista mostra, quanto à publicação
+FILTRO_TODOS = "Todos"
+FILTRO_POSTADOS = "Postados"
+FILTRO_AGENDADOS = "Agendados"
+FILTRO_SEM_POSTAR = "Sem postar"  # nem postado nem agendado
+FILTROS = (FILTRO_TODOS, FILTRO_POSTADOS, FILTRO_AGENDADOS, FILTRO_SEM_POSTAR)
+_POSTADO, _AGENDADO = "postado", "agendado"
+_COR_SELO_POSTADO = "#2e8b57"
+_COR_SELO_AGENDADO = "#2b6cb0"
 _ROTULO_SITUACAO = {
     SITUACAO_PRONTO: "✔ renderizado",
     SITUACAO_ALTERADO: "⟳ alterado: renderizar de novo",
@@ -242,17 +258,64 @@ def rotulo_da_origem(corte: Corte) -> str:
     return ROTULOS_ORIGEM.get(corte.origem, ROTULOS_ORIGEM[ORIGEM_AUTOMATICA])
 
 
-def texto_do_postado(corte: Corte, *, tem_arquivo: bool, alterado: bool) -> str:
-    """O que a tela diz de um Short já postado ("" se ele não foi marcado)."""
+def estado_de_publicacao(corte: Corte) -> str:
+    """`postado`, `agendado` (um horário legível e ainda não postado) ou "" (nem um nem outro).
+    Postado vale mais que agendado, como na pasta onde o arquivo fica."""
+    if corte.postado:
+        return _POSTADO
+    return _AGENDADO if ler_horario(corte.agendado_para) is not None else ""
+
+
+def passa_no_filtro(corte: Corte, filtro: str) -> bool:
+    """O corte aparece na lista com este filtro de publicação?"""
+    estado = estado_de_publicacao(corte)
+    if filtro == FILTRO_POSTADOS:
+        return estado == _POSTADO
+    if filtro == FILTRO_AGENDADOS:
+        return estado == _AGENDADO
+    if filtro == FILTRO_SEM_POSTAR:
+        return estado == ""
+    return True
+
+
+def _dia_e_hora(dia: date, hora, agora: datetime) -> str:
+    """`05/11 às 18:30`; com o ano (`05/11/2026`) quando não é o de agora; sem hora, só o dia."""
+    texto = f"{dia:%d/%m}" + (f"/{dia.year}" if dia.year != agora.year else "")
+    return texto + (f" às {hora:%H:%M}" if hora is not None else "")
+
+
+def selo_de_publicacao(corte: Corte, agora: datetime) -> tuple[str, str] | None:
+    """O selo da linha da lista (texto e cor de fundo): quando o Short foi postado ou quando vai
+    ao ar. None se não foi postado nem agendado."""
+    estado = estado_de_publicacao(corte)
+    if estado == _POSTADO:
+        lido = ler_postado_em(corte.postado_em)
+        quando = f" {_dia_e_hora(*lido, agora)}" if lido else ""
+        return f"✔ Postado{quando}", _COR_SELO_POSTADO
+    if estado == _AGENDADO:
+        horario = ler_horario(corte.agendado_para).astimezone()
+        return (
+            f"📅 Agendado {_dia_e_hora(horario.date(), horario.time(), agora)}",
+            _COR_SELO_AGENDADO,
+        )
+    return None
+
+
+def texto_do_postado(
+    corte: Corte, *, tem_arquivo: bool, alterado: bool, adiado: bool = False
+) -> str:
+    """O que a tela diz de um Short já postado ("" se ele não foi marcado). `adiado`: o arquivo
+    ainda não mudou de pasta porque há um processamento rodando."""
     if not corte.postado:
         return ""
-    try:
-        quando = f" em {date.fromisoformat(corte.postado_em):%d/%m/%Y}"
-    except ValueError:
-        quando = ""
+    quando = rotulo_do_postado(corte.postado_em)
+    quando = f" em {quando}" if quando else ""
     if not tem_arquivo:
         return f"✔ Marcado como postado{quando}. Ainda não há arquivo: ele já sai em {_PASTA}."
-    texto = f"✔ Postado{quando}. O arquivo está em {_PASTA}."
+    if adiado:
+        texto = f"✔ Postado{quando}. {_TEXTO_ADIADO.format(pasta=_PASTA)}"
+    else:
+        texto = f"✔ Postado{quando}. O arquivo está em {_PASTA}."
     if alterado:
         texto += " ⚠ O corte mudou depois: um vídeo novo seria outro."
     return texto
@@ -311,13 +374,18 @@ class EditorDeCortes(ctk.CTkFrame):
         contexto_da_ia: Callable[[], ContextoDaIA | None] | None = None,
         publicacao: ContextoDePublicacao | None = None,
         relogio: Relogio = agora_local,
+        processando: bool = False,
     ):
         """`definir_ajustes(legenda=…)` grava na tela principal a altura da legenda dos Shorts (a
         opção que a prévia usa); o valor atual vem de `origem_da_previa`. O corte das pausas é de
         cada Short e vive no próprio corte. `contexto_da_ia` diz como falar com o Ollama para
-        refazer o título, a descrição e as hashtags."""
+        refazer o título, a descrição e as hashtags. `processando`: há um processamento rodando
+        (veja `definir_processamento`); vale já na carga, que também mexe em arquivos."""
         super().__init__(master, fg_color="transparent")
         self._pastas = pastas
+        self._processando = processando
+        self._arquivos_adiados = False  # algo ficou sem mudar de pasta por causa do processamento
+        self._manter_visivel: int | None = None  # o corte que a lista mostra mesmo fora do filtro
         self._tarefas = tarefas
         self._origem_da_previa = origem_da_previa
         self._definir_ajustes = definir_ajustes
@@ -407,15 +475,16 @@ class EditorDeCortes(ctk.CTkFrame):
         self._titulo_do_nome = {c.id: c.titulo for c in self._cortes}
         self._atual = None
         self._mudou = False
-        agendados = [c for c in self._cortes if c.agendado_para]
-        if agendados:  # agendados antes de existir a pasta (ou com o arquivo fora dela)
+        self._manter_visivel = None
+        marcados = [c for c in self._cortes if c.agendado_para or c.postado]
+        if marcados:  # marcados antes de existir a pasta (ou com o arquivo fora dela)
             with contextlib.suppress(OSError, ValueError, KeyError):
-                aplicar_marcas_de_postado(self._pastas, agendados)
+                self._mover_arquivos(marcados)
         self.recarregar_registro(reordenar=False)
         self._atualizar_texto_introducao()
         self._reordenar()
-        if self._cortes:
-            self.selecionar(self._ordem[0])
+        if self._cortes:  # o filtro pode não mostrar nenhum: abre o primeiro na ordem de sempre
+            self.selecionar((self._ordem or self._ordenar(range(len(self._cortes))))[0])
         else:
             self._limpar_detalhe()
         self._conferir_agendamentos()  # e daqui em diante, de tempos em tempos
@@ -431,7 +500,9 @@ class EditorDeCortes(ctk.CTkFrame):
             for i, corte in enumerate(self._cortes):
                 if corte.id == id_aberto:
                     self.selecionar(i)
-                    self.after_idle(self._rolar_ate_o_atual, self._ordem.index(i))
+                    posicao = self._posicao_na_lista(i)
+                    if posicao is not None:
+                        self.after_idle(self._rolar_ate_o_atual, posicao)
                     break
         self._atualizar_botoes_do_historico()
         if self._ao_mudar is not None:
@@ -473,6 +544,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._cortes.append(corte)
         self._marcas.append(BooleanVar(value=corte.incluir))
         self._houve_mudanca()
+        self._manter_visivel = len(self._cortes) - 1  # um corte novo não é postado nem agendado
         self._reordenar()
         self.selecionar(len(self._cortes) - 1)
         self.after_idle(self._rolar_ate_o_atual, self._ordem.index(self._atual))
@@ -507,12 +579,20 @@ class EditorDeCortes(ctk.CTkFrame):
             barra, text="Marcar todos", width=110, command=lambda: self.marcar_todos(True)
         )
         marcar.pack(side="left")
-        dica(marcar, "Marca todos os Shorts da lista para serem renderizados.")
+        dica(
+            marcar,
+            "Marca todos os Shorts que a lista mostra para serem renderizados (com um filtro "
+            "ligado, só os que ele mostra).",
+        )
         desmarcar = ctk.CTkButton(
             barra, text="Desmarcar todos", width=120, command=lambda: self.marcar_todos(False)
         )
         desmarcar.pack(side="left", padx=6)
-        dica(desmarcar, "Desmarca todos: nenhum Short será renderizado até você marcar de novo.")
+        dica(
+            desmarcar,
+            "Desmarca todos os Shorts que a lista mostra: nenhum deles será renderizado até você "
+            "marcar de novo (com um filtro ligado, só os que ele mostra).",
+        )
         ctk.CTkLabel(barra, text="Ordenar por:", text_color=_COR_SUAVE).pack(
             side="left", padx=(18, 6)
         )
@@ -526,6 +606,24 @@ class EditorDeCortes(ctk.CTkFrame):
             {
                 ORDEM_NOTA: "Os Shorts de maior nota ficam no topo da lista.",
                 ORDEM_HORARIO: "Os Shorts ficam na ordem em que aparecem no sermão.",
+            },
+        )
+        ctk.CTkLabel(barra, text="Mostrar:", text_color=_COR_SUAVE).pack(side="left", padx=(18, 6))
+        self._seletor_filtro = ctk.CTkSegmentedButton(
+            barra, values=list(FILTROS), command=lambda _v: self._trocar_filtro()
+        )
+        self._seletor_filtro.set(FILTRO_TODOS)
+        self._seletor_filtro.pack(side="left")
+        dica_do_seletor(
+            self._seletor_filtro,
+            {
+                FILTRO_TODOS: "Todos os Shorts do sermão.",
+                FILTRO_POSTADOS: "Só os Shorts que você já postou (com o dia e a hora em que "
+                "foram marcados).",
+                FILTRO_AGENDADOS: "Só os Shorts agendados: têm um horário marcado e ainda não "
+                "foram ao ar.",
+                FILTRO_SEM_POSTAR: "Só os Shorts que ainda não foram postados nem agendados: o "
+                "que falta publicar.",
             },
         )
         self._resumo = ctk.CTkLabel(corpo, text="", anchor="w", text_color=_COR_SUAVE)
@@ -1113,11 +1211,34 @@ class EditorDeCortes(ctk.CTkFrame):
         self._janela.grid(row=linha + 1, column=0, sticky="ew", padx=8, pady=(0, 2))
 
     # --- lista --------------------------------------------------------------------------------
-    def _ordem_desejada(self) -> list[int]:
-        indices = range(len(self._cortes))
+    def _ordenar(self, indices) -> list[int]:
+        """Os cortes `indices` na ordem escolhida (maior nota ou horário no sermão)."""
         if self._seletor_ordem.get() == ORDEM_HORARIO:
             return sorted(indices, key=lambda i: self._cortes[i].inicio)
         return sorted(indices, key=lambda i: (-self._cortes[i].nota, self._cortes[i].inicio))
+
+    def _ordem_desejada(self) -> list[int]:
+        """Os cortes que a lista mostra, na ordem escolhida: o filtro de publicação tira os outros
+        (o corte que acabou de mudar de situação fica até a lista ser refeita)."""
+        filtro = self._seletor_filtro.get()
+        visiveis = [
+            i for i, corte in enumerate(self._cortes)
+            if i == self._manter_visivel or passa_no_filtro(corte, filtro)
+        ]  # fmt: skip
+        return self._ordenar(visiveis)
+
+    def _posicao_na_lista(self, i: int | None) -> int | None:
+        """Em que posição da lista está o corte `i`; None se ela não o mostra (o filtro o tirou)."""
+        return self._ordem.index(i) if i in self._ordem else None
+
+    def _trocar_filtro(self) -> None:
+        """Mudou o filtro de publicação: a lista se refaz e, se o Short aberto saiu dela, abre o
+        primeiro que ela mostra (sem nenhum, a tela do detalhe fica como estava)."""
+        self._manter_visivel = None
+        self._reordenar()
+        if self._ordem and self._atual not in self._ordem:
+            self.selecionar(self._ordem[0])
+            self.after_idle(self._rolar_ate_o_atual, 0)
 
     def _reordenar(self) -> None:
         self._guardar_detalhe()
@@ -1129,14 +1250,20 @@ class EditorDeCortes(ctk.CTkFrame):
         self._cores_das_linhas.clear()
         for posicao, i in enumerate(self._ordem):
             self._linhas[i] = self._criar_linha(posicao, i)
+        if not self._ordem and self._cortes:
+            ctk.CTkLabel(
+                self._lista, text="Nenhum Short neste filtro.", text_color=_COR_SUAVE
+            ).grid(row=0, column=0, pady=24)
         self._atualizar_resumo()
         if self._atual is not None:
             self._pintar_atual()
-            self.after_idle(self._rolar_ate_o_atual, self._ordem.index(self._atual))
+            posicao = self._posicao_na_lista(self._atual)
+            if posicao is not None:
+                self.after_idle(self._rolar_ate_o_atual, posicao)
 
     def _reposicionar(self) -> None:
         """Põe a lista na ordem de agora sem recriar as linhas (só muda o lugar de cada uma)."""
-        nova = self._ordem_desejada()
+        nova = self._ordenar(self._ordem)
         if nova == self._ordem:
             return
         self._ordem = nova
@@ -1161,8 +1288,22 @@ class EditorDeCortes(ctk.CTkFrame):
                 text=formatar_nota(corte.nota),
                 fg_color=_COR_NOTA[faixa_da_nota(corte.nota)],
             )
+            self._pintar_selo(rotulos["selo"], corte)
             for nome in ("info", "titulo", "legenda"):
                 self._configurar(rotulos[nome], text=textos[nome])
+
+    def _pintar_selo(self, rotulo: ctk.CTkLabel, corte: Corte) -> None:
+        """O selo "✔ Postado 03/11 às 18:30" ou "📅 Agendado 07/11 às 19:00" da linha; some
+        (e não ocupa espaço) quando o Short não foi postado nem agendado."""
+        selo = selo_de_publicacao(corte, self._relogio())
+        if selo is None:
+            if rotulo.winfo_manager():
+                rotulo.grid_remove()
+            return
+        texto, cor = selo
+        self._configurar(rotulo, text=texto, fg_color=cor)
+        if not rotulo.winfo_manager():
+            rotulo.grid()
 
     def _textos_da_linha(self, corte: Corte) -> dict[str, str]:
         sufixo = " · reserva" if corte.reserva else ""
@@ -1170,9 +1311,6 @@ class EditorDeCortes(ctk.CTkFrame):
         sufixo += " · ✎ legenda" if corte.legenda else ""
         sufixo += " · ⚠ contexto" if corte.alerta_contexto else ""
         sufixo += f" · ⚠ mais de {DURACAO_MAXIMA_S:g} s" if passa_do_limite(corte) else ""
-        sufixo += " · ✔ postado" if corte.postado else ""
-        agendado = ler_horario(corte.agendado_para)
-        sufixo += f" · 📅 agendado {agendado:%d/%m %H:%M}" if agendado else ""
         situacao = _ROTULO_SITUACAO[self.situacao(corte)]
         trecho = trecho_da_legenda(self._palavras, corte)
         return {
@@ -1195,7 +1333,7 @@ class EditorDeCortes(ctk.CTkFrame):
         caixa_de_marcar = ctk.CTkCheckBox(
             linha, text="", width=24, variable=self._marcas[i], command=lambda: self._ao_marcar(i)
         )
-        caixa_de_marcar.grid(row=0, column=0, rowspan=4, padx=(8, 0), pady=6)
+        caixa_de_marcar.grid(row=0, column=0, rowspan=5, padx=(8, 0), pady=6)
         dica(caixa_de_marcar, "Marcado = este Short será renderizado; desmarcado fica de fora.")
         nota = ctk.CTkLabel(
             linha,
@@ -1207,7 +1345,7 @@ class EditorDeCortes(ctk.CTkFrame):
             fg_color=_COR_NOTA[faixa_da_nota(corte.nota)],
             font=ctk.CTkFont(weight="bold"),
         )
-        nota.grid(row=0, column=1, rowspan=4, padx=8, pady=6)
+        nota.grid(row=0, column=1, rowspan=5, padx=8, pady=6)
         dica(nota, "A nota de 0 a 100: o que a IA achou somado ao que se mede no texto.")
         chip = ctk.CTkLabel(
             linha, text=rotulo_da_categoria(corte.categoria), text_color="white",
@@ -1215,6 +1353,17 @@ class EditorDeCortes(ctk.CTkFrame):
             font=ctk.CTkFont(size=11, weight="bold"),
         )  # fmt: skip
         chip.grid(row=0, column=2, sticky="w", pady=(6, 0))
+        selo = ctk.CTkLabel(
+            linha, text="", text_color="white", corner_radius=6, height=20,
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )  # fmt: skip
+        selo.grid(row=1, column=2, sticky="w", pady=(3, 0))
+        self._pintar_selo(selo, corte)  # só aparece se o Short foi postado ou agendado
+        dica(
+            selo,
+            "Quando este Short foi postado (o dia e a hora em que você o marcou) ou para quando "
+            "está agendado.",
+        )
         info = ctk.CTkLabel(
             linha,
             anchor="w",
@@ -1223,7 +1372,7 @@ class EditorDeCortes(ctk.CTkFrame):
             text_color=_COR_SUAVE,
             text=textos["info"],
         )
-        info.grid(row=1, column=2, sticky="ew")
+        info.grid(row=2, column=2, sticky="ew")
         titulo = ctk.CTkLabel(
             linha,
             anchor="w",
@@ -1232,7 +1381,7 @@ class EditorDeCortes(ctk.CTkFrame):
             text=textos["titulo"],
             font=ctk.CTkFont(weight="bold"),
         )
-        titulo.grid(row=2, column=2, sticky="ew")
+        titulo.grid(row=3, column=2, sticky="ew")
         legenda = ctk.CTkLabel(
             linha,
             anchor="w",
@@ -1241,11 +1390,12 @@ class EditorDeCortes(ctk.CTkFrame):
             text_color=_COR_SUAVE,
             text=textos["legenda"],
         )
-        legenda.grid(row=3, column=2, sticky="ew", pady=(0, 6))
-        for widget in (linha, nota, chip, info, titulo, legenda):
+        legenda.grid(row=4, column=2, sticky="ew", pady=(0, 6))
+        for widget in (linha, nota, chip, selo, info, titulo, legenda):
             widget.bind("<Button-1>", lambda _e, i=i: self.selecionar(i))
         self._rotulos_da_linha[i] = {
-            "nota": nota, "chip": chip, "info": info, "titulo": titulo, "legenda": legenda,
+            "nota": nota, "chip": chip, "selo": selo, "info": info, "titulo": titulo,
+            "legenda": legenda,
         }  # fmt: skip
         return linha
 
@@ -1259,7 +1409,10 @@ class EditorDeCortes(ctk.CTkFrame):
         """Seleciona o corte seguinte (ou anterior) da lista, na ordem em que ela aparece."""
         if self._atual is None or not self._ordem:
             return
-        posicao = self._ordem.index(self._atual) + passo
+        posicao = self._posicao_na_lista(self._atual)
+        if posicao is None:  # o filtro tirou o aberto da lista: segue da ponta de onde se vai
+            posicao = -1 if passo > 0 else len(self._ordem)
+        posicao += passo
         if 0 <= posicao < len(self._ordem):
             self.selecionar(self._ordem[posicao])
             self._rolar_ate_o_atual(posicao)
@@ -1276,9 +1429,10 @@ class EditorDeCortes(ctk.CTkFrame):
             self._ao_marcar(self._atual)
 
     def marcar_todos(self, valor: bool) -> None:
-        for i, corte in enumerate(self._cortes):
+        """Marca ou desmarca os cortes que a lista mostra (todos, se não há filtro)."""
+        for i in self._ordem:
             self._marcas[i].set(valor)
-            corte.incluir = valor
+            self._cortes[i].incluir = valor
         self._houve_mudanca()
         self._atualizar_resumo()
 
@@ -1293,12 +1447,14 @@ class EditorDeCortes(ctk.CTkFrame):
         longos = sum(1 for c in self._cortes if c.incluir and passa_do_limite(c))
         if longos:
             texto += f" · ⚠ {longos} com mais de {DURACAO_MAXIMA_S:g} s"
-        postados = sum(1 for c in self._cortes if c.postado)
+        estados = [estado_de_publicacao(c) for c in self._cortes]
+        postados, agendados = estados.count(_POSTADO), estados.count(_AGENDADO)
         if postados:
             texto += f" · ✔ {postados} já postado{'s' if postados > 1 else ''}"
-        agendados = sum(1 for c in self._cortes if c.agendado_para)
         if agendados:
             texto += f" · 📅 {agendados} agendado{'s' if agendados > 1 else ''}"
+        if self._seletor_filtro.get() != FILTRO_TODOS:
+            texto += f" · mostrando {len(self._ordem)} de {len(self._cortes)}"
         self._resumo.configure(text=texto)
 
     def _pintar_atual(self) -> None:
@@ -1405,6 +1561,7 @@ class EditorDeCortes(ctk.CTkFrame):
             corte,
             tem_arquivo=self._existem.get(str(corte.id), False),
             alterado=self.situacao(corte) == SITUACAO_ALTERADO,
+            adiado=self._falta_mover(corte),
         )
         cor = _COR_OK if corte.postado else _COR_SUAVE
         if falhas:
@@ -1437,7 +1594,7 @@ class EditorDeCortes(ctk.CTkFrame):
             return
         corte = self._cortes[self._atual]
         corte.postado = bool(self._var_postado.get())
-        corte.postado_em = date.today().isoformat() if corte.postado else ""
+        corte.postado_em = guardar_horario(self._relogio()) if corte.postado else ""
         if corte.postado:
             corte.agendado_para = ""  # já foi ao ar: não está mais agendado
         falhas: list[str] = []
@@ -1449,10 +1606,11 @@ class EditorDeCortes(ctk.CTkFrame):
         except (OSError, ValueError, TypeError, KeyError):
             gravado = False
         if gravado:
-            falhas = aplicar_marcas_de_postado(self._pastas, [corte]).falhas
+            falhas = self._mover_arquivos([corte]).falhas
             self.recarregar_registro(reordenar=False)
         else:
             self._houve_mudanca()
+        self._manter_na_lista(corte)
         self._atualizar_linha(self._atual)
         self._atualizar_resumo()
         self._mostrar_postado(corte, falhas)
@@ -1484,7 +1642,11 @@ class EditorDeCortes(ctk.CTkFrame):
         para mover."""
         linhas = []
         if corte.agendado_para and self._existem.get(str(corte.id), False):
-            linhas.append(f"O arquivo está em {_PASTA_AGENDADOS}.")
+            linhas.append(
+                _TEXTO_ADIADO.format(pasta=_PASTA_AGENDADOS)
+                if self._falta_mover(corte)
+                else f"O arquivo está em {_PASTA_AGENDADOS}."
+            )
         redes = resumo_das_redes(self._resultados_das_redes(corte))
         if redes:
             linhas.append(redes)
@@ -1514,10 +1676,11 @@ class EditorDeCortes(ctk.CTkFrame):
             gravado = False
         falhas: list[str] = []
         if gravado:
-            falhas = aplicar_marcas_de_postado(self._pastas, [corte]).falhas
+            falhas = self._mover_arquivos([corte]).falhas
             self.recarregar_registro(reordenar=False)
         else:
             self._houve_mudanca()  # o corte ainda não está no arquivo: entra no próximo "Salvar"
+        self._manter_na_lista(corte)
         with contextlib.suppress(ValueError):
             self._atualizar_linha(self._cortes.index(corte))
         self._atualizar_resumo()
@@ -1581,15 +1744,17 @@ class EditorDeCortes(ctk.CTkFrame):
             self._mostrar_postado(corte)
 
     def _marcar_como_postado(self, corte: Corte) -> None:
-        """Marca o corte como já postado hoje (como a caixa), sem mexer na tela aberta."""
-        corte.postado, corte.postado_em, corte.agendado_para = True, date.today().isoformat(), ""
+        """Marca o corte como já postado agora (como a caixa), sem mexer na tela aberta."""
+        corte.postado, corte.agendado_para = True, ""
+        corte.postado_em = guardar_horario(self._relogio())
         with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
             gravar_campos_do_corte(
                 self._pastas.cortes_shorts, corte.id, postado=True,
                 postado_em=corte.postado_em, agendado_para="",
             )  # fmt: skip
-        aplicar_marcas_de_postado(self._pastas, [corte])
+        self._mover_arquivos([corte])
         self.recarregar_registro(reordenar=False)
+        self._manter_na_lista(corte)
         with contextlib.suppress(ValueError):
             self._atualizar_linha(self._cortes.index(corte))
         self._atualizar_resumo()
@@ -1610,7 +1775,7 @@ class EditorDeCortes(ctk.CTkFrame):
                     postado_em=corte.postado_em, agendado_para="",
                 )  # fmt: skip
         if venceram:
-            falhas = aplicar_marcas_de_postado(self._pastas, venceram).falhas
+            falhas = self._mover_arquivos(venceram).falhas
             self.recarregar_registro(reordenar=False)
             for i, corte in enumerate(self._cortes):
                 if corte in venceram:
@@ -2801,7 +2966,7 @@ class EditorDeCortes(ctk.CTkFrame):
             self._titulo_do_nome[corte.id] = corte.titulo
         gravar_cortes(self._pastas.cortes_shorts, self._cortes)
         self._mudou = False
-        arquivos = sincronizar_arquivos(self._pastas, self._cortes)  # nome, pasta e .txt
+        arquivos = self._sincronizar_arquivos()  # nome, pasta e .txt
         if arquivos.movidos:
             self.recarregar_registro(reordenar=False)
         for i in range(len(self._cortes)):
@@ -2810,6 +2975,65 @@ class EditorDeCortes(ctk.CTkFrame):
             self._mostrar_postado(self._cortes[self._atual], arquivos.falhas)
         self._atualizar_resumo()
         return True
+
+    # --- processamento rodando ----------------------------------------------------------------
+    # Durante um processamento (a renderização) o editor continua à mão. O que ele NÃO faz agora é
+    # mudar arquivos já renderizados de nome ou de pasta: o trabalhador guarda o registro deles na
+    # memória e o regrava a cada Short pronto (desfaria a mudança), e a conferência final lê os
+    # arquivos. A marca vale na hora no `cortes_shorts.json`; o arquivo muda de lugar no fim.
+    def definir_processamento(self, ativo: bool) -> None:
+        """Diz ao editor se há um processamento rodando. Ao terminar, leva os arquivos para as
+        pastas e os nomes que o que foi salvo pede e relê o que foi renderizado."""
+        if ativo == self._processando:
+            return
+        self._processando = ativo
+        if ativo or not self._cortes:
+            return
+        falhas: list[str] = []
+        if self._arquivos_adiados:
+            self._arquivos_adiados = False
+            with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
+                falhas = sincronizar_arquivos(
+                    self._pastas, carregar_cortes(self._pastas.cortes_shorts)
+                ).falhas  # o que está salvo, não o que está sendo digitado
+        self.recarregar_registro()
+        if self._atual is not None:
+            self._mostrar_postado(self._cortes[self._atual], falhas)
+            self._mostrar_agendamento(self._cortes[self._atual])
+
+    def _mover_arquivos(self, cortes: Sequence[Corte]) -> ResultadoDasMarcas:
+        """Leva os Shorts já renderizados para `postados/` ou `agendados/` (ou os traz de volta);
+        durante um processamento só anota que falta fazer."""
+        if self._processando:
+            self._arquivos_adiados = True
+            return ResultadoDasMarcas([], [])
+        return aplicar_marcas_de_postado(self._pastas, cortes)
+
+    def _sincronizar_arquivos(self) -> ResultadoDasMarcas:
+        """Nome, pasta e `.txt` dos Shorts renderizados conforme os cortes de agora (depois de
+        salvar); durante um processamento só anota que falta fazer."""
+        if self._processando:
+            self._arquivos_adiados = True
+            return ResultadoDasMarcas([], [])
+        return sincronizar_arquivos(self._pastas, self._cortes)
+
+    def _falta_mover(self, corte: Corte) -> bool:
+        """O arquivo renderizado do Short ainda não está na pasta que a situação dele pede (a
+        mudança está esperando o fim do processamento)."""
+        entrada = self._registro.get(str(corte.id))
+        if not self._processando or entrada is None or not self._existem.get(str(corte.id)):
+            return False
+        atual = Path(entrada["arquivo"]).parent.as_posix()
+        esperado = pasta_do_estado(corte)
+        if esperado:
+            return atual != esperado
+        return atual in (PASTA_DOS_POSTADOS, PASTA_DOS_AGENDADOS)
+
+    def _manter_na_lista(self, corte: Corte) -> None:
+        """A situação deste corte mudou por uma ação da pessoa: com um filtro ligado ele continua
+        na lista até ela ser refeita (senão a linha sumiria debaixo do mouse)."""
+        with contextlib.suppress(ValueError):
+            self._manter_visivel = self._cortes.index(corte)
 
     # --- bloqueio -----------------------------------------------------------------------------
     def bloquear(self, motivo: str | None) -> None:

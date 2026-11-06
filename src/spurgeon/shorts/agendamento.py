@@ -8,7 +8,7 @@ previsão que a pessoa marcou no Studio; o que cada rede de fato guardou fica em
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from spurgeon.shorts.dados import Corte
 
@@ -29,6 +29,32 @@ def ler_horario(texto: str) -> datetime | None:
 
 def guardar_horario(quando: datetime) -> str:
     return quando.astimezone().strftime(FORMATO_GUARDADO)
+
+
+def ler_postado_em(texto: str) -> tuple[date, time | None] | None:
+    """O `Corte.postado_em`: `AAAA-MM-DDTHH:MM` (o que se grava hoje) ou só `AAAA-MM-DD` (os
+    projetos de antes, que não guardavam a hora). None se vazio ou ilegível."""
+    if not texto:
+        return None
+    try:
+        quando = datetime.strptime(texto, FORMATO_GUARDADO)
+    except ValueError:
+        pass
+    else:
+        return quando.date(), quando.time()
+    try:
+        return date.fromisoformat(texto), None
+    except ValueError:
+        return None
+
+
+def rotulo_do_postado(texto: str) -> str:
+    """`05/11/2026 às 18:30` (só `05/11/2026` se a hora não foi guardada); "" se não se sabe."""
+    lido = ler_postado_em(texto)
+    if lido is None:
+        return ""
+    dia, hora = lido
+    return f"{dia:%d/%m/%Y}" + (f" às {hora:%H:%M}" if hora is not None else "")
 
 
 def ler_data(texto: str, *, hoje: date | None = None) -> date | None:
@@ -100,13 +126,13 @@ def venceu(corte: Corte, agora: datetime) -> bool:
 
 
 def aplicar_vencimento(corte: Corte, agora: datetime) -> bool:
-    """Passou a hora do agendamento: o Short vira "já postado" (na data marcada) e deixa de estar
-    agendado. Devolve True se mudou alguma coisa."""
+    """Passou a hora do agendamento: o Short vira "já postado" (na data e na hora marcadas) e deixa
+    de estar agendado. Devolve True se mudou alguma coisa."""
     if not venceu(corte, agora):
         return False
     quando = ler_horario(corte.agendado_para)
     assert quando is not None
     corte.postado = True
-    corte.postado_em = quando.date().isoformat()
+    corte.postado_em = guardar_horario(quando)
     corte.agendado_para = ""
     return True

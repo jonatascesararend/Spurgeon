@@ -67,6 +67,10 @@ def tela(janela, monkeypatch):
     janela.entrada.var_nome.set("")
     janela.entrada.var_data.set("")
     janela._pastas = None
+    janela._etapa_atual = None  # o que a execução anterior deixou não vale para este teste
+    janela._motivo_do_studio_antes = None
+    janela._var_fechar.set(False)  # fechar ao terminar nunca pode vazar para outro teste
+    janela._cancelar_fechamento()
     janela._abas.set(app_mod.ABA_PROCESSAMENTO)
     janela._trocar_aba(app_mod.ABA_PROCESSAMENTO)
     janela._atualizar_aba_studio(recarregar=True)

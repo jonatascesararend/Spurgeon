@@ -179,7 +179,8 @@ class Corte:
     #: 0 = não corta pausa nenhuma
     pausa_s: float = 0.0
     #: a pessoa já publicou este Short em alguma rede (para se organizar); o arquivo renderizado
-    #: vai para `shorts_gerados/postados/`. `postado_em` é a data (AAAA-MM-DD) em que foi ao ar
+    #: vai para `shorts_gerados/postados/`. `postado_em` é quando foi ao ar (`AAAA-MM-DDTHH:MM`;
+    #: os projetos de antes têm só a data, `AAAA-MM-DD`: `shorts/agendamento.ler_postado_em`)
     postado: bool = False
     postado_em: str = ""
     #: a previsão de quando o Short vai ao ar (`AAAA-MM-DDTHH:MM`, hora do computador; vazio = sem

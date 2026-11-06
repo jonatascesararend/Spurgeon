@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -104,13 +104,28 @@ def test_vencimento_so_depois_da_hora_marcada():
     assert ag.venceu(corte, depois)
     assert ag.aplicar_vencimento(corte, depois)
     assert corte.postado is True and corte.agendado_para == ""
-    assert corte.postado_em == (AGORA + timedelta(hours=1)).date().isoformat()  # a data marcada
+    assert corte.postado_em == ag.guardar_horario(
+        AGORA + timedelta(hours=1)
+    )  # o dia e a hora marcados
 
 
 def test_vencimento_de_dias_atras_usa_a_data_marcada_nao_a_de_hoje():
     corte = _corte("2026-10-20T09:00")
     assert ag.aplicar_vencimento(corte, AGORA)
-    assert corte.postado_em == "2026-10-20"
+    assert corte.postado_em == "2026-10-20T09:00"
+
+
+# --- o "postado em": dia e hora hoje, só o dia nos projetos de antes ----------------------------
+def test_postado_em_com_hora_e_sem_hora():
+    assert ag.ler_postado_em("2026-11-04T18:30") == (date(2026, 11, 4), time(18, 30))
+    assert ag.ler_postado_em("2026-11-02") == (date(2026, 11, 2), None)  # projeto antigo
+    assert ag.rotulo_do_postado("2026-11-04T18:30") == "04/11/2026 às 18:30"
+    assert ag.rotulo_do_postado("2026-11-02") == "02/11/2026"
+
+
+@pytest.mark.parametrize("texto", ["", "ontem", "2026-13-40", "2026-11-04T25:00"])
+def test_postado_em_ilegivel_nao_quebra(texto):
+    assert ag.ler_postado_em(texto) is None and ag.rotulo_do_postado(texto) == ""
 
 
 def test_sem_agendamento_ou_ilegivel_nao_vence_nunca():

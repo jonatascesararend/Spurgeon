@@ -442,7 +442,7 @@ Pedidos do autor depois da 1.0, todos feitos e testados.
 
 **Aba Studio Shorts** (`ui/studio_shorts.py` = `EditorDeCortes`, `ui/aba_studio.py`; a janela de aprovação dos cortes usa o mesmo editor).
 
-* A aba fica **desativada** até os cortes existirem (áudio normalizado, legenda extraída e Shorts calculados) e **travada** com o motivo enquanto um processamento roda ou espera revisão.
+* A aba fica **desativada** até os cortes existirem (áudio normalizado, legenda extraída e Shorts calculados) e **travada** com o motivo enquanto um processamento roda ou espera revisão. **Desde a 1.8.1 ela fica à mão nas etapas de renderização** (veja a rodada 1.8.1): só o botão Renderizar espera, e os arquivos já renderizados só mudam de pasta quando o processamento termina.
 * Cada Short sugerido aparece com **categoria, início–fim, duração, título, trecho da legenda, nota calculada** e o estado: *✔ renderizado*, *⟳ alterado: renderizar de novo* ou nada (novo). O botão **Renderizar N Shorts** grava as alterações e roda o modo "só Shorts" (sem pausas de revisão); o que já está pronto e não mudou não é refeito, os desmarcados vão para `shorts_gerados/desmarcados/` (nada é apagado) e a tela estima o tempo e avisa se o áudio precisar ser refeito.
 * **Início e fim:** campos de tempo editáveis (`8:21,3`, caem na palavra mais próxima) e botões para **acrescentar ou tirar uma palavra ou uma frase** em cada ponta. **Passar de 60 s é permitido**: a tela mostra a duração em vermelho com o aviso de que acima de 60 s o vídeo não pode ser Short, deixa salvar o trabalho em andamento, mas recusa renderizar (e a etapa de render também recusa, antes de começar) enquanto o corte marcado estiver longo; o mínimo continua sendo 10 s. Há **uma caixa só que rola**, com o corte inteiro (em destaque) e ~220 palavras antes e depois (cinza, o que fica de fora), uma frase por linha e as marcas "COMEÇA AQUI" e "TERMINA AQUI"; **duplo clique numa palavra** leva até ela o começo ou o fim, o que estiver mais perto. Os botões do começo (acima da caixa) e do fim (abaixo) seguem a mesma ordem: −palavra, −frase, +frase, +palavra. Avisos apontam o que costuma dar errado: começar no meio de uma frase ou com "mas/então/isso…", terminar no meio de uma frase ou numa pergunta (a resposta pode ter ficado de fora). Serve para não cortar uma pergunta retórica ao meio nem abrir com um pedaço de outro argumento.
 * **Legenda:** editável por Short (`Corte.legenda`), mostrada **dividida como vai aparecer no vídeo** (blocos de até 2 linhas separadas por Enter, com uma linha em branco entre os blocos: a mesma divisão da legenda queimada, em `render/legenda.py`); as quebras se refazem sozinhas ao sair do campo, sem mexer nas palavras. Os tempos da fala são preservados; "Desfazer correções" volta ao texto da transcrição. A correção entra na assinatura do Short quando a legenda é queimada (opção "Legendas dinâmicas"), então corrigir e renderizar de novo refaz só aquele Short. Mudar o início ou o fim descarta as correções daquele corte (o texto-base mudou) e a tela avisa.
@@ -1099,3 +1099,56 @@ desfaz o agendamento: o horário vale, o aviso aparece sob a linha e o arquivo �
 Upload-Post) seguindo o "Como conseguir as chaves" de cada cartão e rodar os seis testes de verdade do fim do
 [Integracoes.md](Integracoes.md): a trava do YouTube, o agendamento do YouTube, a visibilidade dos posts da Meta em modo
 Desenvolvimento, o limite diário do Instagram, o rascunho do TikTok e o Upload-Post.
+
+### Rodada 1.8.1 (2026-11-05): o Studio à mão durante a renderização, selos de postado/agendado com filtro e "fechar ao terminar"
+
+Pedido (com prints; o autor tinha dois processamentos rodando, cada um numa janela): (1) **não travar o Studio Shorts enquanto
+os vídeos renderizam**, "por mais que restrinja a velocidade"; (2) no Studio, uma **marca (flag)** nos Shorts já postados
+(com a data e a hora) e nos agendados, e **um filtro no alto** para isso; (3) um botão de ligar e desligar **"Fechar o
+programa ao terminar de renderizar"** ao lado do "Procurar atualizações ao abrir", para deixar o projeto rodando sem
+supervisão. Ainda sem subir o `__version__` (suba e rode `uv lock` ao publicar).
+
+78. **O Studio fica à mão nas etapas de renderização** (`ui/app.py`, `ui/aba_studio.py`, `ui/studio_shorts.py`). A janela
+    guarda a última etapa que começou (`_etapa_atual`, do evento `progresso`) e solta o Studio quando ela é uma de
+    `_ETAPAS_DE_RENDER` (`renderizar_video_longo`, `adicionar_vinhetas`, `renderizar_shorts`, `finalizar`): é a partir daí que
+    nada mais reescreve o `cortes_shorts.json` (só a `selecionar_shorts`, mais atrás). Antes disso o Studio continua travado,
+    com a mensagem de sempre; ao se soltar, o editor é **relido** do disco (os cortes podem ter mudado enquanto ele estava
+    escondido). Durante a renderização dá para ver, editar, salvar, marcar "já postado", agendar, postar nas redes e pedir
+    prévias (as prévias disputam a CPU com a renderização, que roda em prioridade abaixo do normal: é o custo que o autor
+    aceitou). Só o botão **Renderizar** espera (a barra de baixo explica; `_renderizar_do_studio` também recusa).
+79. **Os arquivos já renderizados não mudam de pasta nem de nome durante o processamento** (`EditorDeCortes._mover_arquivos`,
+    `_sincronizar_arquivos`, `definir_processamento`). **A causa:** o trabalhador guarda o `shorts_renderizados.json` na
+    memória e o regrava inteiro a cada Short pronto, o que desfaria um `aplicar_marcas_de_postado` feito pela tela; e a
+    conferência final lê os arquivos. Então, com um processamento rodando, "já postado", "agendado para" e o título novo
+    **gravam na hora no `cortes_shorts.json`** (como sempre), mas o arquivo só vai para `postados/`, `agendados/` ou ganha o
+    nome novo quando o processamento termina (`definir_processamento(False)` roda `sincronizar_arquivos` com o que está
+    SALVO, nunca com o que está sendo digitado). A tela avisa "O arquivo vai para … quando o processamento terminar". Se o
+    programa for fechado antes, a próxima carga do editor aplica as pastas dos marcados (`carregar` agora cobre também os
+    postados, não só os agendados). **O trabalhador também ficou tolerante:** a conferência final (`render/finalizar.py`)
+    acha o arquivo pelo registro (`render/shorts.arquivo_do_short_pronto`) e um Short criado ou marcado depois de a
+    renderização começar vira **aviso** ("ainda não foi renderizado"), não erro (antes, marcar um Short como postado no meio
+    da renderização faria a conferência procurar `postados/…` e reprovar a execução). Ao terminar, o editor só é refeito se
+    não houver alterações sem salvar (senão elas se perderiam: só relê o que foi renderizado).
+80. **Selo de postado e de agendado na lista e filtro** (`ui/studio_shorts.py`: `selo_de_publicacao`, `estado_de_publicacao`,
+    `passa_no_filtro`). Cada linha ganhou, sob a categoria, um selo verde **"✔ Postado 03/11 às 18:30"** ou azul **"📅
+    Agendado 07/11 às 19:00"** (o ano só aparece quando não é o de agora; sem selo a linha não ocupa espaço) e o texto cinza da
+    linha deixou de repetir isso. No alto, ao lado do "Ordenar por", o seletor **Mostrar: Todos | Postados | Agendados | Sem
+    postar** ("sem postar" = nem postado nem agendado). "Marcar todos" e "Desmarcar todos" valem para o que a lista mostra. A
+    linha de um Short cuja situação a pessoa acabou de mudar continua na lista até ela ser refeita (senão sumiria debaixo do
+    mouse); um Short criado no Shorts livre aparece mesmo com o filtro ligado.
+81. **`Corte.postado_em` passou a guardar o dia e a hora** (`AAAA-MM-DDTHH:MM`, hora do computador; `shorts/agendamento.py`:
+    `ler_postado_em`, `rotulo_do_postado`). Marcar "já postado" grava o instante de agora; quando a hora de um agendamento
+    passa, vale o horário que estava marcado (antes: só a data). Projetos antigos têm só `AAAA-MM-DD` e continuam valendo (o
+    selo mostra só o dia). O `.txt` diz "(marcado em 02/11/2026 às 18:30)".
+82. **"Fechar o programa ao terminar"** (`ui/app.py`, rodapé). Caixa ao lado do "Procurar atualizações ao abrir". Quando o
+    processamento **termina bem**, o programa registra "se fecha sozinho em 10 s", espera e se fecha (desmarcar nesse meio
+    tempo cancela). **Fica aberto** se der erro, se a pessoa cancelar, se o processamento parar para a revisão, se o Studio
+    tiver alterações não salvas, se houver postagens na fila do Spurgeon (o Instagram só publica com o programa aberto) ou
+    se já começou outro processamento; uma postagem que está saindo na hora é esperada. Nunca pergunta (sem ninguém
+    olhando, a pergunta só travaria). **Não é salva no `config.toml`:** vale para aquela vez e volta desmarcada ao abrir.
+
+**Escolhas feitas sem consulta nesta rodada (confirmar ou mudar):** (78) o Studio só se solta na renderização, não nas
+etapas de análise (a `selecionar_shorts` reescreve os cortes, e o que a pessoa editasse ali se perderia); (79) a mudança de
+pasta dos arquivos espera o fim do processamento em vez de acontecer na hora; (80) o filtro "Sem postar" não conta os
+agendados; (81) a hora de "já postado" é a de quando a caixa foi marcada; (82) a caixa não é lembrada entre aberturas e só
+fecha depois de um processamento concluído (um erro deixa a janela aberta para ser lido).

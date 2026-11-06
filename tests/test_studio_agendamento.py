@@ -122,6 +122,11 @@ def _texto_da_lista(editor, i: int, nome: str = "titulo") -> str:
     return editor._rotulos_da_linha[i][nome].cget("text")
 
 
+def _selo_aparece(editor, i: int) -> bool:
+    """O selo de postado/agendado da linha está na tela (some quando não há o que dizer)?"""
+    return bool(editor._rotulos_da_linha[i]["selo"].winfo_manager())
+
+
 # --- o título renomeia a lista, o arquivo e o .txt ---------------------------------------------
 def test_o_titulo_digitado_aparece_na_lista_na_hora(editor):
     i = editor._atual
@@ -233,7 +238,7 @@ def test_marcar_agendado_sugere_amanha_as_18_grava_na_hora_e_mostra_na_lista(edi
     linha._ao_marcar()
     assert corte.agendado_para == "2026-11-04T18:00"
     assert _no_arquivo(pastas, corte.id).agendado_para == "2026-11-04T18:00"
-    assert "📅 agendado 04/11 18:00" in _texto_da_lista(editor, editor._atual, "info")
+    assert _texto_da_lista(editor, editor._atual, "selo") == "📅 Agendado 04/11 às 18:00"
     assert "1 agendado" in editor._resumo.cget("text")
     assert not editor.mudou  # gravou só o campo: não deixou o editor "sujo"
 
@@ -249,7 +254,7 @@ def test_mudar_e_tirar_o_horario(editor, pastas):
     linha._var_marcado.set(False)
     linha._ao_marcar()
     assert corte.agendado_para == "" and _no_arquivo(pastas, corte.id).agendado_para == ""
-    assert "agendado" not in _texto_da_lista(editor, editor._atual, "info")
+    assert not _selo_aparece(editor, editor._atual)
 
 
 def test_o_agendamento_aparece_ao_abrir_outro_corte_e_ao_voltar(editor):
@@ -277,13 +282,15 @@ def test_passada_a_hora_o_short_vira_postado_e_o_arquivo_vai_para_a_subpasta(
     relogio.agora = AGORA + timedelta(days=1, hours=6, minutes=1)
     editor._conferir_agendamentos()
 
-    assert corte.postado and corte.agendado_para == "" and corte.postado_em == "2026-11-04"
+    assert corte.postado and corte.agendado_para == ""
+    assert corte.postado_em == "2026-11-04T18:00"  # o dia e a hora que estavam marcados
     gravado = _no_arquivo(pastas, corte.id)
-    assert gravado.postado and gravado.agendado_para == "" and gravado.postado_em == "2026-11-04"
+    assert gravado.postado and gravado.agendado_para == ""
+    assert gravado.postado_em == "2026-11-04T18:00"
     nome = ler_registro(pastas.shorts_renderizados)[str(corte.id)]["arquivo"]
     assert nome.startswith("postados/") and (pastas.shorts / nome).exists()
-    info = _texto_da_lista(editor, editor._atual, "info")
-    assert "✔ postado" in info and "agendado" not in info
+    assert _texto_da_lista(editor, editor._atual, "selo") == "✔ Postado 04/11 às 18:00"
+    assert "agendado" not in _texto_da_lista(editor, editor._atual, "selo").lower()
     assert "já postado" in editor._resumo.cget("text")
     assert editor._var_postado.get() is True
     assert editor._linha_agendamento.check.get() == 0
@@ -305,7 +312,7 @@ def test_agendamento_vencido_ja_vira_postado_ao_abrir_o_projeto(editor, pastas):
     gravar_cortes(pastas.cortes_shorts, cortes)
     editor.carregar()
     assert _no_arquivo(pastas, cortes[0].id).postado
-    assert _no_arquivo(pastas, cortes[0].id).postado_em == "2026-10-20"
+    assert _no_arquivo(pastas, cortes[0].id).postado_em == "2026-10-20T09:00"
     assert next(c for c in editor._cortes if c.id == cortes[0].id).postado
 
 
@@ -504,7 +511,8 @@ def test_publicado_agora_marca_como_ja_postado_e_move_o_arquivo(editor, pastas, 
     assert corte.postado and _no_arquivo(pastas, corte.id).postado
     nome = ler_registro(pastas.shorts_renderizados)[str(corte.id)]["arquivo"]
     assert nome.startswith("postados/") and (pastas.shorts / nome).exists()
-    assert "✔ postado" in _texto_da_lista(editor, editor._atual, "info")
+    assert _texto_da_lista(editor, editor._atual, "selo") == "✔ Postado 03/11 às 12:00"
+    assert corte.postado_em == "2026-11-03T12:00"  # agora, pelo relógio do editor
 
 
 def test_tiktok_assistido_ou_rascunho_nao_marcam_nada(editor, pastas, janela_falsa):

@@ -3,7 +3,8 @@
 A aba mostra os Shorts sugeridos (trecho da legenda, nota calculada e título) para a pessoa escolher
 o que será renderizado, ajustar o início e o fim e corrigir a legenda. Fica desativada até os cortes
 existirem (normalização do áudio, extração da legenda e cálculo dos Shorts) e fica travada enquanto
-um processamento está em andamento.
+um processamento ainda pode refazer os cortes. Durante a renderização ela continua à mão (`bloquear`
+só esconde o editor; `definir_processamento` só deixa o "Renderizar" esperando).
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._editor: EditorDeCortes | None = None
         self._livre: PainelShortsLivre | None = None
         self._motivo_bloqueio: str | None = None
+        self._processando = False  # há uma renderização rodando (a aba segue à mão)
+        self._aviso_do_processamento = ""
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -195,6 +198,7 @@ class AbaStudioShorts(ctk.CTkFrame):
             definir_ajustes=self._definir_ajustes,
             contexto_da_ia=self._contexto_da_ia if self._tarefas is not None else None,
             publicacao=self._publicacao,
+            processando=self._processando,
         )
         self._editor.grid(row=0, column=0, sticky="nsew")
         self._editor.bloquear(self._motivo_bloqueio)
@@ -243,6 +247,22 @@ class AbaStudioShorts(ctk.CTkFrame):
     def recarregar(self) -> None:
         """Relê os cortes e o que já foi renderizado (depois de um processamento)."""
         self.mostrar_projeto(self._pastas)
+
+    def definir_processamento(self, aviso: str | None) -> None:
+        """`aviso`: há uma renderização rodando e este é o texto da barra de baixo. A aba continua
+        à mão (ver, editar, salvar, marcar como postado, agendar, postar); só o “Renderizar”
+        espera, e o editor adia a mudança de pasta dos arquivos. `None`: não há processamento."""
+        ativo = aviso is not None
+        self._aviso_do_processamento = aviso or ""
+        if ativo != self._processando:
+            self._processando = ativo
+            if self._editor is not None:
+                self._editor.definir_processamento(ativo)
+        self._atualizar_botoes()
+
+    @property
+    def processando(self) -> bool:
+        return self._processando
 
     def bloquear(self, motivo: str | None) -> None:
         self._motivo_bloqueio = motivo
@@ -311,9 +331,15 @@ class AbaStudioShorts(ctk.CTkFrame):
             return
         pendentes = editor.pendentes()
         n = len(pendentes)
+        sufixo = "  ·  há alterações ainda não salvas" if editor.mudou else ""
+        if self._processando:  # uma renderização já está rodando: este botão volta quando acabar
+            self._botao_renderizar.configure(state="disabled", text="Renderizar")
+            self._estado.configure(
+                text=f"{self._aviso_do_processamento}  ·  {n} para renderizar depois{sufixo}"
+            )
+            return
         self._botao_renderizar.configure(
             state="normal",
             text=f"Renderizar {n} Short{'s' if n != 1 else ''}" if n else "Renderizar",
         )
-        sufixo = "  ·  há alterações ainda não salvas" if editor.mudou else ""
         self._estado.configure(text=f"{n} para renderizar{sufixo}")

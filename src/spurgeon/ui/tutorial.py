@@ -222,8 +222,9 @@ PASSOS: tuple[Passo, ...] = (
         "Lista de cortes: notas e categorias",
         "À esquerda ficam os Shorts sugeridos. Marque os que quer renderizar. Cada um tem uma "
         "nota de 0 a 100 (o que a IA achou somado ao que se mede no texto) e uma categoria, o "
-        "tipo de trecho, indicada por uma cor. Ordene por nota ou pelo horário no sermão e "
-        "clique num corte para ver os detalhes.",
+        "tipo de trecho, indicada por uma cor. Ordene por nota ou pelo horário no sermão, filtre "
+        "os já postados, os agendados ou os que faltam postar (o selo verde ou azul da linha diz "
+        "o dia e a hora) e clique num corte para ver os detalhes.",
         alvo="studio_lista",
         vista=VISTA_STUDIO,
     ),

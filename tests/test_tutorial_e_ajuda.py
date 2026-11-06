@@ -727,12 +727,15 @@ def test_o_rodape_tem_o_hardware_a_esquerda_e_os_controles_a_direita(tela):
     colunas = {
         "rotulo": int(tela._rodape.grid_info()["column"]),
         "atualizacao": int(tela._check_atualizacao.grid_info()["column"]),
+        "fechar": int(tela._check_fechar.grid_info()["column"]),
         "caixa": int(tela._check_tutorial.grid_info()["column"]),
         "botao": int(tela._botao_tutorial.grid_info()["column"]),
     }
-    assert colunas == {"rotulo": 0, "atualizacao": 1, "caixa": 2, "botao": 3}
+    assert colunas == {"rotulo": 0, "atualizacao": 1, "fechar": 2, "caixa": 3, "botao": 4}
     assert tela._check_atualizacao.cget("text") == "Procurar atualizações ao abrir"
     assert len(_dica_de(tela._check_atualizacao)) > 40
+    assert tela._check_fechar.cget("text") == "Fechar o programa ao terminar"
+    assert len(_dica_de(tela._check_fechar)) > 40
     assert "e" in tela._botao_tutorial.grid_info()["sticky"]
     assert tela._check_tutorial.cget("text") == "Mostrar o passo a passo ao abrir"
     assert tela._botao_tutorial.cget("text") == "Como usar"

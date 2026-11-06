@@ -737,7 +737,8 @@ def test_marcar_postado_grava_na_hora_move_o_arquivo_e_aparece_na_lista(editor, 
     assert editor.situacao(corte) == SITUACAO_PRONTO
     # a tela diz
     assert "postados" in editor._rotulo_postado.cget("text")
-    assert "✔ postado" in editor._rotulos_da_linha[0]["info"].cget("text")
+    selo = editor._rotulos_da_linha[0]["selo"]
+    assert selo.winfo_manager() and selo.cget("text").startswith("✔ Postado ")  # com dia e hora
     assert "1 já postado" in editor._resumo.cget("text")
 
 

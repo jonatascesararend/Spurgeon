@@ -284,6 +284,22 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   campos (na linha, `_ao_escolher_o_dia`/`_ao_escolher_a_hora` já marcam o agendamento e avisam uma vez só). A
   janelinha segura o foco e o devolve à janela de antes (a de postagem é modal). O texto digitado continua valendo
   (`shorts/agendamento.ler_data`/`ler_hora`).
+- Studio durante a renderização (`ui/app.py`): o Studio só fica travado enquanto a etapa atual (`_etapa_atual`, do evento
+  `progresso`) NÃO é uma de `_ETAPAS_DE_RENDER` (a `selecionar_shorts` é a única que reescreve o `cortes_shorts.json`); ao se
+  soltar, o editor é relido. Com um processamento rodando o `EditorDeCortes` está em `definir_processamento(True)`: "já
+  postado", "agendado para" e título gravam na hora no `cortes_shorts.json`, mas NADA move nem renomeia arquivo renderizado
+  (o trabalhador regrava o `shorts_renderizados.json` inteiro a cada Short): toda mudança de arquivo passa por
+  `_mover_arquivos`/`_sincronizar_arquivos`, que só anotam `_arquivos_adiados`, e `definir_processamento(False)` aplica o que
+  está SALVO. Código novo do editor que chame `aplicar_marcas_de_postado`/`sincronizar_arquivos` direto quebra isso. Quem
+  confere Shorts depois de renderizar (`render/finalizar.py`) acha o arquivo por `arquivo_do_short_pronto` (registro primeiro):
+  o caminho que o corte pede mudou sem o arquivo mudar. No fim, o editor só é refeito se não houver alteração sem salvar.
+- Lista do Studio: cada linha tem o selo "✔ Postado dd/mm às hh:mm" ou "📅 Agendado …" (`selo_de_publicacao`; `postado_em`
+  guarda `AAAA-MM-DDTHH:MM`, ou só o dia nos projetos antigos: leia por `shorts/agendamento.ler_postado_em`/`rotulo_do_postado`)
+  e o filtro "Mostrar" (`passa_no_filtro`) tira linhas de `_ordem`: nunca use `self._ordem.index(i)` sem conferir
+  (`_posicao_na_lista`), e `_manter_visivel` segura a linha do corte que a pessoa acabou de mudar até a lista ser refeita.
+- "Fechar o programa ao terminar" (`_var_fechar`, rodapé): NÃO vai para o `config.toml` (um programa que se fecha sozinho tem que
+  ser pedido a cada vez), só fecha depois de `concluido` e nunca pergunta: com erro, cancelamento, alteração não salva no Studio
+  ou fila de postagens, fica aberto. Teste que chame `_fechar_ao_terminar` tem que trocar `destroy` (a janela é compartilhada).
 - Título e arquivo: o nome do arquivo vem do `Corte.slug`. O Studio guarda o título que o nome tinha
   (`_titulo_do_nome`): se o título muda, `salvar()` zera o `slug` e ele é refeito a partir do título novo (título
   que a IA deu e a pessoa não mexeu mantém o nome curto da IA). `render/shorts.sincronizar_arquivos` renomeia em

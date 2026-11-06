@@ -126,6 +126,18 @@ _ESTADOS_OCUPADOS = (
     EstadoUI.PAUSANDO,
     EstadoUI.PAUSADO,
 )
+_ESTADOS_RODANDO = (EstadoUI.EXECUTANDO, EstadoUI.PAUSANDO, EstadoUI.PAUSADO)  # com o trabalhador
+#: as etapas que só renderizam: os cortes dos Shorts já estão decididos e nenhuma delas os reescreve
+#: (a `selecionar_shorts`, mais atrás, é quem escreve o `cortes_shorts.json`). Nelas o Studio Shorts
+#: fica à mão, mesmo que as prévias e a edição deixem a renderização um pouco mais lenta.
+_ETAPAS_DE_RENDER = frozenset(
+    {"renderizar_video_longo", "adicionar_vinhetas", "renderizar_shorts", "finalizar"}
+)
+_ESPERA_PARA_FECHAR_S = 10  # entre o fim do processamento e o fechamento do programa (a pedido)
+_AVISO_DA_RENDERIZACAO = (
+    "Renderização em andamento: o Studio segue à mão (editar, salvar, marcar como postado, "
+    "agendar). O “Renderizar” volta quando ela terminar."
+)
 
 
 class JanelaPrincipal(ctk.CTk):
@@ -174,6 +186,9 @@ class JanelaPrincipal(ctk.CTk):
         self._plataformas = criar_plataformas(self.cofre)
         self._fila_agendada: str | None = None
         self._fila_rodando = False
+        self._etapa_atual: str | None = None  # a última etapa que começou nesta execução
+        self._motivo_do_studio_antes: str | None = None  # por que o Studio estava travado antes
+        self._fechamento_agendado: str | None = None  # o `after` do "fechar ao terminar"
 
         self.title("Studio Spurgeon")
         self._ajustar_tamanho()
@@ -357,6 +372,28 @@ class JanelaPrincipal(ctk.CTk):
             "alto da janela, quando há uma versão nova. É a única coisa que o programa faz online "
             "sem você pedir; desmarcado, ele não consulta nada.",
         )
+        # NÃO vai para o config.toml: um programa que se fecha sozinho tem que ser pedido de novo a
+        # cada vez, senão um Short renderizado amanhã fecharia a janela de quem está olhando
+        self._var_fechar = ctk.BooleanVar(value=False)
+        self._check_fechar = ctk.CTkCheckBox(
+            self._faixa_do_rodape,
+            text="Fechar o programa ao terminar",
+            variable=self._var_fechar,
+            command=self._mudou_fechar_ao_terminar,
+            font=ctk.CTkFont(size=12),
+            checkbox_width=18,
+            checkbox_height=18,
+        )
+        self._check_fechar.grid(row=0, column=2, sticky="e", padx=(12, 0))
+        dicas.dica(
+            self._check_fechar,
+            "Para deixar o processamento rodando sem ninguém por perto: quando ele terminar "
+            f"bem, o programa espera {_ESPERA_PARA_FECHAR_S} segundos e se fecha sozinho. Fica "
+            "aberto se der erro, se você cancelar, se o Studio Shorts tiver alterações não "
+            "salvas ou se houver postagens na fila do Spurgeon (o Instagram só publica com o "
+            "programa aberto). Vale só para esta vez: ao abrir o programa de novo, volta "
+            "desmarcado.",
+        )
         self._var_tutorial = ctk.BooleanVar(value=self.config_app.tutorial_ao_abrir)
         self._check_tutorial = ctk.CTkCheckBox(
             self._faixa_do_rodape,
@@ -367,7 +404,7 @@ class JanelaPrincipal(ctk.CTk):
             checkbox_width=18,
             checkbox_height=18,
         )
-        self._check_tutorial.grid(row=0, column=2, sticky="e", padx=(12, 12))
+        self._check_tutorial.grid(row=0, column=3, sticky="e", padx=(12, 12))
         dicas.dica(
             self._check_tutorial,
             "Marcado: ao abrir, o programa pergunta se você quer ver o passo a passo. Desmarcado: "
@@ -380,7 +417,7 @@ class JanelaPrincipal(ctk.CTk):
             height=26,
             command=self.abrir_tutorial,
         )
-        self._botao_tutorial.grid(row=0, column=3, sticky="e")
+        self._botao_tutorial.grid(row=0, column=4, sticky="e")
         dicas.dica(
             self._botao_tutorial,
             "Abre agora o passo a passo que explica cada etapa, da escolha do vídeo até os "
@@ -390,6 +427,7 @@ class JanelaPrincipal(ctk.CTk):
     # --- ciclo principal ----------------------------------------------------------------------
     def destroy(self) -> None:
         self._encerrando = True  # callbacks pendentes não devem mexer em widgets já destruídos
+        self._cancelar_fechamento()
         tutorial = getattr(self, "tutorial", None)
         if tutorial is not None:
             tutorial.fechar()
@@ -743,6 +781,7 @@ class JanelaPrincipal(ctk.CTk):
         self._recebeu_fim = False
         self._estimador_iniciado = False
         self._revisao = None
+        self._etapa_atual = None  # o Studio só se solta quando uma etapa de renderização começa
         try:
             self.executor.iniciar(self._pastas.raiz, self._config_execucao, aprovar=aprovar)
         except (OSError, RuntimeError) as erro:
@@ -882,12 +921,22 @@ class JanelaPrincipal(ctk.CTk):
         self.integracoes.registrar(f"Fila de postagens: {erro}")
         self._reagendar_a_fila()
 
+    def _renderizando(self) -> bool:
+        """O trabalhador está numa etapa que só renderiza: os cortes já estão decididos."""
+        return self.execucao.estado in _ESTADOS_RODANDO and self._etapa_atual in _ETAPAS_DE_RENDER
+
+    def _aviso_da_renderizacao(self) -> str | None:
+        """O texto da barra do Studio enquanto há processamento (None se não há): é também o que
+        diz ao editor para deixar os arquivos onde estão até o fim."""
+        return _AVISO_DA_RENDERIZACAO if self.execucao.estado in _ESTADOS_OCUPADOS else None
+
     def _motivo_do_bloqueio(self) -> str | None:
         estado = self.execucao.estado
-        if estado in _ESTADOS_OCUPADOS:
+        if estado in _ESTADOS_OCUPADOS and not self._renderizando():
             return (
-                "O processamento está em andamento. O Studio Shorts volta a ficar disponível "
-                "quando ele terminar, for pausado e cancelado ou parar para a sua revisão."
+                "O processamento está em andamento. O Studio Shorts fica à mão quando ele chega "
+                "à renderização (os cortes já estão decididos) e também quando terminar, for "
+                "pausado e cancelado ou parar para a sua revisão."
             )
         if estado == EstadoUI.REVISAO:
             return (
@@ -906,10 +955,18 @@ class JanelaPrincipal(ctk.CTk):
             self._abas.set(ABA_PROCESSAMENTO)
             self._trocar_aba(ABA_PROCESSAMENTO)
         chave = (str(pastas.raiz), liberada) if pastas is not None else None
-        if recarregar or (chave != self._chave_do_studio and not self.studio.mudou):
+        motivo = self._motivo_do_bloqueio()
+        # saiu do bloqueio (chegou a renderização, a revisão fechou…): os cortes podem ter mudado
+        # no disco enquanto o editor estava escondido
+        liberou = self._motivo_do_studio_antes is not None and motivo is None
+        self._motivo_do_studio_antes = motivo
+        # antes de recarregar: se o processamento acabou, o editor velho leva os arquivos para as
+        # pastas certas; se começou, o novo já nasce sabendo que não pode mexer neles
+        self.studio.definir_processamento(self._aviso_da_renderizacao())
+        if recarregar or ((chave != self._chave_do_studio or liberou) and not self.studio.mudou):
             self.studio.mostrar_projeto(pastas if liberada else None)
             self._chave_do_studio = chave
-        self.studio.bloquear(self._motivo_do_bloqueio())
+        self.studio.bloquear(motivo)
 
     def _abrir_projeto(self, pasta: Path) -> None:
         """Reabre um projeto: preenche a tela com o que ele tem e libera o Studio Shorts."""
@@ -1338,6 +1395,14 @@ class JanelaPrincipal(ctk.CTk):
         """Renderiza os Shorts marcados que ainda não existem (ou mudaram), sem o resto."""
         if self._pastas is None or not self.studio.liberada or self.studio.editor is None:
             return
+        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
+            dialogos.aviso(
+                self,
+                "Renderizar os Shorts",
+                "Já há uma renderização em andamento. Quando ela terminar, o que você mudou "
+                "nos Shorts nesse meio tempo pode ser renderizado.",
+            )
+            return
         if not self.studio.salvar():
             return
         pendentes = self.studio.editor.pendentes()
@@ -1412,6 +1477,7 @@ class JanelaPrincipal(ctk.CTk):
             self._ao_processo_encerrado(ev)
 
     def _ao_progresso(self, ev: dict) -> None:
+        self._etapa_atual = ev["etapa"]
         self._total = ev["total"]
         if not self._estimador_iniciado:
             self.estimador.iniciar(fracao_inicial=self._total)
@@ -1480,7 +1546,11 @@ class JanelaPrincipal(ctk.CTk):
                 f"processamento.log da pasta do projeto.",
             )
         self._bloquear(False)
-        self._atualizar_aba_studio(recarregar=True)
+        # o Studio ficou à mão durante a renderização: com alterações não salvas ele não é refeito
+        # (só relê o que foi renderizado), senão elas se perderiam
+        self._atualizar_aba_studio(recarregar=not self.studio.mudou)
+        if resultado == "concluido":
+            self._fechar_se_pedido()
 
     def _ao_processo_encerrado(self, ev: dict) -> None:
         if self._recebeu_fim:
@@ -1525,6 +1595,69 @@ class JanelaPrincipal(ctk.CTk):
             self.executor.encerrar()
         self.fonte.limpar()
         self.destroy()
+
+    # --- fechar ao terminar -------------------------------------------------------------------
+    def _mudou_fechar_ao_terminar(self) -> None:
+        """A caixa "Fechar o programa ao terminar" (só vale para esta vez, não é salva). Desmarcar
+        durante a espera do fim cancela o fechamento."""
+        if self._var_fechar.get():
+            self.execucao.adicionar_log(
+                "O programa vai se fechar sozinho quando o processamento terminar bem."
+            )
+        else:
+            self._cancelar_fechamento()
+
+    def _cancelar_fechamento(self) -> None:
+        agendado = getattr(self, "_fechamento_agendado", None)
+        self._fechamento_agendado = None
+        if agendado is not None:
+            with contextlib.suppress(tkinter.TclError):
+                self.after_cancel(agendado)
+
+    def _fechar_se_pedido(self) -> None:
+        """O processamento terminou bem e a pessoa pediu para fechar: espera uns segundos (para
+        dar tempo de desistir ou de ler o registro) e fecha."""
+        if not self._var_fechar.get() or self._encerrando:
+            return
+        self.execucao.adicionar_log(
+            f"O programa se fecha sozinho em {_ESPERA_PARA_FECHAR_S} s, como pedido. Para "
+            "impedir, desmarque “Fechar o programa ao terminar”."
+        )
+        self._cancelar_fechamento()
+        self._fechamento_agendado = self.after(
+            _ESPERA_PARA_FECHAR_S * 1000, self._fechar_ao_terminar
+        )
+
+    def _fechar_ao_terminar(self) -> None:
+        self._fechamento_agendado = None
+        if self._encerrando or not self._var_fechar.get():
+            return  # a pessoa desmarcou nesse meio tempo
+        if self._fila_rodando:  # uma postagem está saindo agora: espera ela acabar
+            self._fechamento_agendado = self.after(5000, self._fechar_ao_terminar)
+            return
+        motivo = self._motivo_para_nao_fechar()
+        if motivo is not None:
+            self.execucao.adicionar_log(
+                f"O programa não se fechou sozinho: {motivo}", logging.WARNING
+            )
+            return
+        self.fonte.limpar()
+        self.destroy()
+
+    def _motivo_para_nao_fechar(self) -> str | None:
+        """Por que o fechamento a pedido não deve acontecer agora (None: pode fechar). Sem
+        ninguém olhando, perguntar não adianta: na dúvida o programa fica aberto."""
+        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
+            return "começou outro processamento."
+        if self.studio.mudou:
+            return "há alterações não salvas no Studio Shorts."
+        na_fila = len(projetos_com_fila(self.config_app.pastas.projetos))
+        if na_fila:
+            return (
+                f"há postagens na fila do Spurgeon em {na_fila} projeto{'s' if na_fila > 1 else ''}"
+                " (o Instagram só publica com o programa aberto)."
+            )
+        return None
 
 
 def _visivel_de(widget):

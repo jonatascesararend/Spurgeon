@@ -774,6 +774,27 @@ def test_conferencia_final_dos_shorts(ctx_shorts, caplog):
         rodar(Finalizar(), ctx_shorts)
 
 
+@pytest.mark.ffmpeg
+def test_conferencia_final_aguenta_o_studio_mexendo_nos_cortes_durante_a_renderizacao(
+    ctx_shorts, caplog
+):
+    """O Studio fica à mão enquanto renderiza: marcar um Short como postado (ou criar outro)
+    depois de a renderização começar troca o lugar que o corte pede, mas o arquivo ainda está
+    onde a renderização o pôs. A conferência olha o registro e não reprova a execução por isso."""
+    ctx_shorts.opcoes.gerar_video_longo = False
+    caminho = ctx_shorts.pastas.cortes_shorts
+    gravar_cortes(caminho, [corte(1, 0.0, 2.5)])
+    rodar(RenderizarShorts(), ctx_shorts)
+
+    feitos = [corte(1, 0.0, 2.5, postado=True, postado_em="2026-11-05T09:00"), corte(2, 5.0, 7.5)]
+    gravar_cortes(caminho, feitos)  # o Short 1 virou "postado" e o 2 é novo (ainda sem render)
+    assert planejar_shorts(feitos)[0].video.startswith("postados/")
+    with caplog.at_level("INFO"):
+        rodar(Finalizar(), ctx_shorts)
+    assert "ainda não foi renderizado" in caplog.text
+    assert "2 Shorts em shorts_gerados/" in caplog.text
+
+
 def test_a_conferencia_so_roda_se_algo_foi_gerado():
     assert Finalizar().ativa(OpcoesProcessamento(gerar_video_longo=True))
     assert Finalizar().ativa(OpcoesProcessamento(gerar_video_longo=False, gerar_shorts=True))

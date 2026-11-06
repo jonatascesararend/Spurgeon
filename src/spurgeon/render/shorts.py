@@ -12,7 +12,6 @@ import json
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -39,7 +38,7 @@ from spurgeon.render.marca import (
     trecho_do_filtro,
 )
 from spurgeon.render.video_longo import recortes_de_quadros
-from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario
+from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario, rotulo_do_postado
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
@@ -135,12 +134,9 @@ def texto_de_publicacao(corte: Corte) -> str:
 
 
 def _quando_foi_postado(corte: Corte) -> str:
-    """` (marcado em 02/11/2026)`, ou nada se a data não se sabe."""
-    try:
-        data = date.fromisoformat(corte.postado_em)
-    except ValueError:
-        return ""
-    return f" (marcado em {data:%d/%m/%Y})"
+    """` (marcado em 02/11/2026 às 18:30)`, ou nada se o dia não se sabe."""
+    quando = rotulo_do_postado(corte.postado_em)
+    return f" (marcado em {quando})" if quando else ""
 
 
 def linhas_do_video_cortado(
@@ -312,6 +308,21 @@ def ler_registro(caminho: Path) -> Registro:
         for k, v in dados.items()
         if isinstance(v, dict) and {"arquivo", "assinatura"} <= set(v)
     }
+
+
+def arquivo_do_short_pronto(
+    pastas: PastasProjeto, curto: ShortPlanejado, registro: Registro
+) -> Path | None:
+    """Onde está o `.mp4` deste Short: o que o registro diz (foi lá que a renderização o pôs) ou,
+    se ele não está lá, o lugar que o corte tem agora. None se nenhum dos dois existe.
+
+    Quem confere os Shorts DEPOIS de renderizar não pode confiar só no corte de agora: o Studio
+    Shorts continua à mão durante a renderização, e marcar um Short como postado, agendá-lo ou
+    mudar o título troca o lugar (ou o nome) que o corte pede, sem que o arquivo tenha se mexido.
+    """
+    entrada = registro.get(str(curto.corte.id))
+    candidatos = [curto.video] if entrada is None else [entrada["arquivo"], curto.video]
+    return next((c for c in (pastas.shorts / n for n in candidatos) if c.is_file()), None)
 
 
 SITUACAO_NOVO = "novo"  # nunca foi renderizado
