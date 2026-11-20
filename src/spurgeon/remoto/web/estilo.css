@@ -139,6 +139,17 @@ pre.log {
 .aviso-bloco { border-color: color-mix(in srgb, var(--aviso) 55%, transparent); color: var(--aviso); }
 .estado-audio { text-align: right; }
 
+/* corrigir a legenda na própria audição */
+.frase.corrigivel { cursor: pointer; border: 1px dashed color-mix(in srgb, var(--destaque) 45%, transparent); }
+.frase.editando { background: var(--cartao); border: 1px solid var(--destaque); padding: 10px; }
+.caixa-frase {
+  width: 100%; font: 19px/1.45 system-ui, sans-serif; color: var(--texto); background: var(--cartao-2);
+  border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; resize: vertical; margin-bottom: 4px;
+}
+.frase.editando .botao { margin: 6px 0 0; padding: 10px; }
+.nota-correcao { margin: 0 0 8px; }
+.nota-correcao .botao { margin: 6px 0 0; }
+
 /* editar (Fase R2) */
 .cartao.destaque { border-color: color-mix(in srgb, var(--aviso) 60%, transparent); }
 .cartao .botao { margin-bottom: 0; text-align: center; text-decoration: none; }

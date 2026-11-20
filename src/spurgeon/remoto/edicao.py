@@ -90,6 +90,41 @@ def corrigir_legenda(pastas: PastasProjeto, id_do_corte: int, texto: str) -> Cor
     return corte
 
 
+def corrigir_frase(
+    pastas: PastasProjeto, id_do_corte: int, indice: int, antes: str, texto: str
+) -> Corte:
+    """Troca só a frase `indice` da legenda (as frases como a audição as mostra), sem mexer nas
+    outras. `antes` é o texto que o celular via nela: se a legenda mudou desde então, recusa.
+
+    As frases saem do mesmo cálculo da audição (`legenda_do_short` → `agrupar_em_frases`), na
+    ordem das palavras da legenda (`palavras_com_a_legenda`, as visíveis do corte); a frase vira o
+    trecho dessas palavras, e o texto inteiro passa por `legenda_corrigida` como no Studio.
+    """
+    from spurgeon.remoto.audicao import legenda_do_short
+    from spurgeon.render.legenda import limpar_texto
+    from spurgeon.shorts.edicao import palavras_com_a_legenda
+
+    corte, palavras = _carregar(pastas, id_do_corte)
+    base = palavras_com_a_legenda(palavras, corte)
+    visiveis = [
+        k for k, p in enumerate(base)
+        if p.fim > corte.inicio and p.inicio < corte.fim and limpar_texto(p.texto)
+    ]  # fmt: skip
+    frases = legenda_do_short(palavras, corte).frases
+    if sum(len(f) for f in frases) != len(visiveis) or not 0 <= indice < len(frases):
+        raise LimiteInvalido("A legenda mudou desde que a tela abriu: abra o Short de novo.")
+    comeco = sum(len(f) for f in frases[:indice])
+    alvo = visiveis[comeco : comeco + len(frases[indice])]
+    vista = " ".join(p.texto for p in frases[indice])
+    if " ".join(antes.split()) != " ".join(vista.split()):
+        raise LimiteInvalido("A legenda mudou desde que a tela abriu: abra o Short de novo.")
+    textos = [p.texto for p in base]
+    novos = [*textos[: alvo[0]], *texto.split(), *textos[alvo[-1] + 1 :]]
+    corte.legenda = legenda_corrigida(palavras, corte, " ".join(novos))
+    _gravar(pastas, corte, "legenda")
+    return corte
+
+
 def _aplicar(pastas: PastasProjeto, antes: Corte, palavras: list[Palavra], novo: Corte) -> Corte:
     if novo.duracao < DURACAO_MINIMA_S:
         raise LimiteInvalido(f"O corte ficaria com menos de {DURACAO_MINIMA_S:g} segundos.")

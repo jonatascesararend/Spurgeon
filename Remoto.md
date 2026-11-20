@@ -39,6 +39,7 @@ O fluxo de ponta a ponta:
 | R15 | O vídeo de um projeto novo vem do **"Baixar" do YouTube Studio (720p)**, não do yt-dlp a 1080p | 2026-11-20 |
 | R16 | Para conferir a legenda basta **ouvir**: opção de montar **só o áudio** do Short, com a legenda acompanhando, sem renderizar o vídeo | 2026-11-20 |
 | R17 | A **aprovação dos cortes** também é feita pelo celular (S10) | 2026-11-20 |
+| R18 | Corrigir a legenda **na própria audição** (a legenda que acompanha o áudio), não numa caixa à parte | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -290,6 +291,16 @@ fotografadas com os projetos reais, sem gravar neles). Como ficou:
   ("abriu o projeto, o PC trava"); (b) cada mudança vai ao PC na hora (o "Enviar" é o botão "Salvar a legenda"; não há
   rascunho no celular); (c) o ajuste fino de ±0,1 s ficou de fora: as pontas caem sempre em fronteira de palavra, com o
   respiro de costume, como no Studio; (d) marca-texto, borracha e saltos não estão no celular.
+
+**Correção na audição (R18, 2026-11-20).** O "✎ Corrigir a legenda" da tela do Short não abre mais uma caixa à parte: liga o
+**modo correção** na própria legenda que acompanha o áudio. As frases ficam tracejadas, a palavra falada continua
+acendendo, e tocar numa frase a troca ali mesmo por uma caixa com "▶ Ouvir" (toca só aquela frase e para), "✓ Salvar" e
+"✕". Salvar manda só aquela frase (`POST …/legenda` com `frase`, `antes` e `texto`; `remoto/edicao.corrigir_frase`): o
+servidor refaz as frases pelo mesmo cálculo da audição, confere que a frase ainda é a que o celular via (senão 422, "a
+legenda mudou") e troca só aquelas palavras na legenda do corte (`legenda_corrigida`, como o Studio). O áudio não é
+refeito (a legenda não muda o som) e a posição continua. "Editar o texto inteiro de uma vez" mantém a caixa antiga para
+correções grandes. Achado: uma palavra **acrescentada antes da primeira** do corte ganha duração zero (é do
+`aplicar_edicao` do Studio, igual no PC).
 
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 

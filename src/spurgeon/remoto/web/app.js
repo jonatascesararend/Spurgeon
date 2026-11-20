@@ -401,15 +401,15 @@ function guardarModo(modo) {
   try { localStorage.setItem("modoDoShort", modo); } catch (_) { /* sem armazenamento: tudo bem */ }
 }
 
-/** Ouvir com a legenda: o PC monta só o áudio do Short; a palavra falada acende. */
-async function montarAudicao(area, base) {
+/** Ouvir com a legenda: o PC monta só o áudio do Short e a palavra falada acende. No modo correção
+ * (o "✎ Legenda"), tocar numa frase a abre ali mesmo para corrigir, com o áudio tocando ao lado. */
+async function montarAudicao(area, base, { aoMudar = async () => {}, aoTextoInteiro = () => {} } = {}) {
   encher(area, h("div", { class: "bloco" }, "Carregando a legenda…"));
-  const leg = await api(`${base}/legenda`);
-  const palavras = leg.frases.flat();
+  let leg = await api(`${base}/legenda`);
   if (!leg.fonte) {
     const aviso = h("div", { class: "bloco aviso-bloco" }, leg.aviso);
     encher(area, aviso);
-    return { limpar: () => {}, legenda: aviso };
+    return { legenda: aviso, limpar: () => {}, corrigir: () => {} };
   }
   const audio = h("audio", { src: `${base}/audio`, preload: "auto" });
   const estado = h("span", { class: "estado-audio" }, "Preparando o áudio no PC…");
@@ -420,56 +420,126 @@ async function montarAudicao(area, base) {
   let vel = 0;
   const velocidade = h("button", { class: "botao-pequeno", "aria-label": "Velocidade" }, "1×");
   const voltar = h("button", { class: "botao-pequeno", "aria-label": "Voltar 3 segundos" }, "↺ 3 s");
-
-  const spans = [];
-  const linhas = leg.frases.map((frase) => h("p", { class: "frase" }, ...frase.flatMap((p, k) => {
-    const span = h("span", { class: "palavra", onclick: () => { audio.currentTime = p.i; audio.play().catch(() => {}); } }, p.t);
-    spans.push(span);
-    return k ? [" ", span] : [span];
-  })));
-  // a frase de cada palavra (para acender a linha inteira)
-  let n = 0;
-  const fraseDe = [];
-  leg.frases.forEach((frase, i) => { for (let k = 0; k < frase.length; k++) fraseDe[n++] = i; });
-
   const barraDoAudio = h("div", { class: "audicao-barra" },
     h("div", { class: "audicao-linha" }, tocar, h("div", { class: "audicao-meio" }, barra, h("div", { class: "audicao-info" }, tempo, estado)), voltar, velocidade));
   const aviso = leg.aviso ? h("div", { class: "bloco aviso-bloco" }, leg.aviso) : null;
-  const legendaViva = h("div", { class: "legenda-viva" }, ...linhas);
-  encher(area, barraDoAudio, aviso || "", legendaViva, audio);
-  barraDoAudio.style.top = `${document.querySelector(".topo").offsetHeight}px`;
+  const avisoDaCorrecao = h("div", { class: "bloco nota-correcao" });
+  const legendaViva = h("div", { class: "legenda-viva" });
 
+  let palavras = [];
+  let spans = []; // alinhado com `palavras` (null nas palavras da frase em edição)
+  let fraseDe = [];
+  let linhas = [];
+  let corrigindo = false;
+  let editando = -1;
+  let ate = null; // "Ouvir a frase": para sozinho neste tempo
   let atual = -1;
-  let quadro = 0;
-  let arrastando = false;
-  const acender = () => {
+
+  const editorDaFrase = (k) => {
+    const frase = leg.frases[k];
+    const antes = frase.map((w) => w.t).join(" ");
+    const caixa = h("textarea", { class: "caixa-frase", rows: "3", spellcheck: "true", lang: "pt-BR", autocapitalize: "sentences" });
+    caixa.value = antes;
+    const salvar = h("button", { class: "botao", onclick: async () => {
+      salvar.disabled = true;
+      try {
+        const novo = await editar(`${base}/legenda`, { frase: k, antes, texto: caixa.value });
+        editando = -1;
+        leg = await api(`${base}/legenda`);
+        desenhar();
+        await aoMudar(novo);
+        avisar("Frase corrigida no PC.");
+      } catch (e) { avisar(e.message); salvar.disabled = false; }
+    } }, "✓ Salvar");
+    const ouvir = h("button", { class: "botao secundario", onclick: () => {
+      audio.currentTime = Math.max(0, frase[0].i - 0.25);
+      ate = frase[frase.length - 1].f + 0.35;
+      audio.play().catch(() => {});
+    } }, "▶ Ouvir");
+    const cancelar = h("button", { class: "botao secundario", "aria-label": "Cancelar", onclick: () => { editando = -1; desenhar(); } }, "✕");
+    setTimeout(() => caixa.focus(), 60);
+    return h("div", { class: "frase editando" }, caixa, h("div", { class: "linha-botoes" }, ouvir, salvar, cancelar));
+  };
+
+  const abrirFrase = (k) => {
+    if (editando === k) return;
+    editando = k;
+    desenhar();
+    const frase = leg.frases[k];
+    audio.pause();
+    audio.currentTime = Math.max(0, frase[0].i - 0.25);
+  };
+
+  function desenhar() {
+    palavras = leg.frases.flat();
+    spans = [];
+    fraseDe = [];
+    atual = -1;
+    leg.frases.forEach((frase, k) => { for (let j = 0; j < frase.length; j++) fraseDe.push(k); });
+    linhas = leg.frases.map((frase, k) => {
+      if (k === editando) {
+        for (let j = 0; j < frase.length; j++) spans.push(null);
+        return editorDaFrase(k);
+      }
+      const linha = h("p", { class: `frase${corrigindo ? " corrigivel" : ""}` }, ...frase.flatMap((w, j) => {
+        const span = h("span", { class: "palavra", onclick: (ev) => {
+          if (corrigindo) { ev.stopPropagation(); abrirFrase(k); return; }
+          ate = null;
+          audio.currentTime = w.i;
+          audio.play().catch(() => {});
+        } }, w.t);
+        spans.push(span);
+        return j ? [" ", span] : [span];
+      }));
+      if (corrigindo) linha.addEventListener("click", () => abrirFrase(k));
+      return linha;
+    });
+    encher(legendaViva, ...linhas);
+    encher(avisoDaCorrecao,
+      h("p", { class: "nota" }, "Toque numa frase para corrigi-la aqui mesmo; o áudio continua acendendo as palavras."),
+      h("button", { class: "botao secundario", onclick: aoTextoInteiro }, "Editar o texto inteiro de uma vez"));
+    avisoDaCorrecao.hidden = !corrigindo;
+    acender();
+  }
+
+  function acender() {
     const t = audio.currentTime;
-    if (!arrastando) barra.value = String(t);
+    if (ate !== null && t >= ate) { ate = null; audio.pause(); }
+    barra.value = String(t);
     tempo.textContent = `${minSeg(t)} / ${minSeg(leg.duracao)}`;
     // a última palavra que já começou (busca binária: as palavras estão em ordem)
     let lo = 0, hi = palavras.length - 1, achada = -1;
     while (lo <= hi) { const m = (lo + hi) >> 1; if (palavras[m].i <= t + 0.03) { achada = m; lo = m + 1; } else hi = m - 1; }
-    if (achada !== atual) {
-      if (atual >= 0) { spans[atual].classList.remove("atual"); linhas[fraseDe[atual]].classList.remove("atual"); }
-      if (achada >= 0) {
-        spans[achada].classList.add("atual");
-        const linha = linhas[fraseDe[achada]];
-        if (!linha.classList.contains("atual")) {
-          linha.classList.add("atual");
-          if (!legendaViva.hidden) linha.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
-      }
-      atual = achada;
+    if (achada === atual) return;
+    if (atual >= 0) {
+      if (spans[atual]) spans[atual].classList.remove("atual");
+      if (linhas[fraseDe[atual]]) linhas[fraseDe[atual]].classList.remove("atual");
     }
-  };
-  const laco = () => { acender(); if (!audio.paused) quadro = requestAnimationFrame(laco); };
+    if (achada >= 0) {
+      if (spans[achada]) spans[achada].classList.add("atual");
+      const linha = linhas[fraseDe[achada]];
+      if (linha && !linha.classList.contains("atual")) {
+        linha.classList.add("atual");
+        if (!legendaViva.hidden && editando < 0) linha.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
+    atual = achada;
+  }
+
+  encher(area, barraDoAudio, aviso, avisoDaCorrecao, legendaViva, audio);
+  barraDoAudio.style.top = `${document.querySelector(".topo").offsetHeight}px`;
+  desenhar();
+
+  let quadro = 0;
+  let arrastando = false;
+  const laco = () => { if (!arrastando) acender(); if (!audio.paused) quadro = requestAnimationFrame(laco); };
   audio.addEventListener("play", () => { tocar.textContent = "❚❚"; tocar.setAttribute("aria-label", "Pausar"); cancelAnimationFrame(quadro); laco(); });
   audio.addEventListener("pause", () => { tocar.textContent = "▶"; tocar.setAttribute("aria-label", "Tocar"); acender(); });
   audio.addEventListener("seeked", acender);
   audio.addEventListener("waiting", () => { estado.textContent = "Carregando…"; });
   audio.addEventListener("canplay", () => { estado.textContent = ""; });
   audio.addEventListener("error", () => { estado.textContent = "O PC não conseguiu montar o áudio."; });
-  tocar.addEventListener("click", () => (audio.paused ? audio.play().catch(() => {}) : audio.pause()));
+  tocar.addEventListener("click", () => { ate = null; if (audio.paused) audio.play().catch(() => {}); else audio.pause(); });
   voltar.addEventListener("click", () => { audio.currentTime = Math.max(0, audio.currentTime - 3); });
   velocidade.addEventListener("click", () => {
     vel = (vel + 1) % VELOCIDADES.length;
@@ -477,10 +547,11 @@ async function montarAudicao(area, base) {
     velocidade.textContent = `${String(VELOCIDADES[vel]).replace(".", ",")}×`;
   });
   barra.addEventListener("input", () => { arrastando = true; tempo.textContent = `${minSeg(+barra.value)} / ${minSeg(leg.duracao)}`; });
-  barra.addEventListener("change", () => { arrastando = false; audio.currentTime = +barra.value; });
+  barra.addEventListener("change", () => { arrastando = false; ate = null; audio.currentTime = +barra.value; });
   return {
     legenda: legendaViva,
     limpar: () => { cancelAnimationFrame(quadro); audio.pause(); audio.removeAttribute("src"); audio.load(); },
+    corrigir: (sim) => { if (corrigindo === sim) return; corrigindo = sim; editando = -1; desenhar(); },
   };
 }
 
@@ -629,7 +700,7 @@ async function telaShort(id, corte) {
   const voltarPara = voltarDoShort.startsWith(`#/p/${enc(id)}`) ? voltarDoShort : `#/p/${enc(id)}`;
   const base = `/api/projetos/${enc(id)}/shorts/${s.id}`;
   let modo = s.renderizado ? lerModo() : "ouvir";
-  let edicao = ""; // "", "legenda" ou "pontas"
+  let edicao = ""; // "", "legenda" (corrigir na audição), "texto" (o texto inteiro), "pontas" ou "postar"
   let audicao = null;
   const area = h("div");
   const painel = h("div");
@@ -645,7 +716,7 @@ async function telaShort(id, corte) {
   const pintarFerramentas = () => {
     ferramentas.hidden = modo !== "ouvir";
     encher(ferramentas, 
-      h("button", { class: `botao-ferramenta ${edicao === "legenda" ? "ativo" : ""}`, onclick: () => abrir(edicao === "legenda" ? "" : "legenda") }, "✎ Legenda"),
+      h("button", { class: `botao-ferramenta ${edicao === "legenda" || edicao === "texto" ? "ativo" : ""}`, onclick: () => abrir(edicao ? "" : "legenda") }, edicao === "legenda" || edicao === "texto" ? "✓ Pronto" : "✎ Corrigir a legenda"),
       h("button", { class: `botao-ferramenta ${edicao === "pontas" ? "ativo" : ""}`, onclick: () => abrir(edicao === "pontas" ? "" : "pontas") }, "⇤ Início e fim ⇥"),
       s.renderizado && s.situacao === "pronto"
         ? h("button", { class: `botao-ferramenta ${edicao === "postar" ? "ativo" : ""}`, onclick: () => abrir(edicao === "postar" ? "" : "postar") }, "📤 Postar")
@@ -677,9 +748,15 @@ async function telaShort(id, corte) {
   async function abrir(qual) {
     edicao = qual;
     pintarFerramentas();
-    if (audicao) audicao.legenda.hidden = Boolean(qual);
+    if (audicao) {
+      audicao.corrigir(qual === "legenda");
+      audicao.legenda.hidden = Boolean(qual) && qual !== "legenda";
+    }
     try {
-      if (qual === "legenda") await editorDaLegenda(painel, base, depoisDeMudar, fecharEditor);
+      if (qual === "legenda") encher(painel);
+      else if (qual === "texto") {
+        await editorDaLegenda(painel, base, async (novo) => { edicao = "legenda"; await depoisDeMudar(novo); }, () => abrir("legenda"));
+      }
       else if (qual === "pontas") await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
       else if (qual === "postar") await editorDaPostagem(painel, base, id, async () => { s = await pegar(); pintarCabecalho(); pintarInfo(); pintarFerramentas(); }, fecharEditor);
       else encher(painel);
@@ -701,7 +778,10 @@ async function telaShort(id, corte) {
       return;
     }
     try {
-      audicao = await montarAudicao(area, base);
+      audicao = await montarAudicao(area, base, {
+        aoMudar: async (novo) => { s = novo; pintarCabecalho(); pintarInfo(); },
+        aoTextoInteiro: () => abrir("texto"),
+      });
       limparTela = audicao.limpar;
     } catch (e) {
       encher(area, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));

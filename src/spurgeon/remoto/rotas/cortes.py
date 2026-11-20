@@ -107,10 +107,15 @@ def rotas(ctx: Contexto) -> list[Route]:
 
     async def legenda(request: Request) -> JSONResponse:
         corpo = await _corpo(request)
-        return await run_in_threadpool(
-            _mudar, request, corpo,
-            lambda p, c, d: edicao.corrigir_legenda(p, c, str(d["texto"])),
-        )  # fmt: skip
+
+        def fazer(p, c, d):
+            if "frase" in d:  # uma frase só, corrigida na própria legenda que acompanha o áudio
+                return edicao.corrigir_frase(
+                    p, c, int(d["frase"]), str(d["antes"]), str(d["texto"])
+                )
+            return edicao.corrigir_legenda(p, c, str(d["texto"]))
+
+        return await run_in_threadpool(_mudar, request, corpo, fazer)
 
     async def pontas(request: Request) -> JSONResponse:
         corpo = await _corpo(request)
