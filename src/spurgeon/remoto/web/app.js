@@ -1,10 +1,12 @@
-// App do celular do Studio Spurgeon (Remoto.md, Fase R1: só ver).
+// App do celular do Studio Spurgeon (Remoto.md: Fase R1 "só ver" e Fase R2 "editar").
 // Sem framework nem build: o PC serve estes arquivos como estão.
 
 const $ = (id) => document.getElementById(id);
 const tela = $("tela");
 let atualizador = null; // o setInterval da tela atual
 let sistema = null; // o último /api/sistema
+let limparTela = null; // o que a tela atual precisa desligar ao sair (áudio tocando)
+let voltarDoShort = ""; // de onde se abriu o Short (o projeto ou a aprovação dos cortes)
 
 // --- utilidades -----------------------------------------------------------------------------
 
@@ -27,7 +29,7 @@ function h(tag, atributos = {}, ...filhos) {
 function avisar(texto) {
   const t = h("div", { class: "toast", role: "status" }, texto);
   document.body.append(t);
-  setTimeout(() => t.remove(), 3200);
+  setTimeout(() => t.remove(), 3600);
 }
 
 class ErroDaApi extends Error {
@@ -86,6 +88,8 @@ function duracao(s) {
   const m = Math.floor(s / 60), r = s % 60;
   return m ? `${m} min${r ? ` ${String(r).padStart(2, "0")} s` : ""}` : `${r} s`;
 }
+const minSeg = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
 function classeDaSituacao(texto) {
   if (/erro/i.test(texto)) return "erro";
@@ -115,9 +119,60 @@ function mostrarErro(e) {
     h("button", { class: "botao secundario", onclick: rotear }, "Tentar de novo")));
 }
 
+/** Uma folha de escolhas na parte de baixo da tela; resolve com o valor escolhido (ou null). */
+function escolher(titulo, opcoes) {
+  return new Promise((resolver) => {
+    const fundo = h("div", { class: "fundo" });
+    const fechar = (valor) => { fundo.remove(); folha.remove(); resolver(valor); };
+    const folha = h("div", { class: "folha" }, h("h2", {}, titulo),
+      ...opcoes.map(([valor, rotulo, classe]) => h("button", { class: `botao ${classe || "secundario"}`, onclick: () => fechar(valor) }, rotulo)),
+      h("button", { class: "botao fechar", onclick: () => fechar(null) }, "Cancelar"));
+    fundo.addEventListener("click", () => fechar(null));
+    document.body.append(fundo, folha);
+  });
+}
+
+// --- a trava do projeto: o celular abriu, o PC salva e trava (Remoto.md, R8) ---------------
+
+let sessao = { projeto: "", timer: null };
+
+async function tomarATrava(id) {
+  return post(`/api/projetos/${enc(id)}/sessao`);
+}
+
+async function entrarNoProjeto(id) {
+  if (sessao.projeto === id) return;
+  sairDoProjeto();
+  sessao.projeto = id;
+  const r = await tomarATrava(id).catch(() => null);
+  if (r && r.pc === "salvou") avisar("O PC salvou o que estava aberto no Studio e travou a edição lá.");
+  if (r && r.pc === "sem_resposta") avisar("A janela do PC não respondeu: confira se o Studio de lá não tinha mudanças abertas.");
+  sessao.timer = setInterval(() => { if (!document.hidden && sessao.projeto) tomarATrava(sessao.projeto).catch(() => {}); }, 30000);
+}
+
+function sairDoProjeto() {
+  if (sessao.timer) clearInterval(sessao.timer);
+  if (sessao.projeto) post(`/api/projetos/${enc(sessao.projeto)}/sessao/soltar`).catch(() => {});
+  sessao = { projeto: "", timer: null };
+}
+
+/** Uma mudança no projeto: se a trava venceu (app em segundo plano), toma de novo e repete. */
+async function editar(caminho, corpo) {
+  try {
+    return await post(caminho, corpo);
+  } catch (e) {
+    if (e.status === 409 && e.message === "sem_trava" && sessao.projeto) {
+      await tomarATrava(sessao.projeto);
+      return post(caminho, corpo);
+    }
+    throw e;
+  }
+}
+
 // --- telas ----------------------------------------------------------------------------------
 
 async function telaProjetos() {
+  sairDoProjeto();
   cabecalho("Studio Spurgeon", "Projetos no PC");
   const desenhar = async () => {
     const lista = await api("/api/projetos");
@@ -152,23 +207,86 @@ function desenharAndamento(caixa, a) {
   caixa.replaceChildren(h("div", { class: "cartao" }, ...etapas, log));
 }
 
-function linhaDoShort(idProjeto, s) {
+function chipsDoShort(s) {
   const chips = [h("span", { class: "chip" }, h("span", { class: "cor", style: `background:${s.categoria.cor}` }), s.categoria.rotulo),
     h("span", { class: "chip" }, duracao(s.duracao))];
   if (s.postado) chips.push(h("span", { class: "chip ok" }, `✔ Postado ${s.postado_rotulo}`.trim()));
   else if (s.agendado_rotulo) chips.push(h("span", { class: "chip azul" }, `📅 ${s.agendado_rotulo}`));
-  if (s.renderizado) chips.push(h("span", { class: "chip ok" }, "▶ Renderizado"));
+  if (s.situacao === "alterado") chips.push(h("span", { class: "chip aviso" }, "✎ Mudou: renderizar de novo"));
+  else if (s.renderizado) chips.push(h("span", { class: "chip ok" }, "▶ Renderizado"));
+  else if (s.incluir) chips.push(h("span", { class: "chip" }, "Não renderizado"));
+  if (s.reserva && !s.incluir) chips.push(h("span", { class: "chip" }, "Reserva"));
   if (s.origem === "manual") chips.push(h("span", { class: "chip" }, "Shorts livre"));
+  return h("div", { class: "chips" }, ...chips);
+}
+
+function linhaDoShort(idProjeto, s) {
   return h("a", { class: `cartao short ${s.incluir ? "" : "desmarcado"}`, href: `#/p/${enc(idProjeto)}/s/${s.id}` },
     h("span", { class: `num ${s.numero ? "" : "fora"}` }, s.numero ?? "–"),
-    h("div", { class: "corpo" }, h("div", { class: "nome" }, s.titulo), h("div", { class: "chips" }, ...chips)),
+    h("div", { class: "corpo" }, h("div", { class: "nome" }, s.titulo), chipsDoShort(s)),
   );
 }
 
 let filtroDosShorts = "marcados";
 
+/** O que dá para fazer no projeto agora: aprovar a revisão, acompanhar o processamento, renderizar. */
+function acoesDoProjeto(id, a, atualizar) {
+  const itens = [];
+  const fila = a.fila && a.fila.rodando ? a.fila : null;
+  const revisao = a.etapas.find((e) => e.status === "aguardando_revisao");
+  if (revisao && !fila) {
+    if (revisao.id === "aprovar_cortes") {
+      itens.push(h("div", { class: "cartao destaque" },
+        h("div", { class: "nome" }, "✋ Os cortes esperam a sua aprovação"),
+        h("div", { class: "meta" }, "Marque os que viram Shorts e aprove: o PC segue o processamento."),
+        h("a", { class: "botao", href: `#/p/${enc(id)}/aprovar` }, "Revisar e aprovar os cortes")));
+    } else {
+      itens.push(h("div", { class: "cartao destaque" },
+        h("div", { class: "nome" }, `✋ ${revisao.nome}: esperando a sua revisão`),
+        h("div", { class: "meta" }, "Pelo celular dá para aprovar como está; para corrigir, use o PC."),
+        h("button", { class: "botao", onclick: async (ev) => {
+          if (!confirm("Aprovar sem mexer e continuar o processamento no PC?")) return;
+          ev.currentTarget.disabled = true;
+          try { await post(`/api/projetos/${enc(id)}/aprovar`, { etapa: revisao.id }); avisar("Aprovado: o PC continua."); await atualizar(); }
+          catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+        } }, "Aprovar e continuar")));
+    }
+  }
+  if (fila) {
+    const etapa = a.etapas.find((e) => e.id === fila.etapa);
+    itens.push(h("div", { class: "cartao" },
+      h("div", { class: "nome" }, fila.pausado ? "⏸ Em pausa (pedida pelo celular)" : "◐ Processando (pedido pelo celular)"),
+      h("div", { class: "meta" }, `${etapa ? etapa.nome : "Preparando…"} · ${Math.round(fila.fracao * 100)}% do total`),
+      h("div", { class: "linha-botoes" },
+        h("button", { class: "botao secundario", onclick: async () => {
+          try { await post(`/api/processamento/${fila.pausado ? "retomar" : "pausar"}`); avisar(fila.pausado ? "Retomada pedida." : "Pausa pedida: vale no próximo ponto seguro."); await atualizar(); }
+          catch (e) { avisar(e.message); }
+        } }, fila.pausado ? "Retomar" : "Pausar"),
+        h("button", { class: "botao perigo", onclick: async () => {
+          if (!confirm("Cancelar o processamento? O projeto fica salvo e pode ser retomado.")) return;
+          try { await post("/api/processamento/cancelar"); avisar("Cancelamento pedido."); await atualizar(); }
+          catch (e) { avisar(e.message); }
+        } }, "Cancelar"))));
+  } else if (a.fila && a.fila.ultimo_resultado === "erro") {
+    itens.push(h("div", { class: "cartao aviso-bloco" }, `O último processamento parou com erro: ${a.fila.ultimo_erro || "veja o log"}.`));
+  }
+  if (!fila && !a.em_andamento && !revisao && a.a_renderizar > 0) {
+    itens.push(h("button", { class: "botao", onclick: async (ev) => {
+      const n = a.a_renderizar;
+      if (!confirm(`Renderizar ${plural(n, "Short", "Shorts")} no PC (os marcados que são novos ou mudaram)? O celular avisa quando terminar.`)) return;
+      ev.currentTarget.disabled = true;
+      try { await post(`/api/projetos/${enc(id)}/renderizar`); avisar("Renderização iniciada no PC."); await atualizar(); }
+      catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+    } }, `▶ Renderizar ${plural(a.a_renderizar, "Short", "Shorts")}`));
+  }
+  return itens;
+}
+
 async function telaProjeto(id) {
+  await entrarNoProjeto(id);
+  voltarDoShort = `#/p/${enc(id)}`;
   const caixaAndamento = h("div");
+  const caixaAcoes = h("div");
   const caixaShorts = h("div");
   const projeto = await api(`/api/projetos/${enc(id)}`);
   cabecalho(projeto.nome, dataBr(projeto.data), "");
@@ -180,8 +298,10 @@ async function telaProjeto(id) {
   desenharAndamento(caixaAndamento, projeto.andamento);
 
   const segmentos = h("div", { class: "segmentos" });
+  const titulo = h("h2");
   let shorts = [];
   const pintarShorts = () => {
+    titulo.textContent = `Shorts (${shorts.filter((s) => s.incluir).length} marcados)`;
     segmentos.replaceChildren(...[["marcados", "Marcados"], ["renderizados", "Renderizados"], ["todos", "Todos"]].map(([k, r]) =>
       h("button", { class: filtroDosShorts === k ? "ativo" : "", onclick: () => { filtroDosShorts = k; pintarShorts(); } }, r)));
     const visiveis = shorts.filter((s) => filtroDosShorts === "todos" || (filtroDosShorts === "renderizados" ? s.renderizado : s.incluir));
@@ -194,16 +314,62 @@ async function telaProjeto(id) {
 
   const etapasAbertas = projeto.andamento.em_andamento || projeto.andamento.esperando_revisao;
   const blocoEtapas = h("details", { open: etapasAbertas || null }, h("summary", {}, "Etapas do processamento"), caixaAndamento);
-  tela.replaceChildren(situacao, blocoEtapas, h("h2", {}, `Shorts (${shorts.filter((s) => s.incluir).length} marcados)`), segmentos, caixaShorts);
+  tela.replaceChildren(situacao, caixaAcoes, blocoEtapas, titulo, segmentos, caixaShorts);
 
   let andava = projeto.andamento.em_andamento;
-  repetir(async () => {
+  const atualizar = async () => {
     const a = await api(`/api/projetos/${enc(id)}/andamento`);
     pintarSituacao(a);
     desenharAndamento(caixaAndamento, a);
+    caixaAcoes.replaceChildren(...acoesDoProjeto(id, a, atualizar));
     if (andava || a.em_andamento) { shorts = await api(`/api/projetos/${enc(id)}/shorts`); pintarShorts(); }
     andava = a.em_andamento;
-  }, projeto.andamento.em_andamento ? 4000 : 15000);
+  };
+  await atualizar();
+  repetir(atualizar, 5000);
+}
+
+async function telaAprovar(id) {
+  await entrarNoProjeto(id);
+  voltarDoShort = `#/p/${enc(id)}/aprovar`;
+  const projeto = await api(`/api/projetos/${enc(id)}`);
+  cabecalho("Aprovar os cortes", projeto.nome, `#/p/${enc(id)}`);
+  let shorts = await api(`/api/projetos/${enc(id)}/shorts`);
+  const lista = h("div");
+  const aprovar = h("button", { class: "botao" });
+  const pintar = () => {
+    const marcados = shorts.filter((s) => s.incluir).length;
+    aprovar.textContent = `Aprovar e continuar (${plural(marcados, "marcado", "marcados")})`;
+    aprovar.disabled = marcados === 0;
+    lista.replaceChildren(...shorts.map((s) => {
+      const caixa = h("button", { class: `marcador ${s.incluir ? "ligado" : ""}`, "aria-label": s.incluir ? "Desmarcar" : "Marcar", "aria-pressed": String(s.incluir),
+        onclick: async (ev) => {
+          ev.currentTarget.disabled = true;
+          try {
+            const novo = await editar(`/api/projetos/${enc(id)}/shorts/${s.id}/marcar`, { incluir: !s.incluir });
+            shorts = shorts.map((x) => (x.id === s.id ? novo : x));
+            shorts = await api(`/api/projetos/${enc(id)}/shorts`); // os números mudam com a marcação
+            pintar();
+          } catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+        } }, s.incluir ? "✓" : "");
+      return h("div", { class: `cartao short ${s.incluir ? "" : "desmarcado"}` }, caixa,
+        h("a", { class: "corpo", href: `#/p/${enc(id)}/s/${s.id}` },
+          h("div", { class: "nome" }, s.titulo), h("div", { class: "meta" }, `Nota ${Math.round(s.nota)}`), chipsDoShort(s)));
+    }));
+  };
+  aprovar.addEventListener("click", async () => {
+    if (!confirm("Aprovar os cortes marcados e continuar o processamento no PC?")) return;
+    aprovar.disabled = true;
+    try {
+      await post(`/api/projetos/${enc(id)}/aprovar`, { etapa: "aprovar_cortes" });
+      avisar("Aprovado: o PC continua o processamento.");
+      location.hash = `#/p/${enc(id)}`;
+    } catch (e) { avisar(e.message); aprovar.disabled = false; }
+  });
+  pintar();
+  tela.replaceChildren(
+    h("p", { class: "nota" }, "Toque no quadrado para marcar ou desmarcar; toque no título para ouvir e editar o corte."),
+    lista, h("div", { class: "barra-fixa" }, aprovar));
 }
 
 function lerModo() {
@@ -212,16 +378,16 @@ function lerModo() {
 function guardarModo(modo) {
   try { localStorage.setItem("modoDoShort", modo); } catch (_) { /* sem armazenamento: tudo bem */ }
 }
-const minSeg = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-/** Ouvir com a legenda: o PC monta só o áudio do Short; a palavra falada acende. Devolve a limpeza. */
+/** Ouvir com a legenda: o PC monta só o áudio do Short; a palavra falada acende. */
 async function montarAudicao(area, base) {
   area.replaceChildren(h("div", { class: "bloco" }, "Carregando a legenda…"));
   const leg = await api(`${base}/legenda`);
   const palavras = leg.frases.flat();
   if (!leg.fonte) {
-    area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, leg.aviso));
-    return () => {};
+    const aviso = h("div", { class: "bloco aviso-bloco" }, leg.aviso);
+    area.replaceChildren(aviso);
+    return { limpar: () => {}, legenda: aviso };
   }
   const audio = h("audio", { src: `${base}/audio`, preload: "auto" });
   const estado = h("span", { class: "estado-audio" }, "Preparando o áudio no PC…");
@@ -247,7 +413,8 @@ async function montarAudicao(area, base) {
   const barraDoAudio = h("div", { class: "audicao-barra" },
     h("div", { class: "audicao-linha" }, tocar, h("div", { class: "audicao-meio" }, barra, h("div", { class: "audicao-info" }, tempo, estado)), voltar, velocidade));
   const aviso = leg.aviso ? h("div", { class: "bloco aviso-bloco" }, leg.aviso) : null;
-  area.replaceChildren(barraDoAudio, aviso || "", h("div", { class: "legenda-viva" }, ...linhas), audio);
+  const legendaViva = h("div", { class: "legenda-viva" }, ...linhas);
+  area.replaceChildren(barraDoAudio, aviso || "", legendaViva, audio);
   barraDoAudio.style.top = `${document.querySelector(".topo").offsetHeight}px`;
 
   let atual = -1;
@@ -267,7 +434,7 @@ async function montarAudicao(area, base) {
         const linha = linhas[fraseDe[achada]];
         if (!linha.classList.contains("atual")) {
           linha.classList.add("atual");
-          linha.scrollIntoView({ block: "center", behavior: "smooth" });
+          if (!legendaViva.hidden) linha.scrollIntoView({ block: "center", behavior: "smooth" });
         }
       }
       atual = achada;
@@ -289,47 +456,156 @@ async function montarAudicao(area, base) {
   });
   barra.addEventListener("input", () => { arrastando = true; tempo.textContent = `${minSeg(+barra.value)} / ${minSeg(leg.duracao)}`; });
   barra.addEventListener("change", () => { arrastando = false; audio.currentTime = +barra.value; });
-  return () => { cancelAnimationFrame(quadro); audio.pause(); audio.removeAttribute("src"); audio.load(); };
+  return {
+    legenda: legendaViva,
+    limpar: () => { cancelAnimationFrame(quadro); audio.pause(); audio.removeAttribute("src"); audio.load(); },
+  };
 }
 
-let limparTela = null; // o que a tela atual precisa desligar ao sair (áudio tocando)
+/** Corrigir a legenda inteira e mandar ao PC (R9). */
+async function editorDaLegenda(painel, base, aoSalvar, aoFechar) {
+  const ed = await api(`${base}/edicao`);
+  const caixa = h("textarea", { class: "caixa-legenda", rows: "12", spellcheck: "true", lang: "pt-BR", autocapitalize: "sentences" });
+  caixa.value = ed.legenda;
+  const salvar = async (texto, botao) => {
+    botao.disabled = true;
+    try { await aoSalvar(await editar(`${base}/legenda`, { texto })); avisar("Legenda salva no PC."); }
+    catch (e) { avisar(e.message); botao.disabled = false; }
+  };
+  const botaoSalvar = h("button", { class: "botao", onclick: () => salvar(caixa.value, botaoSalvar) }, "Salvar a legenda");
+  const botaoTranscricao = ed.corrigida ? h("button", { class: "botao secundario", onclick: () => {
+    if (confirm("Desfazer as correções e voltar ao texto da transcrição?")) salvar("", botaoTranscricao);
+  } }, "Voltar ao texto da transcrição") : null;
+  painel.replaceChildren(h("div", { class: "bloco" },
+    h("h3", {}, "Corrigir a legenda"),
+    h("p", { class: "nota" }, "Escreva a legenda inteira como deve aparecer e ouça acima para conferir. As quebras de linha não importam: o PC refaz a divisão."),
+    caixa,
+    h("div", { class: "linha-botoes" }, botaoSalvar, h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar")),
+    botaoTranscricao));
+}
+
+/** Mudar o início e o fim do corte, palavra por palavra. */
+async function editorDasPontas(painel, base, aoMudar, aoFechar) {
+  const ed = await api(`${base}/edicao`);
+  const mudar = async (corpo) => {
+    try { await aoMudar(await editar(`${base}/pontas`, corpo)); }
+    catch (e) { avisar(e.message); }
+  };
+  const palavras = ed.contexto.map((w) => {
+    const classes = ["palavra-ctx", w.dentro ? "dentro" : "fora"];
+    const span = h("span", { class: classes.join(" "), onclick: async () => {
+      const opcoes = [];
+      if (w.n <= ed.ultima) opcoes.push(["inicio", "▶ Começar nesta palavra"]);
+      if (w.n >= ed.primeira) opcoes.push(["fim", "Terminar nesta palavra ◀"]);
+      const escolha = await escolher(`“${w.t}”`, opcoes);
+      if (escolha === "inicio") await mudar({ primeira: w.n });
+      if (escolha === "fim") await mudar({ ultima: w.n });
+    } }, w.t);
+    const pedacos = [];
+    if (w.n === ed.primeira) pedacos.push(h("span", { class: "marca-ponta", id: "marca-inicio" }, "▶"));
+    pedacos.push(span);
+    if (w.n === ed.ultima) pedacos.push(h("span", { class: "marca-ponta" }, "◀"));
+    return pedacos;
+  });
+  const passo = (ponta, n, rotulo) => h("button", { class: "botao-pequeno", onclick: () => mudar({ ponta, passo: n }) }, rotulo);
+  painel.replaceChildren(h("div", { class: "bloco" },
+    h("h3", {}, "Início e fim do corte"),
+    h("p", { class: "nota" }, `Duração: ${duracao(ed.duracao)}. Toque numa palavra para começar ou terminar nela; as setas mudam uma palavra.`),
+    ed.acima_do_limite ? h("p", { class: "aviso-bloco nota" }, "Acima de 3 minutos o corte não pode ser um Short: encurte.") : null,
+    h("div", { class: "linha-pontas" }, h("span", {}, "Início"), passo("inicio", -1, "‹ uma antes"), passo("inicio", 1, "uma depois ›")),
+    h("div", { class: "linha-pontas" }, h("span", {}, "Fim"), passo("fim", -1, "‹ uma antes"), passo("fim", 1, "uma depois ›")),
+    h("div", { class: "contexto-palavras" }, ...palavras.flatMap((p) => [...p, " "])),
+    h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar")));
+  const marca = document.getElementById("marca-inicio");
+  if (marca) marca.scrollIntoView({ block: "center" });
+}
 
 async function telaShort(id, corte) {
-  const lista = await api(`/api/projetos/${enc(id)}/shorts`);
-  const s = lista.find((x) => String(x.id) === String(corte));
+  await entrarNoProjeto(id);
+  const pegar = async () => (await api(`/api/projetos/${enc(id)}/shorts`)).find((x) => String(x.id) === String(corte));
+  let s = await pegar();
   if (!s) throw new Error("Este Short não existe mais no projeto.");
-  cabecalho(s.numero ? `Short ${s.numero}` : "Short desmarcado", duracao(s.duracao), `#/p/${enc(id)}`);
+  const voltarPara = voltarDoShort.startsWith(`#/p/${enc(id)}`) ? voltarDoShort : `#/p/${enc(id)}`;
   const base = `/api/projetos/${enc(id)}/shorts/${s.id}`;
   let modo = s.renderizado ? lerModo() : "ouvir";
+  let edicao = ""; // "", "legenda" ou "pontas"
+  let audicao = null;
   const area = h("div");
-  const seletor = s.renderizado ? h("div", { class: "segmentos" }) : null;
-  const texto = h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto));
-  const mostrar = async () => {
-    if (limparTela) limparTela();
-    limparTela = null;
-    if (modo === "video") {
-      area.replaceChildren(h("div", { class: "player" },
-        h("video", { src: `${base}/video`, controls: true, playsinline: true, preload: "metadata" })), texto);
-    } else {
-      try { limparTela = await montarAudicao(area, base); } catch (e) {
-        area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
-      }
-    }
+  const painel = h("div");
+  const seletor = h("div", { class: "segmentos" });
+  const ferramentas = h("div", { class: "ferramentas" });
+  const info = h("div");
+
+  const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
+  const pintarInfo = () => info.replaceChildren(
+    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s)),
+    s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
+    s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null);
+  const pintarFerramentas = () => {
+    ferramentas.hidden = modo !== "ouvir";
+    ferramentas.replaceChildren(
+      h("button", { class: `botao-ferramenta ${edicao === "legenda" ? "ativo" : ""}`, onclick: () => abrir(edicao === "legenda" ? "" : "legenda") }, "✎ Legenda"),
+      h("button", { class: `botao-ferramenta ${edicao === "pontas" ? "ativo" : ""}`, onclick: () => abrir(edicao === "pontas" ? "" : "pontas") }, "⇤ Início e fim ⇥"),
+      h("button", { class: `botao-ferramenta ${s.incluir ? "marcado" : ""}`, onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        try { s = await editar(`${base}/marcar`, { incluir: !s.incluir }); avisar(s.incluir ? "Corte marcado." : "Corte desmarcado."); }
+        catch (e) { avisar(e.message); }
+        pintarCabecalho(); pintarInfo(); pintarFerramentas();
+      } }, s.incluir ? "✓ Marcado" : "Desmarcado"));
   };
-  const pintarSeletor = () => seletor && seletor.replaceChildren(
-    ...[["ouvir", "🎧 Ouvir com a legenda"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
+  const pintarSeletor = () => {
+    seletor.hidden = !s.renderizado;
+    seletor.replaceChildren(...[["ouvir", "🎧 Ouvir e editar"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
       h("button", { class: modo === k ? "ativo" : "", onclick: () => {
         if (modo === k) return;
-        modo = k; guardarModo(k); pintarSeletor(); mostrar();
+        modo = k; guardarModo(k); edicao = ""; pintarSeletor(); mostrar();
       } }, r)));
-  const chips = linhaDoShort(id, s).querySelector(".chips");
-  const blocos = [
-    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chips),
-    s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
-    s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null,
-  ];
-  tela.replaceChildren(...(seletor ? [seletor] : []), area, ...blocos);
-  pintarSeletor();
+  };
+
+  // depois de uma mudança: o Short novo (duração, legenda) e o áudio refeito
+  const depoisDeMudar = async (novo) => {
+    s = novo;
+    pintarCabecalho(); pintarInfo(); pintarSeletor();
+    await mostrar();
+  };
+  const fecharEditor = () => { abrir(""); };
+
+  async function abrir(qual) {
+    edicao = qual;
+    pintarFerramentas();
+    if (audicao) audicao.legenda.hidden = Boolean(qual);
+    try {
+      if (qual === "legenda") await editorDaLegenda(painel, base, depoisDeMudar, fecharEditor);
+      else if (qual === "pontas") await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
+      else painel.replaceChildren();
+    } catch (e) {
+      painel.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
+    }
+  }
+
+  async function mostrar() {
+    if (limparTela) limparTela();
+    limparTela = null;
+    audicao = null;
+    pintarFerramentas();
+    if (modo === "video") {
+      painel.replaceChildren();
+      area.replaceChildren(h("div", { class: "player" },
+        h("video", { src: `${base}/video`, controls: true, playsinline: true, preload: "metadata" })),
+        h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto)));
+      return;
+    }
+    try {
+      audicao = await montarAudicao(area, base);
+      limparTela = audicao.limpar;
+    } catch (e) {
+      area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
+    }
+    await abrir(edicao);
+  }
+
+  pintarCabecalho(); pintarInfo(); pintarSeletor();
+  tela.replaceChildren(seletor, ferramentas, area, painel, info);
   await mostrar();
 }
 
@@ -342,6 +618,7 @@ async function rotear() {
   const partes = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   try {
     if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
+    else if (partes[0] === "p" && partes[1] && partes[2] === "aprovar") await telaAprovar(partes[1]);
     else if (partes[0] === "p" && partes[1]) await telaProjeto(partes[1]);
     else await telaProjetos();
   } catch (e) {
@@ -412,6 +689,7 @@ acao("dormir", async () => {
 });
 acao("encerrar", async () => {
   if (!confirm("Encerrar o servidor? Ele só volta no PC (ou quando o Windows reiniciar).")) return;
+  sairDoProjeto();
   await post("/api/sistema/encerrar");
   fecharMenu();
   pararRepeticao();
@@ -423,6 +701,14 @@ acao("encerrar", async () => {
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 window.addEventListener("hashchange", rotear);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) api("/api/sistema").then((s) => mostrarDormindo(s.dormindo)).catch(() => {}); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  api("/api/sistema").then((s) => mostrarDormindo(s.dormindo)).catch(() => {});
+  if (sessao.projeto) tomarATrava(sessao.projeto).catch(() => {}); // voltou ao app: o projeto é dele de novo
+});
+// o app foi fechado: devolve o projeto ao PC na hora (senão a trava vence sozinha em 90 s)
+window.addEventListener("pagehide", () => {
+  if (sessao.projeto && navigator.sendBeacon) navigator.sendBeacon(`/api/projetos/${enc(sessao.projeto)}/sessao/soltar`);
+});
 api("/api/sistema").then((s) => { sistema = s; mostrarDormindo(s.dormindo); }).catch(() => {});
 rotear();

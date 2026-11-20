@@ -21,7 +21,14 @@ from spurgeon.core.projeto import (
     resumo_dos_resultados,
     situacao_do_projeto,
 )
-from spurgeon.render.shorts import arquivo_do_short_pronto, ler_registro, planejar_shorts
+from spurgeon.render.shorts import (
+    SITUACAO_NOVO,
+    arquivo_do_short_pronto,
+    assinatura_visual,
+    ler_registro,
+    planejar_shorts,
+    situacao_do_short,
+)
 from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario, rotulo_do_postado
 from spurgeon.shorts.dados import Corte, cor_da_categoria, rotulo_da_categoria
 
@@ -141,6 +148,8 @@ class ShortNoDisco:
     corte: Corte
     numero: int | None  # a posição entre os marcados (None = desmarcado)
     arquivo: Path | None  # o `.mp4` renderizado, onde estiver
+    #: `novo` (nunca renderizado), `pronto` ou `alterado` (mudou depois do render), como no Studio
+    situacao: str = SITUACAO_NOVO
 
 
 def shorts_no_disco(pastas: PastasProjeto) -> list[ShortNoDisco]:
@@ -148,6 +157,8 @@ def shorts_no_disco(pastas: PastasProjeto) -> list[ShortNoDisco]:
     cortes = carregar_cortes(pastas)
     planejados = {p.corte.id: p for p in planejar_shorts(cortes)}
     registro = ler_registro(pastas.shorts_renderizados)
+    estado = carregar_estado(pastas.raiz)
+    opcoes = estado.opcoes if estado is not None else None
     achados: list[ShortNoDisco] = []
     for corte in sorted(cortes, key=lambda c: c.inicio):
         plano = planejados.get(corte.id)
@@ -157,7 +168,12 @@ def shorts_no_disco(pastas: PastasProjeto) -> list[ShortNoDisco]:
             entrada = registro.get(str(corte.id))
             candidato = pastas.shorts / entrada["arquivo"] if entrada else None
             arquivo = candidato if candidato is not None and candidato.is_file() else None
-        achados.append(ShortNoDisco(corte, plano.numero if plano else None, arquivo))
+        situacao = situacao_do_short(
+            corte, registro.get(str(corte.id)), arquivo is not None,
+            com_legenda=bool(opcoes and opcoes.legendas_dinamicas),
+            visual=assinatura_visual(opcoes) if opcoes is not None else None,
+        )  # fmt: skip
+        achados.append(ShortNoDisco(corte, plano.numero if plano else None, arquivo, situacao))
     return achados
 
 
@@ -191,6 +207,7 @@ def resumo_do_short(short: ShortNoDisco) -> dict[str, Any]:
         "agendado_para": c.agendado_para,
         "agendado_rotulo": _rotulo_do_agendado(c.agendado_para),
         "renderizado": short.arquivo is not None,
+        "situacao": short.situacao,
         "texto": c.texto,
         "legenda": c.legenda,
     }
@@ -205,3 +222,17 @@ def arquivo_do_short(pastas: PastasProjeto, id_do_corte: int) -> Path | None:
         if short.corte.id == id_do_corte:
             return short.arquivo
     return None
+
+
+def a_renderizar(pastas: PastasProjeto) -> list[ShortNoDisco]:
+    """Os Shorts marcados que ainda não foram renderizados ou mudaram depois do render."""
+    return [s for s in shorts_no_disco(pastas) if s.numero is not None and s.situacao != "pronto"]
+
+
+def video_original(pastas: PastasProjeto) -> Path | None:
+    """O vídeo original do projeto, se ainda está no PC (renderizar precisa dele)."""
+    estado = carregar_estado(pastas.raiz)
+    if estado is None:
+        return None
+    caminho = Path(estado.entrada.caminho)
+    return caminho if caminho.is_file() else None

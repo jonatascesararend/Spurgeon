@@ -12,6 +12,7 @@ from starlette.routing import Route
 
 from spurgeon.remoto.avisos import Aviso
 from spurgeon.remoto.contexto import Contexto
+from spurgeon.remoto.fila import FilaOcupada
 from spurgeon.remoto.seguranca import usuario_do_pedido
 
 
@@ -26,6 +27,7 @@ def rotas(ctx: Contexto) -> list[Route]:
                 "aparelhos_com_aviso": len(ctx.avisos.inscricoes()),
                 "usuario": usuario_do_pedido(request.headers),
                 "endereco": c.endereco,
+                "fila": ctx.fila.estado(),
             }
         )
 
@@ -66,7 +68,22 @@ def rotas(ctx: Contexto) -> list[Route]:
         )
         return JSONResponse({"entregues": sum(e.ok for e in entregas), "aparelhos": len(entregas)})
 
+    def processamento(_request: Request) -> JSONResponse:
+        return JSONResponse(ctx.fila.estado())
+
+    def comando(request: Request) -> JSONResponse:
+        acao = request.path_params["acao"]
+        if acao not in ("pausar", "retomar", "cancelar"):
+            raise HTTPException(404)
+        try:
+            ctx.fila.enviar(acao)
+        except FilaOcupada as erro:
+            raise HTTPException(409, str(erro)) from erro
+        return JSONResponse(ctx.fila.estado())
+
     return [
+        Route("/api/processamento", processamento),
+        Route("/api/processamento/{acao}", comando, methods=["POST"]),
         Route("/api/sistema", estado),
         Route("/api/sistema/dormir", dormir, methods=["POST"]),
         Route("/api/sistema/acordar", acordar, methods=["POST"]),

@@ -278,6 +278,12 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._atualizar_botoes()
 
     # --- ações --------------------------------------------------------------------------------
+    def salvar_em_silencio(self) -> None:
+        """Grava o que está em edição sem perguntar nada (o celular tomou o projeto)."""
+        if self._editor is not None:
+            self._editor.salvar_em_silencio()
+            self._atualizar_botoes()
+
     def salvar(self, *, exigir_ate_o_limite: bool = True) -> bool:
         """Grava as alterações em `cortes_shorts.json`. False se algo impede (veja o aviso).
 

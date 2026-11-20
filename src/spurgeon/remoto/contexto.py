@@ -9,6 +9,7 @@ from pathlib import Path
 
 from spurgeon.remoto.avisos import Avisos
 from spurgeon.remoto.config import ConfigRemoto, salvar_config_remoto
+from spurgeon.remoto.fila import Fila
 
 
 @dataclass
@@ -21,6 +22,8 @@ class Contexto:
     gravar_config: Callable[[ConfigRemoto], object] = salvar_config_remoto
     #: pede ao servidor para sair (o `servir` liga isto ao uvicorn)
     encerrar: Callable[[], None] = lambda: None
+    #: o processamento que o celular pede (um por vez no PC)
+    fila: Fila = field(default_factory=Fila)
     _trava: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def mudar_config(self, **campos) -> ConfigRemoto:

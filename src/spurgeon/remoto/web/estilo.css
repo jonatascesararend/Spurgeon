@@ -139,6 +139,43 @@ pre.log {
 .aviso-bloco { border-color: color-mix(in srgb, var(--aviso) 55%, transparent); color: var(--aviso); }
 .estado-audio { text-align: right; }
 
+/* editar (Fase R2) */
+.cartao.destaque { border-color: color-mix(in srgb, var(--aviso) 60%, transparent); }
+.cartao .botao { margin-bottom: 0; text-align: center; text-decoration: none; }
+a.botao { display: block; text-align: center; text-decoration: none; }
+.linha-botoes { display: flex; gap: 8px; }
+.linha-botoes .botao { flex: 1; }
+.ferramentas { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.botao-ferramenta {
+  flex: 1 1 auto; border: 1px solid var(--linha); background: var(--cartao); border-radius: 999px;
+  padding: 9px 12px; font-size: 14px; white-space: nowrap;
+}
+.botao-ferramenta.ativo { background: var(--destaque); border-color: var(--destaque); color: #fff; }
+.botao-ferramenta.marcado { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+.caixa-legenda {
+  width: 100%; min-height: 40vh; font: 18px/1.5 system-ui, sans-serif; color: var(--texto);
+  background: var(--cartao-2); border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px;
+  margin: 8px 0 4px; resize: vertical;
+}
+.linha-pontas { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.linha-pontas > span { width: 52px; color: var(--texto-2); font-size: 14px; }
+.linha-pontas .botao-pequeno { flex: 1; }
+.contexto-palavras { font-size: 18px; line-height: 1.75; margin: 10px 0; max-height: 55vh; overflow: auto; padding: 4px 2px; }
+.palavra-ctx { border-radius: 5px; padding: 1px 1px; cursor: pointer; }
+.palavra-ctx.fora { color: var(--texto-2); opacity: .55; }
+.palavra-ctx.dentro { color: var(--texto); }
+.marca-ponta { color: var(--destaque); font-weight: 700; padding: 0 2px; }
+.marcador {
+  flex: none; width: 34px; height: 34px; border-radius: 8px; border: 2px solid var(--linha);
+  background: transparent; font-size: 18px; font-weight: 700; color: #fff;
+}
+.marcador.ligado { background: var(--ok); border-color: var(--ok); }
+.short a.corpo { text-decoration: none; color: inherit; }
+.barra-fixa {
+  position: sticky; bottom: 0; padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--fundo) 30%);
+}
+
 .vazio-lista { color: var(--texto-2); text-align: center; padding: 40px 16px; }
 .botao {
   display: block; width: 100%; border: 0; border-radius: 10px; padding: 13px 14px; margin: 8px 0;

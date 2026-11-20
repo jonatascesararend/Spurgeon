@@ -25,7 +25,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from spurgeon.core.config import raiz_repositorio
 from spurgeon.remoto.contexto import Contexto
-from spurgeon.remoto.rotas import previa, projetos, sistema
+from spurgeon.remoto.rotas import cortes, previa, projetos, sistema
 from spurgeon.remoto.seguranca import autorizado
 
 log = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 PASTA_WEB = Path(__file__).parent / "web"
 TAMANHOS_DO_ICONE = (192, 512)
 #: o que continua valendo com o servidor dormindo (para acordar e ver que ele dorme)
-_LIVRES_DORMINDO = ("/api/sistema", "/api/avisos")
+_LIVRES_DORMINDO = ("/api/sistema", "/api/avisos", "/api/processamento")
 
 
 class Porteiro:
@@ -104,6 +104,7 @@ def criar_app(ctx: Contexto) -> ASGIApp:
         *sistema.rotas(ctx),
         *projetos.rotas(ctx),
         *previa.rotas(ctx),
+        *cortes.rotas(ctx),
         Route("/icone-{tamanho:int}.png", _icone),
         Mount("/", app=StaticFiles(directory=PASTA_WEB, html=True), name="web"),
     ]

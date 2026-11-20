@@ -9,7 +9,7 @@ agendou). As redes (YouTube, Meta, TikTok) só são usadas quando a pessoa pede.
 e o roadmap por fase. Se uma decisão mudar, atualize o Projeto.md junto com o código.
 
 **Branch `controle-remoto` (particular do autor, não vai para a `main`):** controle pelo celular (Tailscale + PWA servida
-pelo PC, Web Push, Playwright no YouTube Studio, que também posta: sem a API do YouTube). As decisões (R1 a R16), as escolhas a confirmar (S1 a S10), a estrutura
+pelo PC, Web Push, Playwright no YouTube Studio, que também posta: sem a API do YouTube). As decisões (R1 a R17), as escolhas a confirmar (S1 a S10), a estrutura
 (`src/spurgeon/remoto/`, `src/spurgeon/canal/`, `render/proxy.py`) e as fases R0 a R5 estão no [Remoto.md](Remoto.md):
 leia antes de mexer nele e atualize-o junto com o código. Código novo fica nesses pacotes; no código que já existe, mexa
 o mínimo (o branch precisa acompanhar a `main`). Para trazer a `main`: `git merge main` neste branch, nunca o contrário.
@@ -18,6 +18,10 @@ servidor (porta 18765, só em `127.0.0.1`, publicada pelo `tailscale serve`). O 
 projetos com as funções do núcleo (`remoto/dados.py`); a porta é ligada com `SO_EXCLUSIVEADDRUSE` (no Windows, sem isso
 outro programa divide a porta em silêncio). Testes do servidor pelo `TestClient` do Starlette, com o cabeçalho
 `Tailscale-User-Login`; Web Push pelo `TransporteFalso`.
+A janela do PC fala com o celular por arquivos (`remoto/sessao.py`): a cada segundo
+`JanelaPrincipal._conferir_o_celular` vê a trava `_work/celular.json` do projeto aberto, salva o Studio SEM perguntar
+(`EditorDeCortes.salvar_em_silencio`), dá o recibo e trava o Studio; também solta a revisão que o celular aprovou. Antes de
+processar, a janela e o servidor procuram outro `spurgeon.core.trabalhador` rodando (um por vez no PC, `remoto/fila.py`).
 
 ## Comandos
 

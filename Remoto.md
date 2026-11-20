@@ -38,6 +38,7 @@ O fluxo de ponta a ponta:
 | R14 | Tailscale instalado no PC (`souza-arend`) e no celular (`jonatas-arend`), mesma conta, MagicDNS ligado | 2026-11-20 |
 | R15 | O vídeo de um projeto novo vem do **"Baixar" do YouTube Studio (720p)**, não do yt-dlp a 1080p | 2026-11-20 |
 | R16 | Para conferir a legenda basta **ouvir**: opção de montar **só o áudio** do Short, com a legenda acompanhando, sem renderizar o vídeo | 2026-11-20 |
+| R17 | A **aprovação dos cortes** também é feita pelo celular (S10) | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -86,7 +87,7 @@ O fluxo de ponta a ponta:
   de build nem conta em loja.
 * **S10. Revisão dos cortes no celular.** Com "Pausar para aprovar os cortes" ligado, o pipeline espera a revisão
   (`aguardando_revisao`). O celular também precisa aprovar os cortes (marcar e desmarcar), senão o processamento fica parado
-  esperando o PC. **Confirmar com o autor.**
+  esperando o PC. **Confirmado pelo autor em 2026-11-20 (R17)**; feito na Fase R2.
 
 ## 4. Arquitetura
 
@@ -137,13 +138,14 @@ src/spurgeon/
     avisos.py                      [R1] R6: Web Push (VAPID e inscrições no Cofre)
     vigia.py                       [R1] R6: olha os `estado.json` e avisa o que mudou
     audicao.py                     [R1] R16: só o áudio do Short, com a legenda no tempo dele
-    sessao.py                      R8: trava do celular com batimento; o PC salva e trava
-    fila.py                        S7: um processamento por vez, servidor e Studio
+    sessao.py                      [R2] R8: trava do celular, recibo do PC e a janela aberta
+    fila.py                        [R2] S7: um processamento por vez (psutil), roda o trabalhador
+    edicao.py                      [R2] legenda, início e fim, marcar (as regras do Studio)
     rotas/
       __init__.py
-      projetos.py                  [R1] lista, detalhe, andamento, Shorts, vídeo (Range); depois iniciar/aprovar
+      projetos.py                  [R1/R2] lista, detalhe, andamento, Shorts, vídeo (Range), aprovar, renderizar
       sistema.py                   [R1] estado, dormir, acordar, encerrar e os avisos
-      cortes.py                    legenda, início/fim, enviar (salva + renderiza)
+      cortes.py                    [R2] trava (tomar/soltar), legenda, pontas, marcar
       livre.py                     busca, categorias, criar Short livre
       previa.py                    [R1] legenda e áudio do Short (ouvir, R16); depois o proxy da prévia rápida
       postagem.py                  agendar, já postado, refazer título com a IA
@@ -158,9 +160,11 @@ src/spurgeon/
   render/proxy.py                  S2: proxy 480p para a prévia rápida
 tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vigia (sem internet, sem Tailscale)
 tests/test_remoto_audicao.py       [R1] ouvir com a legenda (um teste roda o FFmpeg de verdade)
+tests/test_remoto_edicao.py        [R2] trava, edição, fila, aprovar e renderizar
+tests/test_janela_remoto.py        [R2] a janela do PC: salva e trava, revisão aprovada, um por vez (-m gui)
 ```
 
-`[R1]` = já tem código. Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
+`[R1]`, `[R2]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
 extra `remoto` (`starlette`, `uvicorn`, `http-ece`, `cryptography`) e o `httpx` no grupo `dev` (cliente de teste). Ambiente:
 `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`.
 
@@ -245,6 +249,41 @@ de fumaça no servidor de verdade; fotos do app em 393×851, temas escuro e clar
 **Fase R2: editar.** Trava e "o PC salva sozinho" (R8), aprovar cortes (S10), legenda inteira com "Enviar", início e
 fim por toque na palavra (±0,1 s), proxy e prévia rápida (S2), renderizar os Shorts enviados.
 
+**Estado da R2 (2026-11-20): feita e testada** (`tests/test_remoto_edicao.py`, `tests/test_janela_remoto.py`; telas
+fotografadas com os projetos reais, sem gravar neles). Como ficou:
+
+* **A trava (R8, `remoto/sessao.py`).** Abrir um projeto no celular (a tela do projeto, de um Short ou da aprovação) toma
+  a trava `_work/celular.json`, renovada a cada 30 s; voltar à lista de projetos ou fechar o app (`pagehide` +
+  `sendBeacon`) a solta, e sem batimento por 90 s ela vence sozinha. A janela do PC anuncia a cada ~2 s em que projeto
+  está (`janela_aberta.json`, ao lado do `config.toml`) e, uma vez por segundo (`JanelaPrincipal._conferir_o_celular`),
+  vê a trava do projeto aberto: salva o que o Studio tinha em edição **sem perguntar**
+  (`EditorDeCortes.salvar_em_silencio`, o mesmo `salvar` sem as caixas de diálogo), grava o recibo
+  `_work/celular_pc.json` e trava o Studio com o motivo "O celular está editando este projeto". O servidor espera esse
+  recibo (até 6 s) só se a janela está naquele projeto; o celular avisa "O PC salvou…". Quando a trava sai, o Studio
+  se solta e relê o projeto (o que o celular mudou aparece).
+* **Editar (R9, `remoto/edicao.py`, `rotas/cortes.py`).** Na tela do Short ("Ouvir e editar"): **✎ Legenda** (a
+  legenda inteira numa caixa, em blocos como o vídeo mostra; "Salvar" grava `Corte.legenda` por `legenda_corrigida`;
+  "Voltar ao texto da transcrição" apaga a correção), **Início e fim** (as palavras do corte e 40 de cada lado; tocar numa
+  palavra → "Começar nesta palavra"/"Terminar nesta palavra"; setas de uma palavra = `mover_limite`; a correção da
+  legenda acompanha por `legenda_preservada`; menos de 10 s é recusado, acima de 3 min avisa) e **Marcado/Desmarcado**.
+  Cada mudança grava só os campos do corte (`gravar_campos_do_corte`) e exige a trava (sem ela: 409 `sem_trava`, e o app
+  toma de novo e repete). O áudio da audição é refeito sozinho (a assinatura muda). Não se edita enquanto um trabalhador
+  está numa etapa de análise (ela reescreve o `cortes_shorts.json`).
+* **Aprovar (S10/R17).** O projeto parado em "Aprovação dos cortes" mostra "✋ Os cortes esperam a sua aprovação" →
+  tela com todos os cortes (quadrado para marcar, título para ouvir e editar) → "Aprovar e continuar (N marcados)". Outra
+  revisão (a da transcrição) só pode ser aprovada como está. Aprovar = o servidor roda o trabalhador com `--aprovar`; a
+  janela do PC, se esperava essa revisão, percebe e volta ao ocioso.
+* **Renderizar e acompanhar (`remoto/fila.py`).** "▶ Renderizar N Shorts" (os marcados novos ou alterados:
+  `situacao_do_short`, a mesma do Studio) roda o pipeline em `so_shorts` sem pausas de revisão, com a configuração da
+  última execução (`_work/config_execucao.json`), como o "Renderizar" do Studio. Exige o vídeo original no PC. O
+  celular mostra a etapa e o progresso, e pausa, retoma e cancela o que ele mesmo pediu. **Um processamento por vez no
+  PC:** o servidor procura qualquer `spurgeon.core.trabalhador` rodando (`psutil`) antes de começar, e a janela faz o
+  mesmo (`_impedimento_do_controle_remoto`), recusando também se o celular está com o projeto aberto.
+* Escolhas feitas sem consulta: (a) abrir o projeto no celular (até só para ver) já trava o PC, como o autor descreveu
+  ("abriu o projeto, o PC trava"); (b) cada mudança vai ao PC na hora (o "Enviar" é o botão "Salvar a legenda"; não há
+  rascunho no celular); (c) o ajuste fino de ±0,1 s ficou de fora: as pontas caem sempre em fronteira de palavra, com o
+  respiro de costume, como no Studio; (d) marca-texto, borracha e saltos não estão no celular.
+
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 
 **Fase R4: postar.** Agendar no YouTube pelo navegador, com o vídeo relacionado (S3), já postado, refazer o título com a
@@ -276,7 +315,7 @@ salvas.
 
 ## 8. Em aberto
 
-* S1, S2 e S4 a S10 ainda não foram confirmados pelo autor, principalmente S10 (aprovar os cortes pelo celular). S3 segue
-  R12 (tudo pelo navegador).
+* S1, S2 e S4 a S9 ainda não foram confirmados pelo autor. S3 segue R12 (tudo pelo navegador); S10 virou R17.
+* As escolhas sem consulta da R1 e da R2 (veja o "Estado" de cada fase).
 * Qualidade do download do YouTube Studio (R0.2): se for baixa, o vídeo longo e os Shorts perdem nitidez em relação ao
   arquivo da câmera.

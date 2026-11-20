@@ -2957,6 +2957,17 @@ class EditorDeCortes(ctk.CTkFrame):
                 "desmarque o corte.",
             )
             return False
+        self._gravar_no_disco()
+        return True
+
+    def salvar_em_silencio(self) -> None:
+        """Grava o que está em edição sem perguntar nada: o celular tomou o projeto (controle
+        remoto, Remoto.md R8). Corte sem título, acima do limite ou nenhum marcado ficam como
+        estão, como trabalho em andamento (o celular continua de onde o PC parou)."""
+        self._guardar_detalhe()
+        self._gravar_no_disco()
+
+    def _gravar_no_disco(self) -> None:
         usados: set[str] = set()
         for corte in self._cortes:
             if corte.titulo != self._titulo_do_nome.get(corte.id, corte.titulo):
@@ -2974,7 +2985,6 @@ class EditorDeCortes(ctk.CTkFrame):
         if self._atual is not None and (arquivos.movidos or arquivos.falhas):
             self._mostrar_postado(self._cortes[self._atual], arquivos.falhas)
         self._atualizar_resumo()
-        return True
 
     # --- processamento rodando ----------------------------------------------------------------
     # Durante um processamento (a renderização) o editor continua à mão. O que ele NÃO faz agora é
