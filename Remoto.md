@@ -16,7 +16,7 @@ O fluxo de ponta a ponta:
 3. Os cortes chegam ao celular, com aviso.
 4. O autor ajusta a legenda e as pontas de cada corte, cria Shorts livres e vê a prévia rápida.
 5. "Enviar" manda o PC renderizar os Shorts, com aviso quando terminar.
-6. O autor agenda no YouTube, e o PC posta o Short já vinculado ao sermão original (vídeo relacionado).
+6. O autor agenda no YouTube, e o PC posta o Short pelo YouTube Studio (sem a API) já vinculado ao sermão original (vídeo relacionado).
 
 ## 2. Decisões do autor
 
@@ -33,8 +33,9 @@ O fluxo de ponta a ponta:
 | R9 | No celular: **legenda inteira** editada de uma vez e mandada com "Enviar", **início e fim** do corte e **Shorts livre**. Marca-texto, borracha e saltos ficam para depois | 2026-11-20 |
 | R10 | **Só a prévia rápida** no celular (sem a prévia fiel do FFmpeg); o resultado de verdade é a **renderização final** do Short | 2026-11-20 |
 | R11 | **O vídeo de um projeto novo vem do YouTube.** Listar os vídeos longos do canal e **baixar pelo YouTube Studio**, por automação de navegador (Python + **Playwright**) numa **sessão já configurada** | 2026-11-20 |
-| R12 | **Postar por automação de navegador** para vincular o sermão original ao Short (vídeo relacionado), o que a API do YouTube não faz | 2026-11-20 |
+| R12 | **Postar no YouTube só por automação de navegador, SEM a API do YouTube**: envio, detalhes, agendamento e o vídeo relacionado (o sermão original), que a API não faz | 2026-11-20 |
 | R13 | O PC fica disponível o dia todo | 2026-11-20 |
+| R14 | Tailscale instalado no PC (`souza-arend`) e no celular (`jonatas-arend`), mesma conta, MagicDNS ligado | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -48,19 +49,27 @@ O fluxo de ponta a ponta:
   palavras com tempo. Não mostra o tratamento de cor nem a marca. Como o original vem do YouTube (H.264, SDR), decodificar é
   barato e o proxy existe **antes** do vídeo longo, ou seja, já na revisão dos cortes. Fica em `_work/proxy_celular.mp4` e
   **não** é apagado ao concluir, assim como os `.json`.
-* **S3. Postar (R12).** Proposta **híbrida**: a **API** (que já existe e agenda: `publicacao/youtube.py`) envia e agenda o
-  Short; depois o **Playwright** abre a página do Short no YouTube Studio e preenche **só o "vídeo relacionado"** com o sermão
-  de origem. O navegador faz o mínimo, e o envio (a parte longa e que precisa ser retomável) continua pela API. Se o autor
-  preferir postar tudo pelo navegador, troca-se só essa peça.
+* **S3. Postar (R12).** Uma `Plataforma` nova, **"YouTube pelo navegador"** (`canal/postar.py`), com a mesma interface
+  das outras (`problemas`, `publicar`, `consultar`). Assim a agenda, o `postagens.json`, as pastas `agendados/`/`postados/`
+  e a janela de postagem continuam iguais, e só quem fala com o YouTube muda. No upload do YouTube Studio ela preenche
+  título, descrição, tags, "não é para crianças", **vídeo relacionado** (o sermão de origem, S4) e "Programar"
+  (data/hora) ou "Publicar". O id do Short sai da página no fim e vai para o `postagens.json`. A `publicacao/youtube.py` (API)
+  continua na `main` e não é usada no branch. Riscos: o envio pelo navegador **não retoma** se cair no meio (recomeça), e
+  cada mudança da página do Studio pode quebrar um passo.
 * **S4. O projeto guarda de onde veio**: id do vídeo no YouTube, título e data de publicação. A data do projeto é a do
   sermão no canal, não a do arquivo baixado (`core/projeto.data_gravacao` leria a data do download). É assim que o Short
   sabe qual sermão vincular (S3).
-* **S5. Sessão do navegador (R11, R12).** Um **perfil persistente** do Playwright
-  (`launch_persistent_context`) em `%LOCALAPPDATA%\Spurgeon\navegador\`, fora do repositório. O autor faz o login na conta
-  da igreja **uma vez, à mão**, por um comando (`spurgeon remoto navegador`); o Google costuma barrar login feito por
-  automação. Se a sessão cair, o celular avisa "entre de novo no PC".
-* **S6. Listar os vídeos (R11)** pela API, com a conta que a aba Integrações já liga (escopo `youtube`, que já permite
-  leitura), filtrando os longos. O navegador só baixa. Se a API não servir para algo, a lista também pode sair do Studio.
+* **S5. Sessão do navegador (R11, R12).** **Não dá para usar o Chrome do dia a dia:** desde o Chrome 136, a depuração
+  remota é ignorada no perfil padrão, e os cookies dele são cifrados para o próprio Chrome (copiar o perfil não leva a
+  sessão). Por isso o Chrome instalado é aberto com um **perfil só da automação**, em `%LOCALAPPDATA%\Spurgeon\navegador\`
+  (fora do repositório), onde o autor faz o login na conta da igreja **uma vez, à mão**. Nesse login é um Chrome comum,
+  sem automação, porque o Google costuma barrar login de navegador automatizado. Depois, a automação abre esse perfil
+  (`launch_persistent_context` com `channel="chrome"`, ou Chrome + `--remote-debugging-port` só em `127.0.0.1` e
+  `connect_over_cdp`; a prova R0.2 decide). Esse perfil não pode estar aberto à mão enquanto a automação roda. Se a sessão
+  cair, o celular avisa "entre de novo no PC".
+* **S6. Listar os vídeos (R11)** pela página "Conteúdo" do YouTube Studio, no mesmo perfil, para não depender da API em
+  nada do canal (R12). Só os longos, que ficam na aba "Vídeos" e não em "Shorts" nem em "Ao vivo"; se os sermões forem
+  transmissões, a aba é "Ao vivo" (conferir na R0.2).
 * **S7. Uma fila de processamento só.** O servidor é quem dispara o trabalhador quando o pedido vem do celular, e o Studio do
   PC respeita uma trava global (arquivo em `%LOCALAPPDATA%\Spurgeon\`) para não haver dois trabalhadores no mesmo projeto.
 * **S8. Segurança.** Só responde pelo endereço do Tailscale (nunca em `0.0.0.0`). Confere a identidade que o
@@ -128,9 +137,9 @@ src/spurgeon/
   canal/
     __init__.py
     navegador.py                   S5: perfil persistente do Playwright
-    listar.py                      S6: vídeos longos do canal (API)
+    listar.py                      S6: vídeos longos do canal (página Conteúdo do Studio)
     baixar.py                      R11: baixar pelo YouTube Studio
-    vincular.py                    S3: vídeo relacionado no Short
+    postar.py                      S3: postar o Short pelo YouTube Studio (Plataforma, sem API)
   render/proxy.py                  S2: proxy 480p para a prévia rápida
 tests/                             test_remoto_*.py e test_canal_*.py (sem internet, sem navegador)
 ```
@@ -144,11 +153,13 @@ Cada fase vale sozinha e é testada antes da próxima.
 **Fase R0: provas de conceito** (protótipos descartáveis na pasta de rascunho, fora do projeto). Estes são os riscos que
 podem mudar o desenho:
 
-1. Tailscale no PC e no celular; `tailscale serve` com uma página de teste; abrir no Android **fora do Wi-Fi de casa**,
-   instalar como app e receber **uma notificação push** com o app fechado.
-2. Playwright com perfil persistente: login à mão uma vez e, depois, sem login, **listar e baixar um vídeo** do YouTube
-   Studio. Conferir a **qualidade e o formato** do arquivo (resolução, codec, áudio).
-3. Playwright: preencher o **vídeo relacionado** de um Short já enviado e **agendado (privado)**.
+1. Tailscale no PC e no celular (feito, R14). Falta ligar os **certificados HTTPS** no painel do Tailscale (DNS → HTTPS
+   Certificates; hoje `CertDomains` vem vazio). Depois: `tailscale serve` com uma página de teste, abrir no Android **fora do
+   Wi-Fi de casa**, instalar como app e receber **uma notificação push** com o app fechado.
+2. Perfil da automação (S5): login à mão uma vez e, depois, sem login, **listar e baixar um vídeo** do YouTube Studio.
+   Conferir a **qualidade e o formato** do arquivo (resolução, codec, áudio).
+3. **Postar um Short de teste pelo navegador** (S3): enviar como **privado e programado**, com título, descrição e o
+   **vídeo relacionado**, e ler o id no fim. Apagar o Short de teste depois.
 4. Medir o tempo do proxy 480p de um sermão inteiro nesta máquina, e o tamanho do arquivo.
 5. Conferir que um vídeo baixado do YouTube passa pelo pipeline completo (SDR, sem HDR).
 
@@ -160,8 +171,8 @@ fim por toque na palavra (±0,1 s), proxy e prévia rápida (S2), renderizar os 
 
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 
-**Fase R4: postar.** Agendar no YouTube pela API, vídeo relacionado pelo navegador (S3), já postado, refazer o título com
-a IA.
+**Fase R4: postar.** Agendar no YouTube pelo navegador, com o vídeo relacionado (S3), já postado, refazer o título com a
+IA.
 
 **Fase R5: começar pelo celular.** Listar o canal, baixar pelo Studio, criar o projeto (S4) e processar com as opções
 salvas.
@@ -185,7 +196,7 @@ salvas.
 
 ## 8. Em aberto
 
-* S1 a S10 ainda não foram confirmados pelo autor, principalmente S3 (postar pela API e só vincular pelo navegador) e S10
-  (aprovar os cortes pelo celular).
+* S1, S2 e S4 a S10 ainda não foram confirmados pelo autor, principalmente S10 (aprovar os cortes pelo celular). S3 segue
+  R12 (tudo pelo navegador).
 * Qualidade do download do YouTube Studio (R0.2): se for baixa, o vídeo longo e os Shorts perdem nitidez em relação ao
   arquivo da câmera.
