@@ -312,6 +312,11 @@ cada palavra): nada vai ao PC e o áudio não é refeito a cada toque. Vai de um
 no **"💾 Salvar alterações"**, ao **trocar de ferramenta ou de aba** (Ouvir/Vídeo) e ao **sair do Short**; "Descartar" volta
 ao que estava. Menos de 10 s não salva. As setas de uma palavra da R2 saíram (o toque em "Início e fim" faz o mesmo).
 
+**Volta à última tela (2026-11-20).** O app guarda no próprio celular (`localStorage`, chave `ultimaTela`) a última tela
+aberta (projeto, Short, aprovação, Shorts livre ou a lista do canal) e, aberto de novo pelo atalho (que sempre abre a
+página inicial), volta a ela (`restaurarUltimaTela`, antes do primeiro `rotear`). Um aviso com link abre a tela do aviso.
+Se o projeto ou o Short lembrado não existe mais (404), o app esquece e mostra a lista de projetos.
+
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 
 **Estado da R3 (2026-11-20): feita e testada** (`tests/test_remoto_livre.py`; tela fotografada com o sermão 09 real, 8668

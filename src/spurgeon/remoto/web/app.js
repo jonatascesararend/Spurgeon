@@ -777,7 +777,7 @@ async function telaShort(id, corte) {
   await entrarNoProjeto(id);
   const pegar = async () => (await api(`/api/projetos/${enc(id)}/shorts`)).find((x) => String(x.id) === String(corte));
   let s = await pegar();
-  if (!s) throw new Error("Este Short não existe mais no projeto.");
+  if (!s) throw new ErroDaApi(404, "Este Short não existe mais no projeto.");
   const voltarPara = voltarDoShort.startsWith(`#/p/${enc(id)}`) ? voltarDoShort : `#/p/${enc(id)}`;
   const base = `/api/projetos/${enc(id)}/shorts/${s.id}`;
   let modo = s.renderizado ? lerModo() : "ouvir";
@@ -1129,11 +1129,33 @@ async function telaCanal() {
 
 // --- roteador -------------------------------------------------------------------------------
 
+// A última tela aberta (projeto, Short, aprovação, Shorts livre) fica guardada no celular: abrir o
+// app de novo volta a ela. Um aviso com link abre a tela dele (o endereço já traz a tela).
+const CHAVE_DA_ULTIMA_TELA = "ultimaTela";
+let restaurando = false;
+
+function guardarUltimaTela() {
+  try { localStorage.setItem(CHAVE_DA_ULTIMA_TELA, location.hash || "#/"); } catch (_) { /* sem armazenamento */ }
+}
+
+function restaurarUltimaTela() {
+  if (location.hash && location.hash !== "#" && location.hash !== "#/") return;
+  let ultima = "";
+  try { ultima = localStorage.getItem(CHAVE_DA_ULTIMA_TELA) || ""; } catch (_) { return; }
+  if (ultima.startsWith("#/p/") || ultima === "#/canal") {
+    restaurando = true;
+    history.replaceState(null, "", ultima); // sem disparar o hashchange: o rotear() de início já lê o endereço
+  }
+}
+
 async function rotear() {
   pararRepeticao();
   if (limparTela) { limparTela(); limparTela = null; }
   window.scrollTo(0, 0);
   const partes = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  const eraRestauracao = restaurando;
+  restaurando = false;
+  guardarUltimaTela();
   try {
     if (partes[0] === "canal") await telaCanal();
     else if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
@@ -1142,6 +1164,11 @@ async function rotear() {
     else if (partes[0] === "p" && partes[1]) await telaProjeto(partes[1]);
     else await telaProjetos();
   } catch (e) {
+    if (eraRestauracao && e.status === 404) { // o projeto ou o Short lembrado não existe mais
+      try { localStorage.removeItem(CHAVE_DA_ULTIMA_TELA); } catch (_) { /* tudo bem */ }
+      location.hash = "";
+      return;
+    }
     mostrarErro(e);
   }
 }
@@ -1231,4 +1258,5 @@ window.addEventListener("pagehide", () => {
   if (sessao.projeto && navigator.sendBeacon) navigator.sendBeacon(`/api/projetos/${enc(sessao.projeto)}/sessao/soltar`);
 });
 api("/api/sistema").then((s) => { sistema = s; mostrarDormindo(s.dormindo); }).catch(() => {});
+restaurarUltimaTela();
 rotear();
