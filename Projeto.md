@@ -15,6 +15,8 @@
 > | 1.8 | Título que renomeia o arquivo, "agendado para" (com calendário, relógio e as pastas `agendados/` e `postados/`) e a aba **Integrações** para postar nas redes |
 > | 1.8.1 | Studio Shorts à mão durante a renderização, selos de postado/agendado com filtro e "fechar ao terminar" |
 > | 1.9 | Os Shorts cortados do vídeo longo já tratado, o ícone do programa e a lista de projetos ao abrir |
+>
+> **Branch `controle-remoto`** (particular, fora da `main`): controle pelo celular. Decisões, estrutura e fases no [Remoto.md](Remoto.md).
 
 ---
 
