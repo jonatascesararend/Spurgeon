@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,6 +19,10 @@ from typing import Any
 #: o canal em que a automação pode agir (o autor é editor dele)
 NOME_DO_CANAL = "Revendo Meus Conceitos"
 STUDIO = "https://studio.youtube.com"
+
+
+#: o perfil da automação só abre uma vez: listar, baixar e postar esperam a vez um do outro
+_NAVEGADOR = threading.Lock()
 
 
 class CanalErrado(RuntimeError):
@@ -58,7 +63,7 @@ def abrir_studio(*, visivel: bool = True) -> Iterator[Studio]:
     """O Studio aberto no perfil da automação e no canal certo (fecha ao sair)."""
     from playwright.sync_api import sync_playwright
 
-    with sync_playwright() as p:
+    with _NAVEGADOR, sync_playwright() as p:
         contexto = p.chromium.launch_persistent_context(
             str(pasta_do_perfil()), channel="chrome", headless=not visivel,
             viewport={"width": 1400, "height": 950}, locale="pt-BR",

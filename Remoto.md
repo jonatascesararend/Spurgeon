@@ -142,6 +142,7 @@ src/spurgeon/
     fila.py                        [R2] S7: um processamento por vez (psutil), roda o trabalhador
     edicao.py                      [R2] legenda, início e fim, marcar (as regras do Studio)
     postagem.py                    [R4] postar no YouTube: uma por vez, registro, agendado/postado
+    novo.py                        [R5] projeto novo de um vídeo do canal: baixa, cria, confere, processa
     livre.py                       [R3] Shorts livre: texto, busca, trecho, criação com a IA em segundo plano
     rotas/
       __init__.py
@@ -151,13 +152,13 @@ src/spurgeon/
       livre.py                     [R3] texto vivo, busca, trecho (ouvir) e criar o Short livre
       previa.py                    [R1] legenda e áudio do Short (ouvir, R16); depois o proxy da prévia rápida
       postagem.py                  [R4] postar (programar ou agora) e o andamento da postagem
-      canal.py                     vídeos do canal, baixar e criar projeto
+      canal.py                     [R5] vídeos do canal, baixar e criar o projeto, a tarefa
     web/                           [R1] o app do celular (index.html, app.js, estilo.css, sw.js, manifest)
   canal/
     __init__.py
     navegador.py                   [R4] S5: o Chrome com o perfil da automação; confere o canal
-    listar.py                      S6: vídeos longos do canal (página Conteúdo do Studio)
-    baixar.py                      R11: baixar pelo YouTube Studio
+    listar.py                      [R5] S6: os vídeos da aba Vídeos do Studio (1ª página)
+    baixar.py                      [R5] R11: baixar pelo "Opções → Baixar" do Studio (720p)
     postar.py                      [R4] S3: postar pelo YouTube Studio (sem API), vídeo relacionado
   render/proxy.py                  S2: proxy 480p para a prévia rápida
 tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vigia (sem internet, sem Tailscale)
@@ -167,9 +168,10 @@ tests/test_janela_remoto.py        [R2] a janela do PC: salva e trava, revisão 
 tests/test_remoto_livre.py         [R3] Shorts livre (a IA trocada por uma função de mentira)
 tests/test_remoto_postagem.py      [R4] postar pelo celular (o navegador trocado por uma função de mentira)
 tests/test_canal_postar.py         [R4] descrição, data do Studio e id pelo link
+tests/test_remoto_novo.py          [R5] começar pelo celular (o Studio trocado por funções de mentira)
 ```
 
-`[R1]` a `[R4]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
+`[R1]` a `[R5]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
 extra `remoto` (`starlette`, `uvicorn`, `http-ece`, `cryptography`) e o `httpx` no grupo `dev` (cliente de teste). Ambiente:
 `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`.
 
@@ -363,6 +365,31 @@ e `test_canal_postar.py`.
 
 **Fase R5: começar pelo celular.** Listar o canal, baixar pelo Studio, criar o projeto (S4) e processar com as opções
 salvas.
+
+**Estado da R5 (2026-11-20): feita e testada** (`canal/listar.py`, `canal/baixar.py`, `remoto/novo.py`,
+`rotas/canal.py`; testes em `test_remoto_novo.py`). Como ficou:
+
+* **No celular:** "✚ Novo projeto de um vídeo do canal" (na lista de projetos) abre `#/canal`: as opções salvas com
+  que o PC vai processar (`config.padroes`: vídeo longo, Shorts, qualidade, zoom, tratamento, pausas de revisão…) e os
+  vídeos da aba "Vídeos" do Studio (os ~30 mais recentes; título, data, duração, visibilidade e "✔ Já é um projeto").
+  Tocar num vídeo → "⬇ Baixar e processar no PC". O celular mostra o andamento e abre o projeto; o aviso chega se a
+  pessoa saiu ("Baixado; o processamento começou no PC").
+* **No PC** (`NovosProjetos`, uma tarefa por vez, recusada com o PC já processando): baixa pelo "Opções → Baixar" para
+  a pasta de entrada (`Spurgeon\Downloads`; se o arquivo já está lá, não baixa de novo) → cria o projeto com o
+  **título e a data de publicação do canal** (S4) e as opções salvas → grava `_work/origem_youtube.json` (id, título,
+  data) → confere o ambiente (`executar_preflight`, como a janela) → processa pela fila (`--aprovar` não; as pausas de
+  revisão são as das opções). A postagem passa a vincular o sermão pelo título gravado na origem.
+* **"▶ Processar (continua de onde parou)"** na tela do projeto, para um projeto que não começou, parou com erro ou foi
+  cancelado (não aparece concluído nem esperando revisão). Exige o vídeo original no PC.
+* **Trava do navegador:** o perfil da automação só abre uma vez; listar, baixar e postar esperam a vez
+  (`canal/navegador._NAVEGADOR`).
+* **Prova real (sem processar):** listados 30 vídeos do canal (os projetos 09 e 08 reconhecidos pelo nome); o sermão 10
+  ("Quando os povos aprendem a andar nos caminhos do Senhor", 17/11) foi baixado pelo Studio (506 MB, 1280×720 H.264,
+  1h08min54s) e virou o projeto `2026-11-17_10._Quando_os_povos…`, com a origem gravada. O processamento **não**
+  começou (a escolha de gastar as horas de CPU é do autor: um toque em "Processar").
+* Escolhas feitas sem consulta: (a) só a primeira página da lista do Studio (o sermão novo está nela); (b) o nome do
+  arquivo baixado segue o das pastas de projeto (sublinhados no lugar dos espaços); (c) o começo e o fim do vídeo não
+  são pedidos (o processamento usa o vídeo inteiro, como o padrão da janela).
 
 ## 7. Armadilhas conhecidas
 

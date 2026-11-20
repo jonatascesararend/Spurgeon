@@ -182,11 +182,12 @@ async function telaProjetos() {
   cabecalho("Studio Spurgeon", "Projetos no PC");
   const desenhar = async () => {
     const lista = await api("/api/projetos");
+    const novo = h("a", { class: "botao", href: "#/canal" }, "✚ Novo projeto de um vídeo do canal");
     if (!lista.length) {
-      encher(tela, h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
+      encher(tela, novo, h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
       return;
     }
-    encher(tela, ...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
+    encher(tela, novo, ...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
       h("div", { class: "nome" }, p.nome),
       h("div", { class: "meta" }, `${dataBr(p.data)} · ${p.detalhes}`),
       h("div", { class: "chips" }, h("span", { class: `chip ${classeDaSituacao(p.situacao)}` }, p.situacao)),
@@ -279,6 +280,14 @@ function acoesDoProjeto(id, a, atualizar) {
         } }, "Cancelar"))));
   } else if (a.fila && a.fila.ultimo_resultado === "erro") {
     itens.push(h("div", { class: "cartao aviso-bloco" }, `O último processamento parou com erro: ${a.fila.ultimo_erro || "veja o log"}.`));
+  }
+  if (!fila && !a.em_andamento && !revisao && !/conclu/i.test(a.situacao)) {
+    itens.push(h("button", { class: "botao", onclick: async (ev) => {
+      if (!confirm("Processar este projeto no PC (continua de onde parou, com as opções dele)?")) return;
+      ev.currentTarget.disabled = true;
+      try { await post(`/api/projetos/${enc(id)}/processar`); avisar("Processamento iniciado no PC."); await atualizar(); }
+      catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+    } }, "▶ Processar (continua de onde parou)"));
   }
   if (!fila && !a.em_andamento && !revisao && a.a_renderizar > 0) {
     itens.push(h("button", { class: "botao", onclick: async (ev) => {
@@ -884,6 +893,65 @@ async function telaLivre(id) {
   if (dados.criacao && dados.criacao.rodando) acompanhar(); else atualizarTrecho();
 }
 
+// --- começar pelo celular (Fase R5) ---------------------------------------------------------
+
+async function telaCanal() {
+  sairDoProjeto();
+  cabecalho("Novo projeto", "Vídeos do canal", "");
+  const lista = h("div");
+  const topo = h("div");
+  const tarefaEl = h("div");
+  const carregar = async (atualizar) => {
+    encher(lista, h("div", { class: "vazio-lista" }, "Abrindo o YouTube Studio no PC (uns 15 segundos)…"));
+    const r = await api(`/api/canal/videos${atualizar ? "?atualizar=1" : ""}`);
+    encher(topo,
+      h("div", { class: "bloco" }, h("h3", {}, "O PC vai processar com as opções salvas"),
+        h("div", { class: "chips" }, ...r.opcoes.map((o) => h("span", { class: "chip" }, o)))),
+      r.ocupado ? h("div", { class: "bloco aviso-bloco" }, r.ocupado) : null,
+      h("button", { class: "botao secundario", onclick: () => carregar(true) }, "↻ Atualizar a lista do canal"));
+    encher(lista, ...r.videos.map((v) => {
+      const chips = [h("span", { class: "chip" }, duracao(v.duracao_s)), h("span", { class: "chip" }, v.visibilidade || v.situacao)];
+      if (v.projeto) chips.push(h("span", { class: "chip ok" }, "✔ Já é um projeto"));
+      return h("button", { class: "cartao", onclick: () => escolherVideo(v) },
+        h("div", { class: "nome" }, v.titulo),
+        h("div", { class: "meta" }, dataBr(v.publicado)),
+        h("div", { class: "chips" }, ...chips));
+    }));
+    if (r.tarefa && r.tarefa.rodando) acompanhar();
+  };
+  const acompanhar = async () => {
+    for (;;) {
+      let t;
+      try { t = await api("/api/canal/tarefa"); } catch (_) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      if (!t) return;
+      encher(tarefaEl, h("div", { class: `cartao ${t.erro ? "aviso-bloco" : "destaque"}` },
+        h("div", { class: "nome" }, t.titulo), h("p", { class: "nota" }, t.erro ? `Não deu: ${t.erro}` : t.texto)));
+      if (!t.rodando) {
+        if (!t.erro && t.projeto) { avisar(t.texto); location.hash = `#/p/${enc(t.projeto)}`; }
+        return;
+      }
+      if (location.hash !== "#/canal") return; // saiu da tela: o aviso chega
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  };
+  const escolherVideo = async (v) => {
+    if (v.projeto) {
+      const ir = await escolher(v.titulo, [["abrir", "Abrir o projeto que já existe"]]);
+      if (ir === "abrir") location.hash = `#/p/${enc(v.projeto)}`;
+      return;
+    }
+    const ok = await escolher(v.titulo, [["comecar", "⬇ Baixar e processar no PC", "botao"]]);
+    if (ok !== "comecar") return;
+    try {
+      await post("/api/canal/novo", { id: v.id });
+      window.scrollTo(0, 0);
+      acompanhar();
+    } catch (e) { avisar(e.message); }
+  };
+  encher(tela, tarefaEl, topo, lista);
+  try { await carregar(false); } catch (e) { encher(lista, h("div", { class: "vazio-lista" }, e.message)); }
+}
+
 // --- roteador -------------------------------------------------------------------------------
 
 async function rotear() {
@@ -892,7 +960,8 @@ async function rotear() {
   window.scrollTo(0, 0);
   const partes = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   try {
-    if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
+    if (partes[0] === "canal") await telaCanal();
+    else if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
     else if (partes[0] === "p" && partes[1] && partes[2] === "aprovar") await telaAprovar(partes[1]);
     else if (partes[0] === "p" && partes[1] && partes[2] === "livre") await telaLivre(partes[1]);
     else if (partes[0] === "p" && partes[1]) await telaProjeto(partes[1]);

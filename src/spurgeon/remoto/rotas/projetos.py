@@ -96,7 +96,22 @@ def rotas(ctx: Contexto) -> list[Route]:
             raise HTTPException(409, str(erro)) from erro
         return JSONResponse({"ok": True, "shorts": len(faltam), "fila": ctx.fila.estado()})
 
+    def processar(request: Request) -> JSONResponse:
+        """Começa (ou continua de onde parou) o processamento do projeto, com as opções dele."""
+        pastas = _pastas(request)
+        andamento = dados.andamento(pastas)
+        if andamento["esperando_revisao"]:
+            raise HTTPException(409, "O projeto está esperando a sua revisão: aprove para seguir.")
+        if dados.video_original(pastas) is None:
+            raise HTTPException(409, "O vídeo original deste projeto não está mais no PC.")
+        try:
+            ctx.fila.iniciar(pastas)
+        except FilaOcupada as erro:
+            raise HTTPException(409, str(erro)) from erro
+        return JSONResponse({"ok": True, "fila": ctx.fila.estado()})
+
     return [
+        Route("/api/projetos/{projeto}/processar", processar, methods=["POST"]),
         Route("/api/projetos/{projeto}/aprovar", aprovar, methods=["POST"]),
         Route("/api/projetos/{projeto}/renderizar", renderizar, methods=["POST"]),
         Route("/api/projetos", lista),

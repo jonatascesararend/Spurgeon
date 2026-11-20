@@ -30,6 +30,8 @@ canal "Revendo Meus Conceitos" antes de agir); o vídeo relacionado vai no passo
 edição), "Programar" pode pedir "Ok" e um
 envio que para vira rascunho a retomar (`rascunho=True`). Nunca poste no canal sem o autor pedir: testes trocam o navegador
 por funções de mentira (`remoto/postagem.Postagens(postar=…)`).
+Começar pelo celular (`remoto/novo.py`): baixa pelo Studio, cria o projeto com o título e a data do canal e grava
+`_work/origem_youtube.json`; o navegador da automação abre um por vez (`canal/navegador._NAVEGADOR`).
 
 ## Comandos
 

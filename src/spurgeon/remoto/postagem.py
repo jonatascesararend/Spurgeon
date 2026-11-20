@@ -52,7 +52,12 @@ def do_youtube(pastas: PastasProjeto, id_do_corte: int) -> Resultado | None:
 
 
 def sermao_do_projeto(pastas: PastasProjeto) -> str:
-    """O título do sermão (o nome do projeto), que é como o vídeo completo se chama no canal."""
+    """O título do vídeo completo no canal: o que o projeto guardou ao ser criado pelo celular
+    (`origem_youtube.json`), senão o nome do projeto (que costuma ser o mesmo título)."""
+    from spurgeon.remoto.novo import ler_origem
+
+    if titulo := ler_origem(pastas).get("titulo"):
+        return str(titulo)
     lido = ler_nome_e_data(pastas.raiz)
     return lido[0] if lido else pastas.raiz.name
 
