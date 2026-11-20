@@ -26,7 +26,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
-from tkinter import BooleanVar, StringVar, TclError
+from tkinter import BooleanVar, StringVar, TclError, filedialog
 
 import customtkinter as ctk
 
@@ -104,6 +104,7 @@ from spurgeon.shorts.etapas import (
     gravar_cortes,
     nome_do_sermao,
 )
+from spurgeon.shorts.exportar import nome_do_arquivo_do_sermao, texto_da_legenda_do_sermao
 from spurgeon.shorts.livre import ContextoDaIA, preparar_cliente
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS
 from spurgeon.shorts.marcas import Detectado, categoria_de_cada_frase, trechos_detectados
@@ -879,6 +880,16 @@ class EditorDeCortes(ctk.CTkFrame):
             command=self.abrir_dicionario,
         )
         botao_dicionario.pack(side="left")
+        self._botao_exportar_legenda = ctk.CTkButton(
+            botoes, text="Exportar a legenda do sermão…", width=200,
+            fg_color=("gray70", "gray30"), command=self._exportar_legenda,
+        )  # fmt: skip
+        self._botao_exportar_legenda.pack(side="left", padx=(10, 0))
+        dica(
+            self._botao_exportar_legenda,
+            "Salva a legenda do sermão inteiro num arquivo de texto, uma frase por linha, com o "
+            "tempo de cada frase no vídeo original (o mesmo do YouTube).",
+        )
         dica(
             botao_dicionario,
             "Abre o dicionário personalizado: os termos que você guardou como certos. Dá para "
@@ -2370,6 +2381,41 @@ class EditorDeCortes(ctk.CTkFrame):
             return "" if " ".join(texto.split()) == " ".join(corte.texto.split()) else texto.strip()
         return legenda_corrigida(self._palavras, corte, texto)
 
+    def texto_da_legenda_exportada(self) -> tuple[str, str] | None:
+        """O nome sugerido e o texto do arquivo da legenda do sermão inteiro (None sem transcrição).
+
+        É a transcrição inteira (não só a janela do vídeo), com os tempos do vídeo original."""
+        if not self._pastas.transcricao.exists():
+            return None
+        transcricao = Transcricao.carregar(self._pastas.transcricao)
+        sermao = nome_do_sermao(self._pastas.raiz)
+        texto = texto_da_legenda_do_sermao(
+            transcricao.palavras, sermao=sermao, duracao_s=transcricao.duracao_s
+        )
+        return nome_do_arquivo_do_sermao(sermao), texto
+
+    def _exportar_legenda(self) -> None:
+        """Pergunta onde salvar e grava a legenda do sermão inteiro num arquivo de texto."""
+        pronto = self.texto_da_legenda_exportada()
+        if pronto is None:
+            return
+        nome, texto = pronto
+        pasta = self._pastas.raiz
+        caminho = filedialog.asksaveasfilename(
+            parent=self.winfo_toplevel(), title="Exportar a legenda", initialdir=str(pasta),
+            initialfile=nome, defaultextension=".txt", filetypes=[("Texto", "*.txt")],
+        )  # fmt: skip
+        if not caminho:
+            return
+        try:
+            Path(caminho).write_bytes(texto.encode("utf-8"))
+        except OSError as erro:
+            dialogos.erro(
+                self.winfo_toplevel(), "Exportar a legenda", f"Não deu para salvar: {erro}"
+            )
+            return
+        self._rotulo_ajuste.configure(text=f"Legenda exportada: {Path(caminho).name}")
+
     def _reorganizar_legenda(self) -> None:
         """Refaz as quebras de linha como o vídeo vai mostrar, sem mexer nas palavras.
 
@@ -2957,6 +3003,17 @@ class EditorDeCortes(ctk.CTkFrame):
                 "desmarque o corte.",
             )
             return False
+        self._gravar_no_disco()
+        return True
+
+    def salvar_em_silencio(self) -> None:
+        """Grava o que está em edição sem perguntar nada: o celular tomou o projeto (controle
+        remoto, Remoto.md R8). Corte sem título, acima do limite ou nenhum marcado ficam como
+        estão, como trabalho em andamento (o celular continua de onde o PC parou)."""
+        self._guardar_detalhe()
+        self._gravar_no_disco()
+
+    def _gravar_no_disco(self) -> None:
         usados: set[str] = set()
         for corte in self._cortes:
             if corte.titulo != self._titulo_do_nome.get(corte.id, corte.titulo):
@@ -2974,7 +3031,6 @@ class EditorDeCortes(ctk.CTkFrame):
         if self._atual is not None and (arquivos.movidos or arquivos.falhas):
             self._mostrar_postado(self._cortes[self._atual], arquivos.falhas)
         self._atualizar_resumo()
-        return True
 
     # --- processamento rodando ----------------------------------------------------------------
     # Durante um processamento (a renderização) o editor continua à mão. O que ele NÃO faz agora é

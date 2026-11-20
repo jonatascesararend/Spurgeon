@@ -1,6 +1,6 @@
 [project]
 name = "spurgeon"
-version = "1.9.0"
+version = "2.0.0"
 description = "Studio Spurgeon: cortes e otimização de vídeos de sermões, aulas e Shorts"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -44,6 +44,14 @@ ai = [
     "pandas>=2.2",
     "numpy>=1.26",
 ]
+# Controle remoto pelo celular (branch particular `controle-remoto`; veja Remoto.md).
+remoto = [
+    "starlette>=1.0",
+    "uvicorn>=0.30",
+    "http-ece>=1.2",  # Web Push: cifra o aviso (aes128gcm) para o navegador do celular
+    "cryptography>=42",
+    "playwright>=1.50",  # canal/: o YouTube Studio pelo Chrome instalado (perfil da automação)
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -54,6 +62,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "pre-commit>=3.8",
+    "httpx>=0.27",  # cliente de teste do Starlette (servidor do controle remoto)
 ]
 
 [project.scripts]

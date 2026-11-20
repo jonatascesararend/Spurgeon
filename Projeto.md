@@ -15,6 +15,9 @@
 > | 1.8 | Título que renomeia o arquivo, "agendado para" (com calendário, relógio e as pastas `agendados/` e `postados/`) e a aba **Integrações** para postar nas redes |
 > | 1.8.1 | Studio Shorts à mão durante a renderização, selos de postado/agendado com filtro e "fechar ao terminar" |
 > | 1.9 | Os Shorts cortados do vídeo longo já tratado, o ícone do programa e a lista de projetos ao abrir |
+> | 2.0 | **Controle remoto pelo celular** (opcional): ver, editar, aprovar, renderizar, Shorts livre, postar no YouTube pelo navegador, começar projetos do canal; e "Exportar a legenda do sermão" no Studio |
+>
+> **Controle remoto** (extra opcional `remoto`): decisões, estrutura e fases no [Remoto.md](Remoto.md).
 
 ---
 
@@ -1215,3 +1218,28 @@ reconstruir o de um vídeo longo antigo); o som do Short sai do longo (AAC) e n�
 continua indo para o Studio e só a lista da abertura fica no Processamento; a lista mostra no máximo 60 projetos; (85) a identidade
 do aplicativo é `StudioSpurgeon.App` (os atalhos criados pelo instalador não a levam, então um atalho fixado na barra de tarefas
 pode aparecer como um botão separado do da janela aberta).
+
+### Rodada 2.0 (2026-11-20): o controle remoto pelo celular
+
+Nasceu no branch `controle-remoto` como projeto particular do autor e veio para a `main` inteiro, como recurso opcional.
+As decisões (R1 a R19), a estrutura e o estado de cada fase estão no [Remoto.md](Remoto.md); aqui fica só o resumo.
+
+86. **Servidor e app do celular** (`remoto/`, extra `remoto`): `spurgeon remoto` sobe um servidor Starlette só em
+    `127.0.0.1:18765`, publicado na rede privada pelo `tailscale serve` (HTTPS); só entra a conta autorizada (cabeçalho
+    `Tailscale-User-Login`). O app é uma PWA sem build (`remoto/web/`), instalável na tela inicial do Android, com Web
+    Push próprio (VAPID, sem Firebase): avisa render pronto, Shorts prontos, revisão esperando, postagem feita.
+    Pode abrir com o Windows (`spurgeon remoto configurar --inicializacao`), dormir e ser desligado pelo celular.
+87. **Editar pelo celular** (`remoto/edicao.py`, `remoto/sessao.py`): legenda corrigida frase por frase dentro da audição
+    (o áudio do Short com a palavra falada acesa, ~1 s para montar, sem renderizar), início e fim com marca-texto e
+    borracha sobre o texto (600 palavras de cada lado + "Mostrar mais"), marcar/desmarcar, já postado. O celular tem
+    prioridade: a janela do PC salva sozinha e trava o Studio enquanto ele edita (trava por arquivo `_work/celular.json`).
+88. **Aprovar, processar e renderizar pelo celular** (`remoto/fila.py`): um processamento por vez no PC; as revisões
+    humanas do pipeline podem ser aprovadas no celular; "Renderizar" só os Shorts novos ou mudados.
+89. **Shorts livre no celular** (`remoto/livre.py`): o sermão inteiro com as categorias detectadas, busca por palavras e
+    por tema, e a criação do Short pela IA do PC.
+90. **YouTube pelo navegador, sem a API** (`canal/`): Playwright num perfil próprio do Chrome. Lista os vídeos do canal,
+    baixa o sermão pelo "Baixar" do Studio (720p) e cria o projeto com a data e o título do canal
+    (`_work/origem_youtube.json`); posta o Short (título, descrição, hashtags, programar, vídeo relacionado = o sermão no
+    passo "Elementos do vídeo"). Confere o canal pelo nome antes de agir; o nome fica só no `remoto.json` do PC.
+91. **Exportar a legenda do sermão** (`shorts/exportar.py`): o sermão inteiro, uma frase por linha com o tempo do vídeo
+    original, pelo celular (tela do projeto) e pelo Studio do PC ("Exportar a legenda do sermão…", ao lado de "Dicionário…").

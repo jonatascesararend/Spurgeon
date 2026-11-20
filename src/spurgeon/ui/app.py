@@ -7,6 +7,7 @@ import logging
 import os
 import queue
 import threading
+import time
 import tkinter
 from collections.abc import Callable
 from dataclasses import replace
@@ -60,6 +61,8 @@ from spurgeon.publicacao.agenda import criar_plataformas
 from spurgeon.publicacao.cofre import Cofre
 from spurgeon.publicacao.fila import projetos_com_fila, rodar_fila
 from spurgeon.publicacao.modelo import ERRO
+from spurgeon.remoto import sessao as sessao_do_celular  # controle remoto
+from spurgeon.remoto.fila import trabalhadores_rodando
 from spurgeon.render.shorts import assinatura_visual
 from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.ui import dialogos, dicas, icone
@@ -194,6 +197,9 @@ class JanelaPrincipal(ctk.CTk):
         self._etapa_atual: str | None = None  # a última etapa que começou nesta execução
         self._motivo_do_studio_antes: str | None = None  # por que o Studio estava travado antes
         self._fechamento_agendado: str | None = None  # o `after` do "fechar ao terminar"
+        #: controle remoto (Remoto.md, R8): o celular está com o projeto aberto
+        self._celular_com_o_projeto = False
+        self._janela_anunciada_em = 0.0
 
         self.title("Studio Spurgeon")
         self._ajustar_tamanho()
@@ -454,6 +460,7 @@ class JanelaPrincipal(ctk.CTk):
             self._ciclos += 1
             if self._ciclos % _CICLOS_POR_SEGUNDO == 0:
                 self._atualizar_tempo()
+                self._conferir_o_celular()
                 self._atualizar_aba_studio()
         except Exception:
             logging.exception("Falha ao tratar eventos do processamento")
@@ -782,7 +789,75 @@ class JanelaPrincipal(ctk.CTk):
         self.config_app.ultimo_projeto = str(pasta)
         self._salvar_config("o último projeto")
 
+    def _conferir_o_celular(self) -> None:
+        """Controle remoto (Remoto.md R8 e S10), uma vez por segundo.
+
+        Anuncia ao servidor que a janela está aberta e com qual projeto; se o celular tomou o
+        projeto aberto, salva o que o Studio tinha em edição (sem perguntar), dá o recibo e o
+        Studio fica travado (`_motivo_do_bloqueio`); e, se a revisão que esta janela esperava foi
+        aprovada pelo celular, volta ao ocioso (o processamento segue pelo servidor).
+        """
+        pastas = self._pastas
+        agora = time.monotonic()
+        try:
+            if agora - self._janela_anunciada_em >= 2.0:
+                self._janela_anunciada_em = agora
+                sessao_do_celular.anunciar_janela(pastas.raiz if pastas else None)
+            trava = sessao_do_celular.trava(pastas) if pastas is not None else None
+        except OSError:
+            return
+        if trava is not None:
+            if sessao_do_celular.recibo(pastas) != trava.get("sessao"):
+                salvou = self.studio.mudou
+                if salvou:
+                    self.studio.salvar_em_silencio()
+                with contextlib.suppress(OSError):
+                    sessao_do_celular.dar_recibo(pastas, str(trava.get("sessao", "")))
+                self.execucao.adicionar_log(
+                    "O celular abriu este projeto: o Studio fica travado enquanto ele edita"
+                    + (" (o que estava aberto aqui foi salvo)." if salvou else ".")
+                )
+            self._celular_com_o_projeto = True
+        elif self._celular_com_o_projeto:
+            self._celular_com_o_projeto = False
+            self.execucao.adicionar_log("O celular saiu do projeto: o Studio voltou a ficar à mão.")
+        if self.execucao.estado == EstadoUI.REVISAO and self._revisao and pastas is not None:
+            try:
+                estado = carregar_estado(pastas.raiz)
+            except (OSError, ValueError, ErroSpurgeon):
+                return
+            registro = estado.etapa(self._revisao["id"]) if estado is not None else None
+            if registro is not None and registro.status != StatusEtapa.AGUARDANDO_REVISAO:
+                self._revisao = None
+                self.execucao.adicionar_log(
+                    "A revisão foi aprovada pelo celular: o processamento segue no PC, pelo "
+                    "controle remoto (acompanhe pelo celular)."
+                )
+                self._voltar_ao_ocioso()
+
+    def _impedimento_do_controle_remoto(self) -> str:
+        """Por que esta janela não deve começar um processamento agora ("" = pode)."""
+        if self._pastas is not None and sessao_do_celular.ativa(self._pastas):
+            return (
+                "O celular está editando este projeto. Saia do projeto no celular e tente de novo."
+            )
+        try:
+            outros = trabalhadores_rodando()
+        except Exception:  # sem como saber (permissão do Windows): não impede
+            return ""
+        if outros:
+            return (
+                "O PC já está processando um projeto (pedido pelo celular). Espere terminar: "
+                "o andamento aparece no celular."
+            )
+        return ""
+
     def _iniciar_execucao(self, aprovar: str | None = None) -> None:
+        impedimento = self._impedimento_do_controle_remoto()
+        if impedimento:
+            dialogos.aviso(self, "Processamento", impedimento)
+            self._voltar_ao_ocioso()
+            return
         self._recebeu_fim = False
         self._estimador_iniciado = False
         self._revisao = None
@@ -936,6 +1011,11 @@ class JanelaPrincipal(ctk.CTk):
         return _AVISO_DA_RENDERIZACAO if self.execucao.estado in _ESTADOS_OCUPADOS else None
 
     def _motivo_do_bloqueio(self) -> str | None:
+        if self._celular_com_o_projeto:
+            return (
+                "O celular está editando este projeto (controle remoto). O que estava aberto aqui "
+                "foi salvo; o Studio volta a ficar à mão quando o celular sair do projeto."
+            )
         estado = self.execucao.estado
         if estado in _ESTADOS_OCUPADOS and not self._renderizando():
             return (
@@ -1596,6 +1676,8 @@ class JanelaPrincipal(ctk.CTk):
             ):
                 return
             self.executor.encerrar()
+        with contextlib.suppress(OSError):
+            sessao_do_celular.fechar_janela()
         self.fonte.limpar()
         self.destroy()
 

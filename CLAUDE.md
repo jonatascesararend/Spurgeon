@@ -8,6 +8,32 @@ agendou). As redes (YouTube, Meta, TikTok) só são usadas quando a pessoa pede.
 **Leia o [Projeto.md](Projeto.md) antes de mexer:** ele tem as decisões, a ordem do pipeline
 e o roadmap por fase. Se uma decisão mudar, atualize o Projeto.md junto com o código.
 
+**Controle remoto (opcional, extra `remoto`, na `main` desde a v2.0.0):** controle pelo celular (Tailscale + PWA servida
+pelo PC, Web Push, Playwright no YouTube Studio, que também posta: sem a API do YouTube). As decisões (R1 a R19), as escolhas a confirmar (S1 a S10), a estrutura
+(`src/spurgeon/remoto/`, `src/spurgeon/canal/`, `render/proxy.py`) e as fases R0 a R5 estão no [Remoto.md](Remoto.md):
+leia antes de mexer nele e atualize-o junto com o código. Código novo fica nesses pacotes; a interface só pode importar
+`remoto/sessao.py` e `remoto/fila.py` (sem o extra instalado o programa tem que abrir igual).
+Para usar: `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`; `uv run spurgeon remoto` sobe o
+servidor (porta 18765, só em `127.0.0.1`, publicada pelo `tailscale serve`). O servidor NÃO importa a interface e só lê os
+projetos com as funções do núcleo (`remoto/dados.py`); a porta é ligada com `SO_EXCLUSIVEADDRUSE` (no Windows, sem isso
+outro programa divide a porta em silêncio). Testes do servidor pelo `TestClient` do Starlette, com o cabeçalho
+`Tailscale-User-Login`; Web Push pelo `TransporteFalso`.
+A janela do PC fala com o celular por arquivos (`remoto/sessao.py`): a cada segundo
+`JanelaPrincipal._conferir_o_celular` vê a trava `_work/celular.json` do projeto aberto, salva o Studio SEM perguntar
+(`EditorDeCortes.salvar_em_silencio`), dá o recibo e trava o Studio; também solta a revisão que o celular aprovou. Antes de
+processar, a janela e o servidor procuram outro `spurgeon.core.trabalhador` rodando (um por vez no PC, `remoto/fila.py`).
+App do celular (`remoto/web/app.js`, sem build): monte o conteúdo com `encher(el, ...)` (ignora null; o `replaceChildren`
+escreveria "null"); confira com `node --check`. Shorts livre no servidor: `remoto/livre.py` (índices = palavras da janela do
+vídeo, como no PC; a criação com a IA roda numa thread e segura a trava do celular até gravar o corte).
+Postar no YouTube (sem API): `canal/postar.py` pelo Chrome com o perfil da automação (`canal/navegador.py` confere o
+canal antes de agir: o nome fica só no `remoto.json` do PC, `spurgeon remoto configurar --canal`,
+nunca no repositório); o vídeo relacionado vai no passo "Elementos do vídeo" (plano B: a página de
+edição), "Programar" pode pedir "Ok" e um
+envio que para vira rascunho a retomar (`rascunho=True`). Nunca poste no canal sem o autor pedir: testes trocam o navegador
+por funções de mentira (`remoto/postagem.Postagens(postar=…)`).
+Começar pelo celular (`remoto/novo.py`): baixa pelo Studio, cria o projeto com o título e a data do canal e grava
+`_work/origem_youtube.json`; o navegador da automação abre um por vez (`canal/navegador._NAVEGADOR`).
+
 ## Comandos
 
 ```
