@@ -28,10 +28,9 @@ from typing import Any
 from spurgeon.core.estado import carregar_estado
 from spurgeon.core.ffmpeg import executar_ffmpeg
 from spurgeon.core.projeto import PastasProjeto
-from spurgeon.core.tempo import MapaTempo, Trecho
+from spurgeon.core.tempo import Trecho
 from spurgeon.remoto.dados import ShortNoDisco, shorts_no_disco
 from spurgeon.render import filtros as f
-from spurgeon.render.legenda import PalavraDaLegenda, agrupar_em_frases, palavras_do_short
 from spurgeon.render.shorts import (
     SITUACAO_PRONTO,
     ler_registro,
@@ -39,8 +38,7 @@ from spurgeon.render.shorts import (
     situacao_do_short,
 )
 from spurgeon.shorts.dados import Corte
-from spurgeon.shorts.edicao import palavras_com_a_legenda
-from spurgeon.shorts.pausas import ha_o_que_cortar, remapear_palavras, trechos_mantidos
+from spurgeon.shorts.exportar import LegendaNoTempo, legenda_no_tempo_do_short
 from spurgeon.transcricao.formato import Palavra, Transcricao
 
 log = logging.getLogger(__name__)
@@ -65,27 +63,14 @@ class FonteDoAudio:
     aviso: str = ""
 
 
-@dataclass(frozen=True)
-class LegendaDoShort:
-    duracao: float
-    trechos: list[Trecho]  # em segundos desde o início do corte, no tempo original
-    frases: list[list[PalavraDaLegenda]]  # tempos desde o começo do Short pronto
+#: a legenda no tempo do Short mora no núcleo (`shorts/exportar.py`): o "Exportar a legenda" do
+#: Studio do PC usa a mesma conta
+LegendaDoShort = LegendaNoTempo
+legenda_do_short = legenda_no_tempo_do_short
 
 
 def carregar_palavras(pastas: PastasProjeto) -> list[Palavra]:
     return Transcricao.carregar(pastas.transcricao).palavras
-
-
-def legenda_do_short(palavras: list[Palavra], corte: Corte) -> LegendaDoShort:
-    """A legenda que o Short teria, no tempo do Short pronto, e os trechos que o som leva."""
-    faladas = palavras_do_short(palavras_com_a_legenda(palavras, corte), corte.inicio, corte.fim)
-    mantidos = trechos_mantidos(palavras, corte)
-    duracao = corte.janela_s
-    if ha_o_que_cortar(mantidos, corte.janela_s):
-        mapa = MapaTempo(mantidos)
-        faladas = remapear_palavras(faladas, mapa)
-        duracao = mapa.duracao_editada
-    return LegendaDoShort(duracao, mantidos, agrupar_em_frases(faladas))
 
 
 def legenda_para_json(legenda: LegendaDoShort) -> dict[str, Any]:

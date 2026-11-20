@@ -317,6 +317,16 @@ aberta (projeto, Short, aprovação, Shorts livre ou a lista do canal) e, aberto
 página inicial), volta a ela (`restaurarUltimaTela`, antes do primeiro `rotear`). Um aviso com link abre a tela do aviso.
 Se o projeto ou o Short lembrado não existe mais (404), o app esquece e mostra a lista de projetos.
 
+**Mais texto no início e fim, e exportar a legenda (2026-11-20).** (a) O editor "Início, fim e borracha" recebe **600
+palavras de cada lado** do corte (uns 5 minutos; `edicao.PALAVRAS_DE_CONTEXTO`), e "⬆/⬇ Mostrar mais texto" pede mais
+1200 ao PC (`…/edicao?antes=&depois=`, até 6000) sem perder o rascunho nem refazer o áudio. (b) **Exportar a legenda**:
+um arquivo de texto com um cabeçalho (título, sermão, trecho do sermão e duração) e uma frase por linha com o início e
+o fim **no Short pronto** (`shorts/exportar.py`: `legenda_no_tempo_do_short`, o mesmo cálculo da audição, que passou para
+o núcleo; `texto_da_legenda`; `nome_do_arquivo` = `legenda_short_NN_<slug>.txt`). No celular: "⬇ Exportar a legenda" na
+tela do Short (`GET …/legenda.txt`, baixa o arquivo). No Studio do PC: "Exportar a legenda…" ao lado de "Legenda do
+Short" (o que está na caixa, mesmo sem salvar; pergunta onde salvar, começando em `shorts_gerados/`). Esse botão do PC
+está só neste branch: leve-o para a `main` se quiser que chegue a quem instala.
+
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 
 **Estado da R3 (2026-11-20): feita e testada** (`tests/test_remoto_livre.py`; tela fotografada com o sermão 09 real, 8668

@@ -101,7 +101,8 @@ def test_para_editar_traz_a_legenda_em_blocos_e_as_palavras_em_volta(pastas):
     assert (ed["primeira"], ed["ultima"]) == (200, 279)
     assert "\n" in ed["legenda"] and ed["legenda"].split()[0] == "p200"
     fora = [w for w in ed["contexto"] if not w["dentro"]]
-    assert fora[0]["n"] == 200 - edicao.PALAVRAS_DE_CONTEXTO and fora[-1]["n"] == 279 + 40
+    assert fora[0]["n"] == max(0, 200 - edicao.PALAVRAS_DE_CONTEXTO)
+    assert fora[-1]["n"] == min(799, 279 + edicao.PALAVRAS_DE_CONTEXTO)
     assert not ed["corrigida"] and not ed["acima_do_limite"]
 
 

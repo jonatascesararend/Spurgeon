@@ -29,8 +29,10 @@ from spurgeon.shorts.edicao import (
 from spurgeon.shorts.etapas import gravar_campos_do_corte
 from spurgeon.transcricao.formato import Palavra, Transcricao
 
-#: palavras de fora mostradas antes do início e depois do fim, para escolher a ponta nova
-PALAVRAS_DE_CONTEXTO = 40
+#: palavras de fora mostradas antes do início e depois do fim, para escolher a ponta nova (uns 5
+#: minutos de sermão de cada lado: mais que um Short inteiro); o celular pode pedir mais
+PALAVRAS_DE_CONTEXTO = 600
+MAXIMO_DE_CONTEXTO = 6000
 _CAMPOS_DO_CORTE = ("inicio", "fim", "texto", "saltos", "editado", "legenda")
 
 
@@ -52,14 +54,19 @@ def _gravar(pastas: PastasProjeto, corte: Corte, *campos: str) -> None:
         raise CorteNaoEncontrado(corte.id)
 
 
-def para_editar(pastas: PastasProjeto, id_do_corte: int) -> dict[str, Any]:
+def para_editar(
+    pastas: PastasProjeto, id_do_corte: int, *, antes: int = PALAVRAS_DE_CONTEXTO,
+    depois: int = PALAVRAS_DE_CONTEXTO,
+) -> dict[str, Any]:  # fmt: skip
     """A legenda como o vídeo a mostra (blocos de até 2 linhas) e as palavras em volta do corte."""
     corte, palavras = _carregar(pastas, id_do_corte)
     dentro = indices_incluidos(palavras, corte)
     contexto: list[dict[str, Any]] = []
     if dentro:
-        de = max(0, dentro[0] - PALAVRAS_DE_CONTEXTO)
-        ate = min(len(palavras), dentro[-1] + PALAVRAS_DE_CONTEXTO + 1)
+        antes = max(0, min(antes, MAXIMO_DE_CONTEXTO))
+        depois = max(0, min(depois, MAXIMO_DE_CONTEXTO))
+        de = max(0, dentro[0] - antes)
+        ate = min(len(palavras), dentro[-1] + depois + 1)
         incluidos = set(dentro)
         contexto = [
             {
@@ -79,6 +86,8 @@ def para_editar(pastas: PastasProjeto, id_do_corte: int) -> dict[str, Any]:
         "ultima": dentro[-1] if dentro else None,
         "duracao": round(corte.duracao, 1),
         "minimo_s": DURACAO_MINIMA_S,
+        "tem_mais_antes": bool(contexto) and contexto[0]["n"] > 0,
+        "tem_mais_depois": bool(contexto) and contexto[-1]["n"] < len(palavras) - 1,
         "acima_do_limite": passa_do_limite(corte),
     }
 

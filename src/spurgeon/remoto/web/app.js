@@ -581,8 +581,11 @@ async function editorDaLegenda(painel, base, aoSalvar, aoFechar) {
  * até "Salvar alterações", trocar de ferramenta ou de aba, ou sair do Short. Devolve
  * `{ pendente(), salvar() }` para a tela do Short salvar sozinha nessas horas. */
 async function editorDasPontas(painel, base, aoSalvar, aoFechar) {
-  const ed = await api(`${base}/edicao`);
-  const porN = new Map(ed.contexto.map((w) => [w.n, w]));
+  // o texto em volta: ~600 palavras de cada lado (uns 5 minutos); "Mostrar mais" pede mais ao PC
+  // sem perder o rascunho (ele guarda as posições das palavras na transcrição, que não mudam)
+  let lados = { antes: 600, depois: 600 };
+  let ed = await api(`${base}/edicao`);
+  let porN = new Map(ed.contexto.map((w) => [w.n, w]));
   let original = new Set(ed.contexto.filter((w) => w.dentro).map((w) => w.n));
   let incl = new Set(original);
   let ferramenta = "seta"; // "seta", "borracha" (uma palavra) ou "trecho" (dois toques)
@@ -605,6 +608,16 @@ async function editorDasPontas(painel, base, aoSalvar, aoFechar) {
 
   const resumo = h("div");
   const texto = h("div", { class: "contexto-palavras" });
+  async function carregarMais(lado) {
+    const ancoraDaVista = lado === "antes" ? ed.contexto[0] : null;
+    lados = { ...lados, [lado]: lados[lado] + 1200 };
+    try {
+      ed = await api(`${base}/edicao?antes=${lados.antes}&depois=${lados.depois}`);
+    } catch (e) { avisar(e.message); return; }
+    porN = new Map(ed.contexto.map((w) => [w.n, w]));
+    pintar();
+    if (ancoraDaVista) { const el = texto.querySelector(`[data-n="${ancoraDaVista.n}"]`); if (el) el.scrollIntoView({ block: "start" }); }
+  }
   const ferramentas = h("div", { class: "segmentos" });
   const acoes = h("div");
 
@@ -638,16 +651,19 @@ async function editorDasPontas(painel, base, aoSalvar, aoFechar) {
       }[ferramenta]));
     encher(ferramentas, ...[["seta", "↔ Início e fim"], ["borracha", "✂ Borracha"], ["trecho", "✂ Trecho"]].map(([k, r]) =>
       h("button", { class: ferramenta === k ? "ativo" : "", onclick: () => { ferramenta = k; ancora = null; pintar(); } }, r)));
-    encher(texto, ...ed.contexto.flatMap((w) => {
+    encher(texto,
+      ed.tem_mais_antes ? h("button", { class: "botao-pequeno mais-texto", onclick: () => carregarMais("antes") }, "⬆ Mostrar mais texto antes") : null,
+      ...ed.contexto.flatMap((w) => {
       const dentroDoCorte = lista.length && w.n >= primeira && w.n <= ultima;
       const classe = incl.has(w.n) ? "dentro" : dentroDoCorte ? "cortada" : "fora";
       const pedacos = [];
       if (w.n === primeira) pedacos.push(h("span", { class: "marca-ponta", id: "marca-inicio" }, "▶"));
-      pedacos.push(h("span", { class: `palavra-ctx ${classe}${ancora === w.n ? " ancora" : ""}`, onclick: () => tocar(w) }, w.t));
+      pedacos.push(h("span", { class: `palavra-ctx ${classe}${ancora === w.n ? " ancora" : ""}`, "data-n": String(w.n), onclick: () => tocar(w) }, w.t));
       if (w.n === ultima) pedacos.push(h("span", { class: "marca-ponta" }, "◀"));
       pedacos.push(" ");
       return pedacos;
-    }));
+    }),
+      ed.tem_mais_depois ? h("button", { class: "botao-pequeno mais-texto", onclick: () => carregarMais("depois") }, "⬇ Mostrar mais texto depois") : null);
     const mudou = pendente();
     encher(acoes,
       mudou ? h("p", { class: "nota aviso-bloco" }, "Alterações ainda não salvas (o áudio é refeito ao salvar).") : null,
@@ -791,7 +807,8 @@ async function telaShort(id, corte) {
 
   const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
   const pintarInfo = () => encher(info, 
-    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s)),
+    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s),
+      h("a", { class: "botao secundario", href: `${base}/legenda.txt`, download: "" }, "⬇ Exportar a legenda (texto com os tempos)")),
     s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
     s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null);
   const pintarFerramentas = () => {
