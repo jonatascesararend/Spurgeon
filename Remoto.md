@@ -338,11 +338,15 @@ e `test_canal_postar.py`.
   linha própria, como o autor posta) → "Não é conteúdo para crianças" (`VIDEO_MADE_FOR_KIDS_NOT_MFK`) → `#next-button`
   ×3 → "Programar" (`#second-container-expand-button`, `#datepicker-trigger` com "20 de nov. de 2026",
   `#time-of-day-container input` com "18:30") ou "Público" → `#done-button` ("Programar"). O id sai do texto da janela
-  ("Link do vídeo"). Depois, na página de edição (`/video/<id>/edit`): `#linked-video-editor-link` → busca
-  `input#search-yours` com o título do sermão → o primeiro `ytcp-entity-card` → `ytcp-button#save`; e confere que a
-  visibilidade (`ytcp-video-metadata-visibility`) ficou "Programado" (ou "Público").
-* **Achados no primeiro envio** (viraram regra no código): (a) **a janela de envio não tem "Vídeo relacionado"**: só a
-  página de edição; (b) com a verificação de direitos ainda rodando, "Programar" abre o aviso "Ainda estamos verificando
+  ("Link do vídeo"). O **vídeo relacionado** vai no passo **"Elementos do vídeo"** da janela de envio, antes de programar
+  (indicação do autor, 2026-11-20; `relacionar_nos_elementos`): "Vídeo relacionado" → busca `input#search-yours` com o
+  título do sermão → o primeiro `ytcp-entity-card`. Se esse passo não mostrar o campo, o plano B é a página de edição
+  (`/video/<id>/edit`, `#linked-video-editor-link` → o mesmo seletor → `ytcp-button#save`), que foi o caminho usado na
+  primeira postagem. No fim confere que a visibilidade (`ytcp-video-metadata-visibility`) ficou "Programado" (ou
+  "Público").
+* **Achados no primeiro envio** (viraram regra no código): (a) na primeira postagem o campo não foi achado no passo
+  "Detalhes" e o vínculo foi feito na página de edição; **o autor indicou que ele fica em "Elementos do vídeo"**, e é
+  ali que a automação vincula agora (a confirmar na próxima postagem: a pausa `elementos` tira a foto); (b) com a verificação de direitos ainda rodando, "Programar" abre o aviso "Ainda estamos verificando
   seu conteúdo" e **só grava com "Ok"** (sem ele o Short continua rascunho); (c) um envio que para no meio deixa no canal
   um **rascunho privado**: `postar(..., rascunho=True)` o retoma pela lista ("Editar rascunho") em vez de mandar de novo,
   e o registro guarda `rascunho` para a próxima tentativa fazer isso sozinha; (d) não é preciso esperar a verificação

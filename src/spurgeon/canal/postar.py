@@ -2,10 +2,11 @@
 
 O caminho é o que a pessoa faria à mão no Studio: "Enviar vídeos" → o arquivo → título, descrição
 (com as hashtags numa linha própria, como o autor posta), "não é conteúdo para crianças" →
-"Próximo" até a visibilidade → "Programar" com data e hora (ou "Público" agora) → concluir. O id
-do Short sai do "Link do vídeo" que o Studio mostra no envio. Depois, na página de edição do Short
-(a janela de envio não tem esse campo), o **vídeo relacionado**: o sermão completo, procurado pelo
-título no seletor do próprio Studio, e "Salvar". Um envio que parou no meio fica no canal como
+"Próximo" → no passo **"Elementos do vídeo"**, o **vídeo relacionado** (o sermão completo,
+procurado pelo título no seletor do próprio Studio) → "Próximo" até a visibilidade → "Programar"
+com data e hora (ou "Público" agora) → concluir. O id do Short sai do "Link do vídeo" da janela.
+Se o passo "Elementos do vídeo" não mostrar o campo, o vínculo é feito depois na página de edição
+do Short (plano B, `vincular_relacionado`). Um envio que parou no meio fica no canal como
 rascunho privado: `postar(..., rascunho=True)` o retoma em vez de mandar o arquivo de novo.
 
 Os seletores ficam todos aqui. A página do Studio muda de tempos em tempos: cada passo tira uma
@@ -146,17 +147,9 @@ def _concluir(pg) -> None:
     raise FalhaNaPostagem("O Studio não fechou o envio depois de “Programar”.")
 
 
-def vincular_relacionado(
-    studio: Studio, video_id: str, busca: str, *, fotos: Path | None = None
-) -> str:
-    """Põe o vídeo do canal que casa com `busca` como "Vídeo relacionado" do Short `video_id` (na
-    página de edição: a janela de envio não tem esse campo) e salva. Devolve o título vinculado."""
-    pg = studio.pagina
-    pg.goto(f"{STUDIO}/video/{video_id}/edit", wait_until="domcontentloaded", timeout=60_000)
-    gatilho = pg.locator("#linked-video-editor-link")
-    gatilho.wait_for(timeout=60_000)
-    gatilho.scroll_into_view_if_needed()
-    gatilho.click()
+def _escolher_no_seletor(pg, busca: str) -> str:
+    """No seletor de vídeos do Studio (já aberto): busca `busca` nos vídeos do canal e escolhe o
+    primeiro. Devolve o título escolhido."""
     campo = pg.locator("ytcp-video-pick-dialog input#search-yours")
     campo.wait_for(timeout=30_000)
     campo.fill(busca)
@@ -168,6 +161,40 @@ def vincular_relacionado(
     titulo = cartoes.first.inner_text().strip().split("\n")[0]
     cartoes.first.click()
     pg.wait_for_timeout(1500)
+    return titulo
+
+
+def relacionar_nos_elementos(pg, busca: str) -> str:
+    """No passo "Elementos do vídeo" da janela de envio (antes de programar; foi o autor quem
+    indicou que o vídeo relacionado fica ali): abre o "Vídeo relacionado", escolhe o sermão e
+    confere. Devolve o título, ou "" se o passo não tem o campo (aí vale a página de edição)."""
+    janela = pg.locator("ytcp-uploads-dialog")
+    gatilho = janela.locator("#linked-video-editor-link")
+    if not gatilho.count():
+        gatilho = janela.get_by_text("Vídeo relacionado", exact=False)
+    if not gatilho.count() or not gatilho.first.is_visible():
+        return ""
+    gatilho.first.scroll_into_view_if_needed()
+    gatilho.first.click()
+    titulo = _escolher_no_seletor(pg, busca)
+    if titulo not in janela.inner_text():
+        raise FalhaNaPostagem("O Studio não mostrou o sermão como vídeo relacionado.")
+    return titulo
+
+
+def vincular_relacionado(
+    studio: Studio, video_id: str, busca: str, *, fotos: Path | None = None
+) -> str:
+    """Põe o vídeo do canal que casa com `busca` como "Vídeo relacionado" do Short `video_id` na
+    página de edição e salva: o plano B, quando o passo "Elementos do vídeo" não mostrou o campo.
+    Devolve o título vinculado."""
+    pg = studio.pagina
+    pg.goto(f"{STUDIO}/video/{video_id}/edit", wait_until="domcontentloaded", timeout=60_000)
+    gatilho = pg.locator("#linked-video-editor-link")
+    gatilho.wait_for(timeout=60_000)
+    gatilho.scroll_into_view_if_needed()
+    gatilho.click()
+    titulo = _escolher_no_seletor(pg, busca)
     if titulo not in gatilho.inner_text():
         raise FalhaNaPostagem("O Studio não mostrou o sermão como vídeo relacionado.")
     salvar = pg.locator("ytcp-button#save")
@@ -219,8 +246,18 @@ def postar(
         _foto(pg, fotos, "1_detalhes")
         pausa("detalhes")
 
+        passo = "elementos do vídeo"
+        pg.locator("ytcp-uploads-dialog #next-button").click()
+        pg.wait_for_timeout(2000)
+        relacionado = ""
+        if pedido.relacionado:
+            andamento("Vinculando o sermão como vídeo relacionado…")
+            relacionado = relacionar_nos_elementos(pg, pedido.relacionado)
+            _foto(pg, fotos, "2_elementos")
+            pausa("elementos")
+
         passo = "próximos passos"
-        for _ in range(3):
+        for _ in range(2):
             pg.locator("ytcp-uploads-dialog #next-button").click()
             pg.wait_for_timeout(1500)
 
@@ -262,10 +299,9 @@ def postar(
         _concluir(pg)
         _foto(pg, fotos, "3_concluido")
 
-        relacionado = ""
-        if pedido.relacionado:
+        if pedido.relacionado and not relacionado:  # plano B: a página de edição
             passo = "vídeo relacionado"
-            andamento("Vinculando o sermão como vídeo relacionado…")
+            andamento("Vinculando o sermão como vídeo relacionado (pela página de edição)…")
             relacionado = vincular_relacionado(studio, video_id, pedido.relacionado, fotos=fotos)
         passo = "conferir a visibilidade"
         visibilidade = visibilidade_na_edicao(studio, video_id)

@@ -26,7 +26,8 @@ App do celular (`remoto/web/app.js`, sem build): monte o conteúdo com `encher(e
 escreveria "null"); confira com `node --check`. Shorts livre no servidor: `remoto/livre.py` (índices = palavras da janela do
 vídeo, como no PC; a criação com a IA roda numa thread e segura a trava do celular até gravar o corte).
 Postar no YouTube (sem API): `canal/postar.py` pelo Chrome com o perfil da automação (`canal/navegador.py` confere o
-canal "Revendo Meus Conceitos" antes de agir); o vídeo relacionado só existe na página de edição, "Programar" pode pedir "Ok" e um
+canal "Revendo Meus Conceitos" antes de agir); o vídeo relacionado vai no passo "Elementos do vídeo" (plano B: a página de
+edição), "Programar" pode pedir "Ok" e um
 envio que para vira rascunho a retomar (`rascunho=True`). Nunca poste no canal sem o autor pedir: testes trocam o navegador
 por funções de mentira (`remoto/postagem.Postagens(postar=…)`).
 
