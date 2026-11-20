@@ -53,6 +53,7 @@ from spurgeon.core.projeto import (
     data_gravacao,
     descrever_projeto,
     ler_nome_e_data,
+    listar_projetos,
     nome_pasta_projeto,
 )
 from spurgeon.publicacao.agenda import criar_plataformas
@@ -61,12 +62,13 @@ from spurgeon.publicacao.fila import projetos_com_fila, rodar_fila
 from spurgeon.publicacao.modelo import ERRO
 from spurgeon.render.shorts import assinatura_visual
 from spurgeon.shorts.livre import ContextoDaIA
-from spurgeon.ui import dialogos, dicas
+from spurgeon.ui import dialogos, dicas, icone
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
 from spurgeon.ui.ajuda import dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.aviso_de_atualizacao import AvisoDeAtualizacao
 from spurgeon.ui.contato import AvisoDeContato, abrir_link
+from spurgeon.ui.escolha_de_projeto import escolher_projeto
 from spurgeon.ui.estimativa import (
     EstimadorTempo,
     estimar_render_s,
@@ -146,16 +148,19 @@ class JanelaPrincipal(ctk.CTk):
         config: ConfigApp | None = None,
         *,
         oferecer_tutorial: bool = False,
-        reabrir_ultimo: bool = False,
+        perguntar_projeto: bool = False,
         verificar_atualizacao: bool = False,
     ):
-        """`oferecer_tutorial`, `reabrir_ultimo` e `verificar_atualizacao` valem só na abertura de
-        verdade do programa (`executar`): ao abrir, reabre o último projeto, oferece o passo a
-        passo e pergunta ao GitHub se há versão nova (se a pessoa não desligou). Por padrão
-        (testes, janelas escondidas) nada disso acontece, e nenhum teste toca a internet."""
+        """`oferecer_tutorial`, `perguntar_projeto` e `verificar_atualizacao` valem só na abertura
+        de verdade do programa (`executar`): ao abrir, mostra a lista dos projetos que existem para
+        abrir um (na página de Processamento), oferece o passo a passo e pergunta ao GitHub se há
+        versão nova (se a pessoa não desligou). Por padrão (testes, janelas escondidas) nada disso
+        acontece, e nenhum teste toca a internet."""
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
+        icone.definir_identidade_do_app()  # antes da 1ª janela: a barra não usa o ícone do Python
         super().__init__()
+        icone.aplicar(self)  # o ícone do programa, no lugar do que o CustomTkinter poria
         self.config_app = config or carregar_config()
         self.config_app.pastas.garantir()
         self.executor = ExecutorProjeto()
@@ -198,7 +203,7 @@ class JanelaPrincipal(ctk.CTk):
         self.after(_INTERVALO_MS, self._ciclo)
         threading.Thread(target=self._detectar_hardware, daemon=True).start()
         self._listar_ollama()
-        self._agendar_abertura(oferecer_tutorial, reabrir_ultimo)
+        self._agendar_abertura(oferecer_tutorial, perguntar_projeto)
         if verificar_atualizacao and self.config_app.atualizacao_ao_abrir:
             self.after(_ATUALIZACAO_MS, self._verificar_atualizacao)
         if verificar_atualizacao:  # a abertura de verdade também anda a fila de postagens
@@ -760,7 +765,7 @@ class JanelaPrincipal(ctk.CTk):
         self.config_app.padroes = self._preferencias(config.padroes)
         self.config_app.pastas.projetos = config.pastas.projetos
         if projeto is not None:
-            self.config_app.ultimo_projeto = str(projeto)  # reaberto na próxima vez
+            self.config_app.ultimo_projeto = str(projeto)  # marcado na lista da próxima abertura
         self._salvar_config("as preferências")
 
     def _salvar_config(self, o_que: str) -> None:
@@ -771,7 +776,7 @@ class JanelaPrincipal(ctk.CTk):
             self.execucao.adicionar_log(f"Não foi possível salvar {o_que}: {erro}", logging.WARNING)
 
     def _lembrar_ultimo_projeto(self, pasta: Path) -> None:
-        """Guarda a pasta do projeto aberto para o programa reabri-la ao iniciar."""
+        """Guarda a pasta do projeto aberto para a lista da próxima abertura deixá-la marcada."""
         if self.config_app.ultimo_projeto == str(pasta):
             return
         self.config_app.ultimo_projeto = str(pasta)
@@ -968,8 +973,13 @@ class JanelaPrincipal(ctk.CTk):
             self._chave_do_studio = chave
         self.studio.bloquear(motivo)
 
-    def _abrir_projeto(self, pasta: Path) -> None:
-        """Reabre um projeto: preenche a tela com o que ele tem e libera o Studio Shorts."""
+    def _abrir_projeto(self, pasta: Path, *, ir_para_o_studio: bool = True) -> None:
+        """Reabre um projeto: preenche a tela com o que ele tem e libera o Studio Shorts.
+
+        Com cortes de Shorts, "Abrir projeto…" leva direto ao Studio. A lista da abertura do
+        programa (`ir_para_o_studio=False`) fica na página de Processamento, onde se vê o que o
+        projeto tem e em que pé ele está; o Studio é a aba ao lado, já liberada.
+        """
         if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
             dialogos.aviso(self, "Abrir projeto", "Espere o processamento terminar para abrir.")
             return
@@ -1027,56 +1037,49 @@ class JanelaPrincipal(ctk.CTk):
         self.execucao.definir_estado(EstadoUI.OCIOSO, tem_projeto=True)
         self._atualizar_aba_studio(recarregar=True)
         self._lembrar_ultimo_projeto(pasta)
-        if self._pastas.cortes_shorts.exists():
+        if ir_para_o_studio and self._pastas.cortes_shorts.exists():
             self._abas.set(ABA_STUDIO)
             self._trocar_aba(ABA_STUDIO)
 
-    # --- a abertura do programa: reabrir o último projeto e oferecer o passo a passo ----------
-    def _agendar_abertura(self, oferecer: bool, reabrir: bool) -> str | None:
-        """Agenda, para depois de a janela estar montada, a reabertura do último projeto e a oferta
-        do passo a passo. Sem nenhum dos dois pedidos, não agenda nada."""
-        if not (oferecer or reabrir):
+    # --- a abertura do programa: a lista de projetos e a oferta do passo a passo --------------
+    def _agendar_abertura(self, oferecer: bool, perguntar: bool) -> str | None:
+        """Agenda, para depois de a janela estar montada, a lista de projetos e a oferta do passo
+        a passo. Sem nenhum dos dois pedidos, não agenda nada."""
+        if not (oferecer or perguntar):
             return None
         self._abertura_agendada = self.after(
-            _ABERTURA_MS, lambda: self._ao_abrir_o_programa(oferecer=oferecer, reabrir=reabrir)
+            _ABERTURA_MS, lambda: self._ao_abrir_o_programa(oferecer=oferecer, perguntar=perguntar)
         )
         return self._abertura_agendada
 
-    def _ao_abrir_o_programa(self, *, oferecer: bool, reabrir: bool) -> None:
-        """Primeiro o último projeto; só depois o passo a passo, para não haver duas janelas
+    def _ao_abrir_o_programa(self, *, oferecer: bool, perguntar: bool) -> None:
+        """Primeiro a lista de projetos; só depois o passo a passo, para não haver duas janelas
         disputando a atenção (nem o projeto abrindo por baixo da pergunta)."""
         self._abertura_agendada = None
         if self._encerrando:
             return
-        if reabrir:
-            self._reabrir_ultimo_projeto()
+        if perguntar:
+            self._escolher_projeto_ao_abrir()
         if oferecer and self.config_app.tutorial_ao_abrir and not self._encerrando:
             self._abertura_agendada = self.after(
                 _ENTRE_REABRIR_E_OFERTAR_MS, self._oferecer_tutorial
             )
 
-    def _reabrir_ultimo_projeto(self) -> bool:
-        """Abre o projeto que estava aberto da última vez. Em silêncio: se a pasta sumiu ou não é
-        mais um projeto, o campo é esquecido e a janela abre vazia, como na primeira vez."""
-        texto = self.config_app.ultimo_projeto.strip()
-        if not texto:
-            return False
+    def _escolher_projeto_ao_abrir(self) -> bool:
+        """Mostra os projetos que existem e abre o escolhido, na página de Processamento.
+
+        Sem nenhum projeto na pasta não pergunta nada (a janela abre vazia, como na primeira vez).
+        O último projeto aberto vem marcado. Devolve se abriu algum.
+        """
         if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
             return False
-        pasta = Path(texto)
-        try:
-            valido = (
-                pasta.is_dir()
-                and carregar_estado(pasta) is not None
-                and ler_nome_e_data(pasta) is not None
-            )
-        except (OSError, ValueError, ErroSpurgeon):
-            valido = False
-        if not valido:
-            self.config_app.ultimo_projeto = ""
-            self._salvar_config("o último projeto")
+        projetos = listar_projetos(self.config_app.pastas.projetos)
+        if not projetos:
             return False
-        self._abrir_projeto(pasta)
+        escolhido = escolher_projeto(self, projetos, ultimo=self.config_app.ultimo_projeto)
+        if escolhido is None or self._encerrando:
+            return False
+        self._abrir_projeto(escolhido, ir_para_o_studio=False)
         return self._pastas is not None
 
     def _mudou_tutorial_ao_abrir(self) -> None:
@@ -1682,8 +1685,8 @@ def _a_vista(alvo) -> bool:
 
 
 def executar() -> int:
-    """Abre o programa: reabre o último projeto e oferece o passo a passo (se não dispensado)."""
+    """Abre o programa: mostra a lista de projetos e oferece o passo a passo (se não dispensado)."""
     JanelaPrincipal(
-        oferecer_tutorial=True, reabrir_ultimo=True, verificar_atualizacao=True
+        oferecer_tutorial=True, perguntar_projeto=True, verificar_atualizacao=True
     ).mainloop()
     return 0

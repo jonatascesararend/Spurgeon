@@ -28,6 +28,15 @@ from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.core.tempo import MapaTempo, Trecho
 from spurgeon.render import filtros as f
+from spurgeon.render.fonte_do_short import (
+    FonteDoShort,
+    fonte_do_longo,
+    fonte_do_original,
+    leitura_do_corte,
+    motivo_de_nao_servir,
+    palavras_na_fonte,
+    trechos_na_fonte,
+)
 from spurgeon.render.imagem import filtro_tratamento
 from spurgeon.render.legenda import EstiloLegenda, montar_ass, palavras_do_short
 from spurgeon.render.marca import (
@@ -37,7 +46,7 @@ from spurgeon.render.marca import (
     montar_marca,
     trecho_do_filtro,
 )
-from spurgeon.render.video_longo import recortes_de_quadros
+from spurgeon.render.video_longo import RenderizarVideoLongo, recortes_de_quadros
 from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario, rotulo_do_postado
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
@@ -403,8 +412,14 @@ def assinatura_do_short(
     transferencia: str | None,
     com_legenda: bool,
     marca: MarcaDagua | None,
+    *,
+    fonte_id: str | None = None,
 ) -> str:
-    """O que decide se um Short pronto ainda vale: o corte e tudo que muda a imagem ou o som."""
+    """O que decide se um Short pronto ainda vale: o corte e tudo que muda a imagem ou o som.
+
+    `fonte_id` é a identidade do vídeo longo quando o Short sai dele (`FonteDoShort.identidade`);
+    só entra quando existe, então um Short cortado do original continua valendo como sempre.
+    """
     preset = opcoes.preset_qualidade()
     dados = {
         "versao": VERSAO_DO_RENDER,
@@ -432,6 +447,8 @@ def assinatura_do_short(
         dados["saltos"] = [[round(de, 3), round(ate, 3)] for de, ate in corte.saltos]
     if corte.pausa_s:
         dados["pausa_s"] = round(corte.pausa_s, 2)
+    if fonte_id:  # cortado do vídeo longo: se ele for refeito, o Short também é
+        dados["fonte"] = fonte_id
     return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -626,6 +643,7 @@ class RenderizarShorts(Etapa):
         "revisar_transcricao",
         "selecionar_shorts",
         "aprovar_cortes",
+        "renderizar_video_longo",  # os Shorts saem dele: vem antes (`fonte_do_short`)
     )
     opcoes_relevantes = (
         "qualidade",
@@ -693,9 +711,9 @@ class RenderizarShorts(Etapa):
         if not video.exists():
             raise ErroFerramenta(f"O vídeo original não foi encontrado: {video}")
         info = sondar(video)
-        fps = f.fps_constante(info.fps)
         audio = ctx.pastas.audio_final(ctx.opcoes)
-        canais = sondar(audio).canais_audio
+        original = fonte_do_original(video, audio, info, sondar(audio).canais_audio, ctx.opcoes)
+        longo = self._o_longo_como_fonte(ctx)
         palavras = Transcricao.carregar(ctx.pastas.transcricao).palavras
         preset = ctx.opcoes.preset_qualidade()
         pasta = ctx.pastas.shorts
@@ -724,9 +742,17 @@ class RenderizarShorts(Etapa):
         total = len(planejados)
         for i, curto in enumerate(planejados):
             ctx.ponto_seguro()
+            fonte, recusa = original, ""
+            if longo is not None:  # do vídeo longo, a não ser que este Short não caiba nele
+                recusa = motivo_de_nao_servir(
+                    longo, curto.corte, ctx.opcoes.recorte_deslocamento_x_pct,
+                    ctx.opcoes.enquadramento_do_short,
+                )  # fmt: skip
+                if not recusa:
+                    fonte = longo
             assinatura = assinatura_do_short(
                 ctx.estado.entrada.hash_rapido, ctx.opcoes, curto.corte, info.transferencia,
-                fontes is not None, marca,
+                fontes is not None, marca, fonte_id=fonte.identidade,
             )  # fmt: skip
             destino = pasta / curto.video
             destino.parent.mkdir(parents=True, exist_ok=True)  # as subpastas podem não existir
@@ -741,26 +767,51 @@ class RenderizarShorts(Etapa):
                 ctx.progresso((i + 1) / total)
                 continue
             ctx.log.info(
-                "Short %d de %d: %s (%d s, nota %.0f)…",
+                "Short %d de %d: %s (%d s, nota %.0f, do %s)…",
                 i + 1,
                 total,
                 curto.corte.titulo,
                 curto.corte.duracao,
                 curto.corte.nota,
+                fonte.nome,
             )
+            if recusa:
+                ctx.log.info("Este Short sai do vídeo original, não do longo: %s.", recusa)
             self._renderizar(
-                ctx, curto, video, info, fps, audio, canais, palavras, codec, fontes, marca,
+                ctx, curto, fonte, palavras, codec, fontes, marca,
                 faixa=(i / total, (i + 1) / total),
             )  # fmt: skip
             registro[str(curto.corte.id)] = {
                 "arquivo": curto.video,
                 "assinatura": assinatura,
                 **detalhes_do_registro(curto.corte, visual),
+                **({"fonte": "longo"} if fonte.eh_o_longo else {}),
             }
             escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
             ctx.progresso((i + 1) / total)
 
     # --- preparo ----------------------------------------------------------------------------
+    def _o_longo_como_fonte(self, ctx: ContextoProjeto) -> FonteDoShort | None:
+        """O vídeo longo pronto como fonte dos Shorts se ele serve; senão None (o log diz por quê).
+
+        Vale em qualquer modo: com o vídeo longo gerado por esta versão e as opções de agora, os
+        Shorts do Studio ("Renderizar") saem dele também, iguais aos do processamento completo.
+        """
+        longo, motivo = fonte_do_longo(
+            ctx.pastas,
+            ctx.opcoes,
+            hash_do_original=ctx.estado.entrada.hash_rapido,
+            assinatura_do_longo=ctx.opcoes.assinatura(RenderizarVideoLongo.opcoes_relevantes),
+        )
+        if longo is None:
+            ctx.log.info("Os Shorts saem do vídeo original: %s.", motivo)
+        else:
+            ctx.log.info(
+                "Os Shorts saem do vídeo longo pronto (%s): a imagem e o som já estão tratados.",
+                longo.video.name,
+            )
+        return longo
+
     def _conferir_disco(
         self, ctx: ContextoProjeto, planejados, registro: Registro, crf: int
     ) -> None:
@@ -795,27 +846,33 @@ class RenderizarShorts(Etapa):
 
     # --- um Short ---------------------------------------------------------------------------
     def _renderizar(
-        self, ctx, curto: ShortPlanejado, video: Path, info, fps, audio: Path, canais,
-        palavras: list[Palavra], codec, fontes, marca, *, faixa,
+        self, ctx, curto: ShortPlanejado, fonte: FonteDoShort, palavras: list[Palavra],
+        codec, fontes, marca, *, faixa,
     ) -> None:  # fmt: skip
         corte = curto.corte
         trabalho = ctx.pastas.work
+        # o trecho lido da fonte: no original é o corte; no vídeo longo, o mesmo trecho já sem as
+        # pausas que ele cortou (`converter` leva os tempos de uma linha do tempo para a outra)
+        inicio_lido, janela, converter = leitura_do_corte(fonte, corte)
         faladas = palavras_do_short(
             palavras_com_a_legenda(palavras, corte), corte.inicio, corte.fim
         )
-        duracao = corte.janela_s  # a do Short pronto; o corte original só é lido (`leitura`)
+        mantidos = trechos_mantidos(palavras, corte)
+        if converter is not None:
+            faladas = palavras_na_fonte(faladas, converter)
+            mantidos = trechos_na_fonte(mantidos, converter)
+        duracao = janela  # a do Short pronto; o trecho lido só é lido (`leitura`)
         trechos = (
             None  # o que fica do corte sem os saltos e as pausas (segundos desde o início dele)
         )
-        mantidos = trechos_mantidos(palavras, corte)
-        if ha_o_que_cortar(mantidos, corte.janela_s):
+        if ha_o_que_cortar(mantidos, janela):
             mapa = MapaTempo(mantidos)
             trechos, duracao = mantidos, mapa.duracao_editada
             faladas = remapear_palavras(faladas, mapa)
             ctx.log.info(
                 "%d cortes no Short (pedaços tirados e pausas): ele fica com %.1f s (o trecho "
                 "lido tem %.1f s).",
-                len(mantidos) - 1, duracao, corte.janela_s,
+                len(mantidos) - 1, duracao, janela,
             )  # fmt: skip
         fade_entrada, fade_saida = fades_do_short(faladas, duracao)
         legenda = None
@@ -827,10 +884,12 @@ class RenderizarShorts(Etapa):
 
         medido = None
         if ctx.opcoes.normalizar_volume:
-            medido = self._medir_volume(ctx, audio, canais, corte, ctx.opcoes.lufs_shorts)
+            medido = self._medir_volume(
+                ctx, fonte.audio, fonte.canais, inicio_lido, janela, ctx.opcoes.lufs_shorts
+            )
 
         cadeia_do_audio = filtro_de_audio(
-            canais,
+            fonte.canais,
             duracao,
             medido,
             ctx.opcoes.lufs_shorts,
@@ -845,13 +904,13 @@ class RenderizarShorts(Etapa):
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text(
             filtro_de_video(
-                info,
-                fps,
+                fonte.info,
+                fonte.fps,
                 deslocamento_pct=ctx.opcoes.recorte_deslocamento_x_pct,
                 legenda=legenda,
                 marca=marca,
-                enquadramento=ctx.opcoes.enquadramento_nos_curtos,
-                tratamento=ctx.opcoes.tratamento_nos_curtos,
+                enquadramento=fonte.enquadramento,  # None no vídeo longo: o zoom já está nele
+                tratamento=fonte.tratamento,  # idem a cor
                 zoom_do_short=ctx.opcoes.enquadramento_do_short,
                 trechos=trechos,
             )
@@ -862,10 +921,10 @@ class RenderizarShorts(Etapa):
         destino = ctx.pastas.shorts / curto.video
         destino.parent.mkdir(parents=True, exist_ok=True)
         parcial = destino.with_name(destino.name + ".parcial")
-        # a leitura é sempre do corte original; só a saída (`-t` final) tem a duração já cortada
-        leitura = ["-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.janela_s)]
+        # a leitura é sempre do trecho inteiro; só a saída (`-t` final) tem a duração já cortada
+        leitura = ["-ss", f.numero_ffmpeg(inicio_lido), "-t", f.numero_ffmpeg(janela)]
         ctx.ffmpeg(
-            ["-y", *leitura, "-i", video, *leitura, "-i", audio,
+            ["-y", *leitura, "-i", fonte.video, *leitura, "-i", fonte.audio,
              *(["-i", marca.arquivo] if marca else []),
              "-/filter_complex", script, "-map", "[v]", "-map", "[a]", *codec,
              *f.argumentos_audio(), "-t", f.numero_ffmpeg(duracao),
@@ -892,11 +951,12 @@ class RenderizarShorts(Etapa):
         )
 
     def _medir_volume(
-        self, ctx, audio: Path, canais: int | None, corte: Corte, alvo_lufs: float
-    ) -> dict[str, float] | None:
-        """Primeira passagem do loudnorm, só no trecho do Short e já em estéreo."""
+        self, ctx, audio: Path, canais: int | None, inicio_s: float, janela_s: float,
+        alvo_lufs: float,
+    ) -> dict[str, float] | None:  # fmt: skip
+        """Primeira passagem do loudnorm, só no trecho lido do Short e já em estéreo."""
         saida = ctx.ffmpeg(
-            ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(corte.janela_s),
+            ["-y", "-ss", f.numero_ffmpeg(inicio_s), "-t", f.numero_ffmpeg(janela_s),
              "-i", audio, "-af", f"{f.filtro_audio_estereo(canais)},{filtro_medir(alvo_lufs)}",
              "-f", "null", "-"],
         )  # fmt: skip

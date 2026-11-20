@@ -183,6 +183,19 @@ def posicao_em_pixels(
     return x, y
 
 
+def retangulo_da_marca(marca: MarcaDagua, largura: int, altura: int) -> tuple[int, int, int, int]:
+    """Onde a marca fica num quadro de `largura`×`altura`: (x, y, largura, altura) em pixels.
+
+    Serve para saber se algo (o recorte 9:16 de um Short, por exemplo) pega a marca que já está
+    "queimada" no vídeo.
+    """
+    with Image.open(marca.arquivo) as png:
+        proporcao = png.height / png.width if png.width else 1.0
+    alto = max(1, round(marca.largura_px * proporcao))
+    x, y = posicao_em_pixels(marca.canto, largura, altura, marca.largura_px, alto, marca.margem_px)
+    return x, y, marca.largura_px, alto
+
+
 def trecho_do_filtro(marca: MarcaDagua, *, base: str, entrada: str, saida: str) -> str:
     """Filtros que redimensionam a marca (`entrada`, ex.: `1:v`) e a põem sobre `base`.
 

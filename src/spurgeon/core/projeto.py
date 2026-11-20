@@ -14,8 +14,15 @@ from pathlib import Path
 
 from spurgeon.core.arquivos import ler_json
 from spurgeon.core.config import OpcoesProcessamento
-from spurgeon.core.erros import ErroConfiguracao, ErroFFmpeg, ProjetoConflito
-from spurgeon.core.estado import EntradaVideo, Estado, carregar_estado, salvar_estado
+from spurgeon.core.erros import ErroConfiguracao, ErroFFmpeg, ErroSpurgeon, ProjetoConflito
+from spurgeon.core.estado import (
+    NOME_ARQUIVO_ESTADO,
+    EntradaVideo,
+    Estado,
+    StatusEtapa,
+    carregar_estado,
+    salvar_estado,
+)
 from spurgeon.core.ffmpeg import sondar
 
 _INVALIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -238,6 +245,20 @@ def abrir_pasta(caminho: Path) -> None:
         os.startfile(caminho)
 
 
+def _frase_dos_shorts(pastas: PastasProjeto) -> str:
+    """`12 Shorts sugeridos, 9 renderizados`."""
+    try:
+        sugeridos = len(ler_json(pastas.cortes_shorts))
+    except (OSError, ValueError):
+        sugeridos = 0
+    feitos = sum(
+        1
+        for e in _registro_dos_shorts(pastas).values()
+        if (pastas.shorts / e.get("arquivo", "")).is_file()
+    )
+    return f"{sugeridos} Shorts sugeridos, {feitos} renderizados"
+
+
 def descrever_projeto(pastas: PastasProjeto) -> str:
     """O que o projeto já tem, em uma linha (ao abrir um projeto existente)."""
     partes: list[str] = []
@@ -250,19 +271,93 @@ def descrever_projeto(pastas: PastasProjeto) -> str:
     if pastas.video_com_vinhetas.exists():
         partes.append("vídeo com introdução e vinheta")
     if pastas.cortes_shorts.exists():
-        try:
-            sugeridos = len(ler_json(pastas.cortes_shorts))
-        except (OSError, ValueError):
-            sugeridos = 0
-        feitos = sum(
-            1
-            for e in _registro_dos_shorts(pastas).values()
-            if (pastas.shorts / e.get("arquivo", "")).is_file()
-        )
-        partes.append(f"{sugeridos} Shorts sugeridos, {feitos} renderizados")
+        partes.append(_frase_dos_shorts(pastas))
     return (
         "Já existe: " + ", ".join(partes) + "." if partes else "O projeto ainda não tem resultados."
     )
+
+
+def situacao_do_projeto(estado: Estado) -> str:
+    """Em que pé o processamento do projeto está, em poucas palavras (para a lista de projetos)."""
+    etapas = estado.etapas
+    if not etapas:
+        return "Ainda não começou"
+    status = [e.status for e in etapas]
+    if StatusEtapa.ERRO in status:
+        return "Parou com erro"
+    if StatusEtapa.AGUARDANDO_REVISAO in status:
+        return "Esperando a sua revisão"
+    if StatusEtapa.EM_ANDAMENTO in status:
+        return "Em andamento (ou interrompido)"
+    if StatusEtapa.CANCELADA in status:
+        return "Cancelado"
+    feitas = status.count(StatusEtapa.CONCLUIDA)
+    if feitas == len(etapas):
+        return "Concluído"
+    if feitas == 0:
+        return "Ainda não começou"
+    return f"{feitas} de {len(etapas)} etapas prontas"
+
+
+@dataclass(frozen=True)
+class ProjetoExistente:
+    """Um projeto que já está na pasta de projetos, como a lista de abertura o mostra."""
+
+    pasta: Path
+    nome: str
+    data: date  # a da gravação, do nome da pasta
+    modificado: float  # quando o estado.json mudou pela última vez (segundos desde 1970)
+    situacao: str
+    detalhes: str  # o que já existe (vídeo longo, Shorts…), curto o bastante para uma linha
+
+
+def resumo_dos_resultados(pastas: PastasProjeto) -> str:
+    """O que o projeto já tem, em poucas palavras: só o mais adiantado (a lista de abertura)."""
+    partes: list[str] = []
+    if pastas.video_com_vinhetas.exists():
+        partes.append("vídeo com introdução e vinheta")
+    elif pastas.video_longo.exists():
+        partes.append("vídeo longo")
+    if pastas.cortes_shorts.exists():
+        partes.append(_frase_dos_shorts(pastas))
+    if not partes and pastas.transcricao.exists():
+        partes.append("só a transcrição")
+    return " · ".join(partes) if partes else "sem resultados ainda"
+
+
+def listar_projetos(pasta_projetos: Path, *, limite: int = 60) -> list[ProjetoExistente]:
+    """Os projetos da pasta, o que mexeu por último primeiro.
+
+    Só entra pasta que se chama `AAAA-MM-DD_Nome` e tem um `estado.json` que se lê: é o mesmo
+    critério de "Abrir projeto…", então tudo o que a lista mostra abre. Uma pasta que não é projeto
+    ou está estragada é pulada em silêncio, e a pasta de projetos que não existe dá lista vazia.
+    """
+    try:
+        candidatas = [p for p in Path(pasta_projetos).iterdir() if p.is_dir()]
+    except OSError:
+        return []
+    achados: list[ProjetoExistente] = []
+    for pasta in candidatas:
+        identificado = ler_nome_e_data(pasta)
+        arquivo = pasta / NOME_ARQUIVO_ESTADO
+        if identificado is None or not arquivo.is_file():
+            continue
+        try:
+            estado = carregar_estado(pasta)
+            modificado = arquivo.stat().st_mtime
+        except (OSError, ValueError, ErroSpurgeon):
+            continue
+        if estado is None:
+            continue
+        nome, dia = identificado
+        achados.append(
+            ProjetoExistente(
+                pasta, nome, dia, modificado, situacao_do_projeto(estado),
+                resumo_dos_resultados(PastasProjeto(pasta)),
+            )
+        )  # fmt: skip
+    achados.sort(key=lambda p: p.modificado, reverse=True)
+    return achados[:limite]
 
 
 def _registro_dos_shorts(pastas: PastasProjeto) -> dict[str, dict]:

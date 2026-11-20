@@ -27,6 +27,7 @@ from spurgeon.core.hardware import detectar_hardware, threads_para_uso
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
 from spurgeon.core.tempo import Trecho
 from spurgeon.render import filtros as f
+from spurgeon.render.fonte_do_short import CHAVE_NO_INFO, dados_do_longo
 from spurgeon.render.imagem import (
     filtro_ampliar_zoom,
     filtro_recorte_do_zoom,
@@ -37,6 +38,7 @@ from spurgeon.render.marca import (
     assinatura_da_marca,
     marca_para_o_projeto,
     montar_marca,
+    retangulo_da_marca,
     trecho_do_filtro,
 )
 from spurgeon.render.mescla import mescla_em_quadros
@@ -581,8 +583,44 @@ class RenderizarVideoLongo(Etapa):
                 ctx, pasta, vinheta, largura, altura, fps, argumentos_codec, pesos, feito
             )
             sequencia.append((vinheta.arquivo, float(Fraction(vinheta.quadros_no_arquivo) / fps)))
-        self._unir(ctx, pasta, sequencia, duracao_total, feito, economico=economico)
+        self._unir(
+            ctx, pasta, sequencia, duracao_total, feito, economico=economico,
+            dados_dos_shorts=self._dados_para_os_shorts(
+                ctx, trechos, intro, vinheta, fps, (largura, altura), marca
+            ),
+        )  # fmt: skip
         shutil.rmtree(pasta, ignore_errors=True)
+
+    def _dados_para_os_shorts(
+        self, ctx: ContextoProjeto, trechos: list[Trecho], intro, vinheta, fps: Fraction,
+        tamanho: tuple[int, int], marca: MarcaDagua | None,
+    ) -> dict:  # fmt: skip
+        """O que os Shorts precisam saber deste vídeo para serem cortados dele (`fonte_do_short`).
+
+        O vídeo principal começa depois da introdução (menos a mescla), e os primeiros e os últimos
+        segundos dele ainda tocam a mescla ou o fade da introdução e da vinheta.
+        """
+
+        def zona(clipe: Clipe | None) -> float:
+            if clipe is None:
+                return 0.0
+            if ctx.opcoes.fade_mesclado:
+                return float(Fraction(clipe.sobreposicao) / fps)
+            return ctx.opcoes.fade_vinhetas_s if ctx.opcoes.fade_vinhetas else 0.0
+
+        return dados_do_longo(
+            hash_do_original=ctx.estado.entrada.hash_rapido,
+            trechos=trechos,
+            inicio_s=float(Fraction(intro.quadros_no_arquivo) / fps) if intro else 0.0,
+            zona_do_inicio_s=zona(intro),
+            zona_do_fim_s=zona(vinheta),
+            tamanho=tamanho,
+            enquadramento=ctx.opcoes.enquadramento,
+            tratamento=ctx.opcoes.tratamento,
+            marca=retangulo_da_marca(marca, *tamanho) if marca else None,
+            assinatura_das_opcoes=ctx.opcoes.assinatura(self.opcoes_relevantes),
+            janela=(ctx.opcoes.video_inicio_s, ctx.opcoes.video_fim_s),
+        )
 
     def _mesclar(self, ctx: ContextoProjeto, fps: Fraction, intro, vinheta, partes: list[Parte]):
         """Marca quantos quadros da introdução e da vinheta se fundem com o vídeo (mescla).
@@ -885,7 +923,7 @@ class RenderizarVideoLongo(Etapa):
 
     def _unir(
         self, ctx, pasta: Path, sequencia: list[tuple[str, float]], duracao_total, feito, *,
-        economico: bool = False,
+        economico: bool = False, dados_dos_shorts: dict | None = None,
     ) -> None:  # fmt: skip
         """Junta as partes e o áudio, sem recodificar nada."""
         parcial = ctx.pastas.video_longo.with_name(ctx.pastas.video_longo.name + ".parcial")
@@ -931,6 +969,7 @@ class RenderizarVideoLongo(Etapa):
                 "preset": preset.preset,
                 "crf": preset.crf,
                 "duracao_s": round(resultado.duracao_s, 3),
+                **({CHAVE_NO_INFO: dados_dos_shorts} if dados_dos_shorts else {}),
             },
         )
         tamanho = ctx.pastas.video_longo.stat().st_size

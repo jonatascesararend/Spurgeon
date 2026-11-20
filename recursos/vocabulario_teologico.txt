@@ -225,3 +225,5 @@ Apocalipse
 # --- Outros nomes que o verificador de português não deve marcar ---
 YouTube
 Yavé
+hits
+cabeçinha

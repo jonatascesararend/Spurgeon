@@ -67,6 +67,16 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
 - Renderização (`render/`): vídeo longo em partes de ~10 min com quadros exatos (retomável),
   Shorts um por vez com assinatura; ambas gravam em `.parcial` e renomeiam. Pouco disco → a junção
   apaga cada parte ao lê-la (modo econômico). HDR→SDR em `render/filtros.py` (`desat=0` de propósito).
+- Ordem das renderizações: `renderizar_video_longo` ANTES de `renderizar_shorts` (a análise e as revisões humanas vêm
+  antes das duas). Os Shorts são cortados do `video_longo_otimizado.mp4` (`render/fonte_do_short.py`): o longo grava no
+  `_work/video_longo_info.json` o bloco `fonte_dos_shorts` (mapa de tempo, onde o vídeo principal começa, zonas de
+  mescla/fade, zoom e cor queimados, retângulo da marca) e `fonte_do_longo` decide se ele serve (mesmo vídeo, mesmas
+  `opcoes_relevantes`, mesma janela, zoom/cor iguais aos dos Shorts); `motivo_de_nao_servir` decide por Short. Tudo do
+  Short (`corte`, `saltos`, `pausa_s`, palavras) continua no tempo ORIGINAL; só `leitura_do_corte`/`trechos_na_fonte`/
+  `palavras_na_fonte` convertem, na hora de renderizar. No original o caminho é o de sempre (conversor `None`). A
+  assinatura do Short só leva `fonte_id` quando sai do longo (`assinatura_do_short(..., fonte_id=)`): não mude as
+  `opcoes_relevantes` das duas etapas por causa disso (refaria o que já está pronto). Longo de versão antiga (sem o
+  bloco) não serve: os Shorts saem do original. Subiu o formato do bloco? Suba `VERSAO_DA_FONTE`.
 - IA dos Shorts (`shorts/`): nunca ponha exemplos concretos de título nos prompts (a IA os copia);
   o Ollama roda só em CPU quando não há GPU utilizável (`num_gpu=0`).
 - Começo e fim do vídeo (`video_inicio_s`/`video_fim_s`, 0 = até o fim): vale em `calcular_cortes`
@@ -188,9 +198,16 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   (com o "?"). Os testes (`tests/test_tutorial_e_ajuda.py`, `test_studio_ferramentas.py`) falham se um controle
   novo ficar sem dica.
 - Passo a passo (`ui/tutorial.py`: `PASSOS`, `Tutorial`, `Destaque`, `OfertaDoTutorial`): a janela o liga em
-  `JanelaPrincipal.abrir_tutorial`. `executar()` reabre `ConfigApp.ultimo_projeto` e oferece o passo a passo se
-  `tutorial_ao_abrir`; `JanelaPrincipal(config)` sozinha não faz nenhum dos dois (os testes dependem disso).
-  Mudou um recurso que o passo a passo explica? Ajuste o texto em `PASSOS`.
+  `JanelaPrincipal.abrir_tutorial`. `executar()` mostra a lista de projetos (`ui/escolha_de_projeto.py`, o último
+  `ConfigApp.ultimo_projeto` marcado) e oferece o passo a passo se `tutorial_ao_abrir`; `JanelaPrincipal(config)`
+  sozinha não faz nenhum dos dois (`perguntar_projeto=False`; os testes dependem disso). A lista abre o projeto na
+  página de Processamento (`_abrir_projeto(..., ir_para_o_studio=False)`); o botão "Abrir projeto…" vai ao Studio.
+  `core/projeto.listar_projetos` só lista o que "Abrir projeto…" abriria. Mudou um recurso que o passo a passo
+  explica? Ajuste o texto em `PASSOS`.
+- Ícone: `ui/icone.py`. `iconbitmap` com `recursos/studio_spurgeon.ico` na janela e em toda `CTkToplevel`
+  (`icone.instalar()`, chamado em `ui/__init__.py`); o CustomTkinter só põe o ícone dele depois de 200 ms se ninguém
+  chamou `iconbitmap` (por isso é na criação). `definir_identidade_do_app` (AppUserModelID) vem antes da 1ª janela.
+  `wm_iconbitmap()` não devolve o caminho no Windows: teste pela bandeira `_iconbitmap_method_called`.
 - Menos "piscar": `ui/estabilidade.py` troca o `configure` das classes do CustomTkinter por um que não faz nada se
   nada mudou (compara com `cget`); `RotuloQueSome` não ocupa linha enquanto está vazio (um `CTkLabel` vazio ainda
   pede 28 px) e `CTkScrollbar`/`CTkFrame` pedem 200 px por padrão (passe `height` pequeno em quadros que devem

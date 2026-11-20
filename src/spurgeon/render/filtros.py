@@ -65,13 +65,13 @@ def cadeia_para_sdr(info: InfoMidia) -> str:
     )
 
 
-def recorte_vertical(
+def regiao_do_recorte(
     info: InfoMidia,
     deslocamento_pct: float = 0.0,
     enquadramento: Enquadramento | None = None,
     zoom_do_short: Enquadramento | None = None,
-) -> str:
-    """O recorte 9:16 central (ou deslocado) de um vídeo horizontal, em pixels pares.
+) -> tuple[int, int, int, int]:
+    """Onde o recorte 9:16 cai no quadro: (x, y, largura, altura) em pixels pares.
 
     Para um vídeo de 1080p, 608×1080 saem do meio da imagem, onde fica o pregador. O deslocamento
     é uma porcentagem da largura do vídeo (positivo = para a direita).
@@ -95,6 +95,17 @@ def recorte_vertical(
     if zoom_do_short is not None and zoom_do_short.ativo:
         dx, dy, w, h = zoom_do_short.regiao(w, h)
         x, y = x + dx, y + dy
+    return x, y, w, h
+
+
+def recorte_vertical(
+    info: InfoMidia,
+    deslocamento_pct: float = 0.0,
+    enquadramento: Enquadramento | None = None,
+    zoom_do_short: Enquadramento | None = None,
+) -> str:
+    """O filtro `crop` do recorte 9:16 (a conta está em `regiao_do_recorte`)."""
+    x, y, w, h = regiao_do_recorte(info, deslocamento_pct, enquadramento, zoom_do_short)
     return f"crop={w}:{h}:{x}:{y}"
 
 

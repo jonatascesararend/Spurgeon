@@ -424,7 +424,7 @@ class ConfigApp(BaseModel):
     #: presets salvos pela pessoa (nome → ajustes), para repetir o estilo nos próximos vídeos
     presets_enquadramento: dict[str, Enquadramento] = Field(default_factory=dict)
     presets_tratamento: dict[str, TratamentoImagem] = Field(default_factory=dict)
-    #: a pasta do último projeto aberto ou processado; o programa a reabre ao iniciar
+    #: a pasta do último projeto aberto ou processado; a lista da abertura a deixa marcada
     ultimo_projeto: str = ""
     #: oferece o passo a passo (tutorial) quando o programa abre
     tutorial_ao_abrir: bool = True

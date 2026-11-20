@@ -1,7 +1,9 @@
 """Registro das etapas do pipeline, na ordem em que rodam.
 
-Os vídeos pesados (Shorts e vídeo longo) vêm por último: toda a análise e as revisões humanas
-acontecem antes, e a renderização, que leva horas, roda sem ninguém por perto.
+Os vídeos pesados (vídeo longo e Shorts) vêm por último: toda a análise e as revisões humanas
+acontecem antes, e a renderização, que leva horas, roda sem ninguém por perto. O vídeo longo vem
+ANTES dos Shorts porque eles são cortados dele (`render/fonte_do_short.py`): saem com a mesma imagem
+e o mesmo som do vídeo final, já tratados.
 """
 
 from __future__ import annotations
@@ -49,8 +51,8 @@ def etapas_registradas() -> list[Etapa]:
         AvaliarShorts(),
         SelecionarShorts(),
         AprovarCortes(),
-        RenderizarShorts(),
         RenderizarVideoLongo(),
+        RenderizarShorts(),
         AdicionarVinhetas(),
         Finalizar(),
     ]

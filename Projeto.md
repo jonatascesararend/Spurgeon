@@ -1,6 +1,6 @@
 # Guia de Projeto: Studio Spurgeon de Cortes e Otimização de Vídeos (Sermões, Aulas e Shorts)
 
-> **Estado: versão 1.8 do aplicativo (2026-11-03).** Este guia reúne a arquitetura, o roadmap por fase (as Fases 0 a 9 estão concluídas) e, na seção 6, as decisões confirmadas pelo autor, as escolhas feitas sem consulta e as pendências, rodada por rodada. O que o programa faz, para quem usa, está no [README.md](README.md); a instalação, no [COMO_INSTALAR.txt](COMO_INSTALAR.txt); a pesquisa sobre as redes, no [Integracoes.md](Integracoes.md).
+> **Estado: versão 1.9 do aplicativo (2026-11-20).** Este guia reúne a arquitetura, o roadmap por fase (as Fases 0 a 9 estão concluídas) e, na seção 6, as decisões confirmadas pelo autor, as escolhas feitas sem consulta e as pendências, rodada por rodada. O que o programa faz, para quem usa, está no [README.md](README.md); a instalação, no [COMO_INSTALAR.txt](COMO_INSTALAR.txt); a pesquisa sobre as redes, no [Integracoes.md](Integracoes.md).
 >
 > | Versão | O que trouxe |
 > |---|---|
@@ -13,6 +13,8 @@
 > | 1.6 | Aviso de contato, abertura sem console e instalador para um PC zerado |
 > | 1.7 | Atualização pelo GitHub, instalador reforçado, "já postado" e títulos sem repetição |
 > | 1.8 | Título que renomeia o arquivo, "agendado para" (com calendário, relógio e as pastas `agendados/` e `postados/`) e a aba **Integrações** para postar nas redes |
+> | 1.8.1 | Studio Shorts à mão durante a renderização, selos de postado/agendado com filtro e "fechar ao terminar" |
+> | 1.9 | Os Shorts cortados do vídeo longo já tratado, o ícone do programa e a lista de projetos ao abrir |
 
 ---
 
@@ -70,22 +72,24 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
    ▼
 [6] Gerar .srt (tempos remapeados; +duração da introdução, se marcada)
    ▼
-[7] Renderizar vídeo longo (cortes + áudio limpo + introdução/vinheta) ─► video_longo_otimizado.mp4
-   ▼
-[8] Shorts: spaCy → candidatos (pandas) → LLM (Ollama) → ajuste em pausas
+[7] Shorts: spaCy → candidatos (pandas) → LLM (Ollama) → ajuste em pausas
    ▼
  🛑 Aprovação dos cortes (opcional)
    ▼
-[9] Renderizar Shorts (9:16 + legenda ASS) ─► shorts_gerados/
+[8] Renderizar vídeo longo (cortes + áudio limpo + introdução/vinheta) ─► video_longo_otimizado.mp4
+   ▼
+[9] Renderizar Shorts, CORTADOS do vídeo longo pronto (9:16 + legenda ASS) ─► shorts_gerados/
    ▼
 [10] Finalizar: apagar os intermediários pesados de _work/, registrar resumo no log
 ```
+
+**Os Shorts saem do vídeo longo (v1.9).** Toda a análise e as duas revisões humanas vêm antes das renderizações (a pessoa aprova e sai; as horas de render rodam sem ninguém). O vídeo longo é renderizado primeiro e os Shorts são cortados DELE (`render/fonte_do_short.py`): saem com o mesmo zoom, a mesma cor, o mesmo HDR→SDR e o mesmo som tratado do vídeo final. Os tempos do Short (corte, saltos, pausas, palavras da legenda) continuam na linha do tempo original (o Studio e o modelo de dados não mudaram) e são convertidos pelo mapa de tempo do vídeo longo só na hora de renderizar. Quando o vídeo longo não serve (não existe, é de uma versão antiga, as opções mudaram depois de ele sair, o zoom ou a cor dele não são os dos Shorts) ou um Short não cabe nele (cai na mescla da introdução/vinheta, só tinha pausa cortada, o recorte vertical alcança a marca d'água dele), os Shorts saem do original, como antes, e o log diz por quê.
 
 **Depois do pipeline (Studio Shorts e redes).** O pipeline termina nos arquivos de `shorts_gerados/`. Dali em diante, a pessoa trabalha no **Studio Shorts** (ajusta o corte e a legenda, renderiza só o que falta, marca "agendado para" ou "já postado") e na aba **Integrações** (liga as contas), e o botão "Postar nas redes…" envia cada Short ao YouTube, Instagram, Facebook e TikTok, agora ou no horário escolhido (`publicacao/`; decisões na Rodada 1.8 e pesquisa no [Integracoes.md](Integracoes.md)). O arquivo de cada Short acompanha o seu estado: `shorts_gerados/` (pronto), `agendados/` (com horário marcado), `postados/` (já foi ao ar) e `desmarcados/` (fora da seleção).
 
 **Modos (v1.1).** O mesmo pipeline roda em três modos (`OpcoesProcessamento.modo`): `completo` (tudo o que estiver marcado); `so_shorts` (os passos do vídeo longo ficam de fora, e a transcrição e a análise já feitas são aproveitadas); `so_vinhetas` (só a etapa `adicionar_vinhetas`: codifica a introdução e a vinheta com o mesmo preset do vídeo, emenda sem recodificar o vídeo principal e desloca o `.srt`; o resultado é `video_longo_com_vinhetas.mp4`). `Pipeline.ativas` filtra as etapas pelo modo, e o registro das etapas fora do modo fica em `estado.etapas_guardadas`, para não se perder o que já foi feito.
 
-**Por que transcrever uma vez antes de cortar silêncio:** o .srt sempre bate com o vídeo final, os Shorts saem do material original, e não é preciso retranscrever depois de cortar. O vínculo entre as duas linhas do tempo é um **mapa de tempo** (lista de trechos mantidos → função `t_original → t_editado`).
+**Por que transcrever uma vez antes de cortar silêncio:** o .srt sempre bate com o vídeo final, os Shorts são decididos no material original (e cortados do vídeo longo pelo mesmo mapa de tempo), e não é preciso retranscrever depois de cortar. O vínculo entre as duas linhas do tempo é um **mapa de tempo** (lista de trechos mantidos → função `t_original → t_editado`).
 
 ### 1.5 Stack
 
@@ -796,7 +800,7 @@ Treze pedidos do autor, todos feitos e testados (o autor pediu para trabalhar a 
 6. **"Descartar alterações"** ao lado de "Salvar alterações": pergunta e volta tudo ao que está gravado.
 7. **17 categorias de corte**, cada uma com cor única (chip colorido na lista e no detalhe do Short): as quatro antigas mais confronto de pecados, exortação, apontando Cristo, necessidade de arrependimento, doutrina bíblica, doutrina reformada, fato histórico, oração, profecia, promessa, anúncio de salvação e esperança. A IA responde uma delas (o esquema do Ollama lista as 17) e o prompt define cada uma em uma linha. As avaliações que já existiam continuam valendo (a chave é o trecho, não a categoria).
 8. **Dicionário personalizado no Studio** (botão "Dicionário…", `ui/dicionario.py`): lista os termos de `recursos/vocabulario_teologico.txt`, acrescenta, procura e remove os que foram guardados errados (`remover_do_vocabulario`); o verificador de português é avisado na hora.
-9. **O programa reabre o último projeto** ao abrir (`ConfigApp.ultimo_projeto`; em silêncio, e some se a pasta não existe mais).
+9. **O programa lembra o último projeto** (`ConfigApp.ultimo_projeto`). Até a 1.8 ele o reabria sozinho, em silêncio; desde a 1.9 a abertura mostra a lista de projetos (item 84) e o último vem marcado nela.
 10. **Shorts livre "vivo"** (`ui/shorts_livre.py`, `shorts/marcas.py`). A margem esquerda de cada frase leva a barra da cor da categoria que a IA viu no melhor trecho que a cobre; as palavras que já viraram Short ficam sublinhadas, com um losango na margem; uma legenda de cores (um chip por categoria) leva ao próximo trecho de cada uma; passar o mouse numa frase diz a categoria, a nota e os Shorts dela. Dá para montar **"frase 1 + frase 3"** pintando as duas com o marca-texto (`Trecho.fora`); a IA lê só o que o Short fala e o corte sai com saltos.
 11. **Dicas de ferramenta em todos os botões e o "?" em cada etapa** (`ui/dicas.py`, `ui/ajuda.py`): o balão aparece depois de uma pausa e some ao sair ou clicar; cada cartão tem um "?" no canto com a explicação da etapa. Os testes falham se um controle novo ficar sem dica.
 12. **Passo a passo na primeira abertura** (`ui/tutorial.py`, 28 passos): pergunta "Quer ver o passo a passo?" com a caixinha "não mostrar de novo"; um contorno amarelo marca o que cada passo explica; o rodapé da janela tem a caixinha "Mostrar o passo a passo ao abrir" e o botão "Como usar".
@@ -1152,3 +1156,62 @@ etapas de análise (a `selecionar_shorts` reescreve os cortes, e o que a pessoa 
 pasta dos arquivos espera o fim do processamento em vez de acontecer na hora; (80) o filtro "Sem postar" não conta os
 agendados; (81) a hora de "já postado" é a de quando a caixa foi marcada; (82) a caixa não é lembrada entre aberturas e só
 fecha depois de um processamento concluído (um erro deixa a janela aberta para ser lido).
+
+### Rodada 1.9 (2026-11-06): os Shorts cortados do vídeo longo, o ícone do programa e a lista de projetos ao abrir
+
+Pedido: (1) o processamento completo devia tratar o vídeo e o áudio **antes** de cortar os Shorts, para eles saírem do **vídeo
+final tratado** (`video_longo_otimizado.mp4`): passos 1 a 9 como estavam, passo 10 = vídeo longo, passo 11 = Shorts cortados dele;
+(2) o ícone do programa usava o do Python, e devia ser o `recursos/studio_spurgeon.ico`; (3) ao abrir, perguntar e **listar os
+projetos que existem**, para abrir um rápido, **na página de Processamento** (e não direto no Studio Shorts). Feito com um
+processamento pesado rodando: o trabalho foi feito numa cópia (git worktree) e os testes rodaram em prioridade mínima. Publicada
+como `__version__` 1.9.0 em 2026-11-20.
+
+83. **O vídeo longo vem antes dos Shorts, e os Shorts saem dele** (`core/etapas.py`, `render/fonte_do_short.py` NOVO,
+    `render/shorts.py`, `render/video_longo.py`). Ordem: … `aprovar_cortes` → `renderizar_video_longo` → `renderizar_shorts` →
+    `adicionar_vinhetas` → `finalizar` (`RenderizarShorts.depende_de` ganhou `renderizar_video_longo`). **Nenhuma opção
+    relevante mudou**, então nenhum vídeo longo nem Short de projeto antigo é refeito por causa da ordem.
+    * **O que o vídeo longo guarda.** Ao terminar, grava no `_work/video_longo_info.json` o bloco `fonte_dos_shorts`
+      (`dados_do_longo`): os trechos do original que ficaram (o mapa de tempo), onde o vídeo principal começa (a introdução
+      vem antes, menos a mescla), as "zonas" do começo e do fim que a mescla ou o fade ainda tocam, o zoom e a cor que já estão na
+      imagem, o retângulo da marca d'água queimada, o hash do original, a assinatura das opções do render e a janela
+      (começo/fim). O `.json` fica depois da limpeza de `_work/`, então vale ao reabrir o projeto.
+    * **A fonte de cada Short** (`FonteDoShort`): o longo (`fonte_do_longo`) só serve se foi gerado por esta versão, é do mesmo
+      vídeo, com as mesmas opções (`opcoes.assinatura(RenderizarVideoLongo.opcoes_relevantes)`), a mesma janela e a imagem que os
+      Shorts querem (zoom e cor "queimados" no longo têm de ser os dos Shorts: `zoom_nos_shorts` e `tratamento_nos_shorts`).
+      Senão, o original (log: "Os Shorts saem do vídeo original: …"). Por Short (`motivo_de_nao_servir`): não serve o que
+      começa ou termina na mescla/fade da introdução ou da vinheta, o que quase só tinha pausa cortada (menos de 1 s no longo) e
+      o que o recorte 9:16 (com o deslocamento e o zoom do Short) alcança a marca d'água do longo; esse sai do original (log:
+      "Este Short sai do vídeo original, não do longo: …"). Vale em qualquer modo: o "Renderizar" do Studio (só Shorts) também
+      corta do longo se ele existe e ainda vale.
+    * **O que muda no Short.** O trecho lido é o do corte já sem as pausas que o vídeo longo cortou (`leitura_do_corte`,
+      `trechos_na_fonte`, `palavras_na_fonte`): `corte`, `saltos`, `pausa_s` e as palavras da legenda seguem no tempo original e só
+      são convertidos aqui; vídeo e som saem do mesmo arquivo (o som do longo, AAC, já limpo e normalizado; o loudnorm dos
+      Shorts, `lufs_shorts`, ainda é aplicado por cima). A imagem não leva o zoom nem a cor de novo (já estão no longo); o
+      zoom só dos Shorts, a legenda e a marca d'água dos Shorts, sim.
+    * **Assinatura e registro.** `assinatura_do_short(…, fonte_id=)`: o identificador do longo (`longo:<hash_rapido>`) só entra
+      quando o Short sai dele, então os Shorts já renderizados do original continuam valendo, e um Short do longo é refeito se o
+      longo for refeito. O registro (`shorts_renderizados.json`) ganha `"fonte": "longo"` nesses.
+    * **Consequências que o autor deve conhecer.** (a) Um Short que atravessa uma pausa longa fica **mais curto** que a duração
+      do Studio (a pausa já saiu do vídeo longo). (b) Uma geração de compressão a mais (original → longo H.264 → Short). (c) A
+      prévia do Studio continua saindo do original (com o mesmo filtro), então difere um pouco do Short final. (d) Um vídeo longo
+      renderizado por uma versão anterior não traz o mapa: os Shorts saem do original até o longo ser renderizado de novo.
+84. **A lista de projetos ao abrir** (`ui/escolha_de_projeto.py` NOVO, `core/projeto.listar_projetos`/`situacao_do_projeto`,
+    `ui/app.py`). `executar()` passou a pedir `perguntar_projeto=True` (antes `reabrir_ultimo`): 0,6 s depois de a janela
+    aparecer, uma caixa lista os projetos da pasta de projetos, **o que mexeu por último em cima** (o `estado.json` mais novo),
+    com o nome, a data da gravação, a situação ("Concluído", "Esperando a sua revisão", "Parou com erro", "3 de 18 etapas
+    prontas"…) e o que já existe (vídeo longo, Shorts…); o último projeto aberto vem marcado. Um clique escolhe; duplo clique,
+    Enter ou "Abrir" abre; **"Começar sem abrir nenhum"** (ou Esc) deixa a janela vazia. Só entra o que "Abrir projeto…" abriria
+    (pasta `AAAA-MM-DD_Nome` com `estado.json` legível). Sem projeto nenhum, não pergunta. O projeto escolhido abre na **página de
+    Processamento** (`_abrir_projeto(…, ir_para_o_studio=False)`), com o Studio já liberado na aba ao lado; "Abrir projeto…" (o
+    botão) continua indo direto ao Studio. Depois da lista vem a oferta do passo a passo, como antes.
+85. **O ícone do programa** (`ui/icone.py` NOVO). `recursos/studio_spurgeon.ico` na janela principal (`iconbitmap` logo na criação:
+    o CustomTkinter 6 só põe o ícone dele 200 ms depois se ninguém chamou `iconbitmap`) e em toda `CTkToplevel` (`icone.instalar()`,
+    chamado em `ui/__init__.py`); e a identidade do aplicativo (`SetCurrentProcessExplicitAppUserModelID`, antes da 1ª janela),
+    para a barra de tarefas não agrupar a janela sob o `pythonw.exe`. Sem o arquivo, fica o ícone de sempre.
+
+**Escolhas feitas sem consulta nesta rodada (confirmar ou mudar):** (83) o Short cujo trecho cai na transição da introdução ou da
+vinheta, ou na marca d'água do longo, sai do original em vez de ser recusado; o longo guarda o mapa só a partir desta versão (sem
+reconstruir o de um vídeo longo antigo); o som do Short sai do longo (AAC) e não do WAV tratado; (84) o "Abrir projeto…" do botão
+continua indo para o Studio e só a lista da abertura fica no Processamento; a lista mostra no máximo 60 projetos; (85) a identidade
+do aplicativo é `StudioSpurgeon.App` (os atalhos criados pelo instalador não a levam, então um atalho fixado na barra de tarefas
+pode aparecer como um botão separado do da janela aberta).

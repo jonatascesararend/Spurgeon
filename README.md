@@ -92,7 +92,12 @@ simuladas: **ainda não foi provado com contas reais**; os testes que faltam est
 
 Três modos: **Tudo**, **Só Shorts** (aproveita o que o projeto já tem) e **Só vinhetas** (junta a
 introdução e a vinheta a um vídeo longo pronto, em minutos). **Abrir projeto…** reabre qualquer
-projeto e continua de onde ele está, e o programa já abre no último projeto que você usou.
+projeto e continua de onde ele está, e ao abrir o programa mostra a **lista dos projetos que já
+existem** (o último que você usou vem marcado) para abrir um com dois cliques, na página de
+Processamento, ou começar um vídeo novo.
+
+No processamento completo o **vídeo longo é renderizado primeiro e os Shorts são cortados dele**:
+saem com o mesmo zoom, a mesma cor e o mesmo som do vídeo final.
 
 Se o processamento cair, você cancelar ou faltar luz, ele **retoma de onde parou**. Dá para
 **pausar** e **cancelar** durante o processamento (vale no próximo ponto seguro da etapa).

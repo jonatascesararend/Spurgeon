@@ -1,5 +1,5 @@
 """Dicas de ferramenta nos painéis, o "?" de cada etapa, o passo a passo, o rodapé da janela e a
-reabertura do último projeto."""
+lista de projetos da abertura."""
 
 from __future__ import annotations
 
@@ -92,10 +92,10 @@ def _com_dica(widgets, descricao: str) -> None:
 
 @gui
 def test_por_padrao_nada_acontece_sozinho_na_abertura(janela):
-    """Os testes (e qualquer `JanelaPrincipal(config)`) não têm oferta nem reabertura."""
+    """Os testes (e qualquer `JanelaPrincipal(config)`) não têm oferta nem lista de projetos."""
     parametros = inspect.signature(app_mod.JanelaPrincipal.__init__).parameters
     assert parametros["oferecer_tutorial"].default is False
-    assert parametros["reabrir_ultimo"].default is False
+    assert parametros["perguntar_projeto"].default is False
     assert janela.tutorial is None and janela._oferta is None
     assert janela._abertura_agendada is None
     assert janela.config_app.tutorial_ao_abrir is True and janela._var_tutorial.get() is True
@@ -827,62 +827,83 @@ def test_o_projeto_criado_ao_iniciar_vira_o_ultimo(passo_a_passo, video_teste, m
     base.bombear(tela, lambda: tela.execucao.estado == EstadoUI.CANCELADO)
 
 
+@pytest.fixture
+def pasta_de_projetos(passo_a_passo, projeto_pronto, monkeypatch):
+    """A janela olhando para a pasta onde o `projeto_pronto` está (e só durante o teste)."""
+    monkeypatch.setattr(
+        passo_a_passo.config_app.pastas, "projetos", projeto_pronto.pastas.raiz.parent
+    )
+    return projeto_pronto.pastas.raiz.parent
+
+
 @gui
-def test_reabrir_o_ultimo_projeto_preenche_a_tela(passo_a_passo, projeto_pronto, video_falso):
+def test_a_lista_da_abertura_abre_o_escolhido_na_pagina_de_processamento(
+    passo_a_passo, pasta_de_projetos, projeto_pronto, video_falso, monkeypatch
+):
     tela = passo_a_passo
     tela.config_app.ultimo_projeto = str(projeto_pronto.pastas.raiz)
-    assert tela._reabrir_ultimo_projeto() is True
+    vistas: list[tuple[list, str]] = []
+
+    def escolher(_janela, projetos, *, ultimo=""):
+        vistas.append((list(projetos), ultimo))
+        return projetos[0].pasta
+
+    monkeypatch.setattr(app_mod, "escolher_projeto", escolher)
+    assert tela._escolher_projeto_ao_abrir() is True
+    projetos, ultimo = vistas[0]
+    assert [p.pasta for p in projetos] == [projeto_pronto.pastas.raiz]
+    assert ultimo == str(projeto_pronto.pastas.raiz)  # o último aberto vem marcado
     assert tela._pastas is not None and tela._pastas.raiz == projeto_pronto.pastas.raiz
     assert tela.entrada.var_nome.get() == "Sermão Teste"
     assert tela.entrada.var_video.get() == str(video_falso)
-    assert tela._abas.get() == app_mod.ABA_STUDIO  # o projeto tem cortes: abre no Studio
+    assert tela._abas.get() == app_mod.ABA_PROCESSAMENTO  # e não direto no Studio…
+    assert tela.studio.liberada  # …que já está liberado, na aba ao lado
     assert tela.caixas.mostradas == []
 
 
 @gui
-def test_o_ultimo_projeto_que_sumiu_e_esquecido_em_silencio(passo_a_passo, tmp_path, gravacoes):
+def test_escolher_nenhum_projeto_deixa_a_janela_vazia(
+    passo_a_passo, pasta_de_projetos, monkeypatch, gravacoes
+):
     tela = passo_a_passo
-    tela.config_app.ultimo_projeto = str(tmp_path / "Projetos" / "2026-10-04_Apagado")
-    assert tela._reabrir_ultimo_projeto() is False
-    assert tela.config_app.ultimo_projeto == ""
-    assert gravacoes and gravacoes[-1].ultimo_projeto == ""
-    assert tela._pastas is None and tela.caixas.mostradas == []  # nenhuma caixa de erro
+    monkeypatch.setattr(app_mod, "escolher_projeto", lambda *_a, **_k: None)
+    assert tela._escolher_projeto_ao_abrir() is False
+    assert tela._pastas is None and gravacoes == [] and tela.caixas.mostradas == []
 
 
 @gui
-def test_o_ultimo_projeto_que_nao_e_mais_um_projeto_tambem_e_esquecido(passo_a_passo, tmp_path):
+def test_sem_projetos_na_pasta_a_lista_nem_aparece(passo_a_passo, tmp_path, monkeypatch):
     tela = passo_a_passo
-    pasta = tmp_path / "2026-10-04_Sem_estado"
-    pasta.mkdir()  # existe, mas sem o estado.json
-    tela.config_app.ultimo_projeto = str(pasta)
-    assert tela._reabrir_ultimo_projeto() is False
-    assert tela.config_app.ultimo_projeto == "" and tela.caixas.mostradas == []
-    estragada = tmp_path / "2026-10-05_Estragado"
-    estragada.mkdir()
-    (estragada / "estado.json").write_text("{isto não é json", encoding="utf-8")
-    tela.config_app.ultimo_projeto = str(estragada)
-    assert tela._reabrir_ultimo_projeto() is False
-    assert tela.config_app.ultimo_projeto == "" and tela.caixas.mostradas == []
+    monkeypatch.setattr(tela.config_app.pastas, "projetos", tmp_path / "ainda_nao_existe")
+    chamadas: list[int] = []
+    monkeypatch.setattr(app_mod, "escolher_projeto", lambda *_a, **_k: chamadas.append(1))
+    assert tela._escolher_projeto_ao_abrir() is False and chamadas == []
 
 
 @gui
-def test_nao_reabre_se_ha_processamento_em_andamento(passo_a_passo, projeto_pronto, gravacoes):
+def test_nao_pergunta_se_ha_processamento_em_andamento(
+    passo_a_passo, pasta_de_projetos, monkeypatch, gravacoes
+):
     tela = passo_a_passo
-    tela.config_app.ultimo_projeto = str(projeto_pronto.pastas.raiz)
+    chamadas: list[int] = []
+    monkeypatch.setattr(app_mod, "escolher_projeto", lambda *_a, **_k: chamadas.append(1))
     tela.execucao.definir_estado(EstadoUI.EXECUTANDO)
     try:
-        assert tela._reabrir_ultimo_projeto() is False
-        assert tela._pastas is None  # nada foi aberto
-        assert tela.config_app.ultimo_projeto == str(projeto_pronto.pastas.raiz)  # e nada se perde
+        assert tela._escolher_projeto_ao_abrir() is False
+        assert chamadas == [] and tela._pastas is None  # nada foi aberto
         assert gravacoes == [] and tela.caixas.mostradas == []
     finally:
         tela.execucao.definir_estado(EstadoUI.OCIOSO, tem_projeto=False)
 
 
 @gui
-def test_sem_ultimo_projeto_nao_ha_o_que_reabrir(passo_a_passo, gravacoes):
+def test_abrir_projeto_pelo_botao_continua_indo_para_o_studio(
+    passo_a_passo, projeto_pronto, gravacoes
+):
+    """Só a lista da abertura fica no Processamento; "Abrir projeto…" leva ao Studio, como antes."""
     tela = passo_a_passo
-    assert tela._reabrir_ultimo_projeto() is False and gravacoes == []
+    tela._abrir_projeto(projeto_pronto.pastas.raiz)
+    assert tela._abas.get() == app_mod.ABA_STUDIO
 
 
 # --- a abertura do programa ---------------------------------------------------------------------
@@ -890,55 +911,56 @@ def test_sem_ultimo_projeto_nao_ha_o_que_reabrir(passo_a_passo, gravacoes):
 def test_agendar_a_abertura_so_agenda_quando_pedido(passo_a_passo):
     tela = passo_a_passo
     assert tela._agendar_abertura(False, False) is None and tela._abertura_agendada is None
-    for oferecer, reabrir in ((True, False), (False, True), (True, True)):
-        agendado = tela._agendar_abertura(oferecer, reabrir)
+    for oferecer, perguntar in ((True, False), (False, True), (True, True)):
+        agendado = tela._agendar_abertura(oferecer, perguntar)
         assert agendado is not None and tela._abertura_agendada == agendado
         tela.after_cancel(agendado)
         tela._abertura_agendada = None
 
 
 @gui
-def test_na_abertura_primeiro_reabre_e_so_depois_oferece(passo_a_passo, monkeypatch):
+def test_na_abertura_primeiro_mostra_os_projetos_e_so_depois_oferece(passo_a_passo, monkeypatch):
     tela = passo_a_passo
     chamadas: list[str] = []
-    monkeypatch.setattr(tela, "_reabrir_ultimo_projeto", lambda: chamadas.append("reabrir"))
+    monkeypatch.setattr(tela, "_escolher_projeto_ao_abrir", lambda: chamadas.append("projetos"))
     monkeypatch.setattr(tela, "_oferecer_tutorial", lambda: chamadas.append("oferecer"))
     monkeypatch.setattr(app_mod, "_ENTRE_REABRIR_E_OFERTAR_MS", 20)
-    tela._ao_abrir_o_programa(oferecer=True, reabrir=True)
-    assert chamadas == ["reabrir"]  # a pergunta vem depois, não junto
-    base.bombear(tela, lambda: chamadas == ["reabrir", "oferecer"], limite_s=5)
+    tela._ao_abrir_o_programa(oferecer=True, perguntar=True)
+    assert chamadas == ["projetos"]  # a pergunta vem depois, não junto
+    base.bombear(tela, lambda: chamadas == ["projetos", "oferecer"], limite_s=5)
 
 
 @gui
 def test_na_abertura_sem_a_preferencia_nao_oferece(passo_a_passo, monkeypatch):
     tela = passo_a_passo
     chamadas: list[str] = []
-    monkeypatch.setattr(tela, "_reabrir_ultimo_projeto", lambda: chamadas.append("reabrir"))
+    monkeypatch.setattr(tela, "_escolher_projeto_ao_abrir", lambda: chamadas.append("projetos"))
     monkeypatch.setattr(tela, "_oferecer_tutorial", lambda: chamadas.append("oferecer"))
     tela.config_app.tutorial_ao_abrir = False  # a pessoa marcou "Não mostrar novamente"
-    tela._ao_abrir_o_programa(oferecer=True, reabrir=True)
+    tela._ao_abrir_o_programa(oferecer=True, perguntar=True)
     _rodar_a_interface(tela, 0.6)
-    assert chamadas == ["reabrir"]
-    tela._ao_abrir_o_programa(oferecer=False, reabrir=False)
-    assert chamadas == ["reabrir"]  # sem pedido, nem reabre
+    assert chamadas == ["projetos"]
+    tela._ao_abrir_o_programa(oferecer=False, perguntar=False)
+    assert chamadas == ["projetos"]  # sem pedido, nem pergunta
 
 
 @gui
-def test_na_abertura_de_verdade_reabre_o_projeto_e_so_depois_a_pergunta(
-    passo_a_passo, projeto_pronto, monkeypatch
+def test_na_abertura_de_verdade_abre_o_projeto_escolhido_e_so_depois_a_pergunta(
+    passo_a_passo, pasta_de_projetos, projeto_pronto, monkeypatch
 ):
     tela = passo_a_passo
-    tela.config_app.ultimo_projeto = str(projeto_pronto.pastas.raiz)
+    monkeypatch.setattr(app_mod, "escolher_projeto", lambda _j, projetos, **_k: projetos[0].pasta)
     monkeypatch.setattr(app_mod, "_ENTRE_REABRIR_E_OFERTAR_MS", 20)
-    tela._ao_abrir_o_programa(oferecer=True, reabrir=True)
+    tela._ao_abrir_o_programa(oferecer=True, perguntar=True)
     assert tela._pastas is not None and tela._pastas.raiz == projeto_pronto.pastas.raiz
+    assert tela._abas.get() == app_mod.ABA_PROCESSAMENTO
     assert tela._oferta is None  # a pergunta ainda não apareceu por cima do projeto abrindo
     base.bombear(tela, lambda: tela._oferta is not None, limite_s=5)
     tela._oferta.escolher(False)
 
 
 @gui
-def test_executar_abre_a_janela_com_a_oferta_e_a_reabertura(monkeypatch):
+def test_executar_abre_a_janela_com_a_oferta_e_a_lista_de_projetos(monkeypatch):
     chamadas: list[dict] = []
 
     class Falsa:
@@ -953,7 +975,7 @@ def test_executar_abre_a_janela_com_a_oferta_e_a_reabertura(monkeypatch):
     assert chamadas[0] == {
         "args": (),
         "oferecer_tutorial": True,
-        "reabrir_ultimo": True,
+        "perguntar_projeto": True,
         "verificar_atualizacao": True,  # só a abertura de verdade consulta o GitHub
     }
     assert chamadas[1] == {"mainloop": True}
