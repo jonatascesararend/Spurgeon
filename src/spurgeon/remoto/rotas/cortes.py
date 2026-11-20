@@ -121,6 +121,8 @@ def rotas(ctx: Contexto) -> list[Route]:
         corpo = await _corpo(request)
 
         def fazer(p, c, d):
+            if "indices" in d:  # o rascunho do celular (início, fim e borracha) de uma vez
+                return edicao.definir_palavras(p, c, list(d["indices"]))
             if "passo" in d:
                 return edicao.mover_ponta(p, c, str(d["ponta"]), int(d["passo"]))
             primeira = None if d.get("primeira") is None else int(d["primeira"])

@@ -40,6 +40,7 @@ O fluxo de ponta a ponta:
 | R16 | Para conferir a legenda basta **ouvir**: opção de montar **só o áudio** do Short, com a legenda acompanhando, sem renderizar o vídeo | 2026-11-20 |
 | R17 | A **aprovação dos cortes** também é feita pelo celular (S10) | 2026-11-20 |
 | R18 | Corrigir a legenda **na própria audição** (a legenda que acompanha o áudio), não numa caixa à parte | 2026-11-20 |
+| R19 | **Borracha** no início e fim (cortar palavras no meio do Short), e as mudanças de início, fim e borracha **só vão ao PC ao salvar** (botão, troca de aba ou de ferramenta): o áudio não é refeito a cada toque | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -301,6 +302,15 @@ legenda mudou") e troca só aquelas palavras na legenda do corte (`legenda_corri
 refeito (a legenda não muda o som) e a posição continua. "Editar o texto inteiro de uma vez" mantém a caixa antiga para
 correções grandes. Achado: uma palavra **acrescentada antes da primeira** do corte ganha duração zero (é do
 `aplicar_edicao` do Studio, igual no PC).
+
+**Borracha e rascunho (R19, 2026-11-20).** O "Início e fim" da tela do Short virou **"Início, fim e borracha"**, com três
+ferramentas: **↔ Início e fim** (tocar numa palavra → começar/terminar nela), **✂ Borracha** (um toque corta a palavra do
+meio; de novo, devolve) e **✂ Trecho** (dois toques: tudo entre as duas palavras sai, ou volta se a primeira já estava
+cortada). Tudo é um **rascunho no celular** (o conjunto de palavras do corte, com a duração estimada pelo início e fim de
+cada palavra): nada vai ao PC e o áudio não é refeito a cada toque. Vai de uma vez (`POST …/pontas` com `indices`;
+`remoto/edicao.definir_palavras` → `corte_com_indices`: o que fica entre dois pedaços vira salto, e `legenda_preservada`)
+no **"💾 Salvar alterações"**, ao **trocar de ferramenta ou de aba** (Ouvir/Vídeo) e ao **sair do Short**; "Descartar" volta
+ao que estava. Menos de 10 s não salva. As setas de uma palavra da R2 saíram (o toque em "Início e fim" faz o mesmo).
 
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 

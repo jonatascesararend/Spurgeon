@@ -577,40 +577,121 @@ async function editorDaLegenda(painel, base, aoSalvar, aoFechar) {
     botaoTranscricao));
 }
 
-/** Mudar o início e o fim do corte, palavra por palavra. */
-async function editorDasPontas(painel, base, aoMudar, aoFechar) {
+/** Início, fim e borracha do corte como RASCUNHO no celular: nada vai ao PC (nem o áudio é refeito)
+ * até "Salvar alterações", trocar de ferramenta ou de aba, ou sair do Short. Devolve
+ * `{ pendente(), salvar() }` para a tela do Short salvar sozinha nessas horas. */
+async function editorDasPontas(painel, base, aoSalvar, aoFechar) {
   const ed = await api(`${base}/edicao`);
-  const mudar = async (corpo) => {
-    try { await aoMudar(await editar(`${base}/pontas`, corpo)); }
-    catch (e) { avisar(e.message); }
+  const porN = new Map(ed.contexto.map((w) => [w.n, w]));
+  let original = new Set(ed.contexto.filter((w) => w.dentro).map((w) => w.n));
+  let incl = new Set(original);
+  let ferramenta = "seta"; // "seta", "borracha" (uma palavra) ou "trecho" (dois toques)
+  let ancora = null;
+  let salvando = false;
+
+  const ordenadas = () => [...incl].sort((a, b) => a - b);
+  const pendente = () => incl.size !== original.size || [...incl].some((n) => !original.has(n));
+  const faixas = () => {
+    const lista = ordenadas();
+    const resultado = [];
+    for (const n of lista) {
+      const ultima = resultado[resultado.length - 1];
+      if (ultima && n === ultima[1] + 1) ultima[1] = n; else resultado.push([n, n]);
+    }
+    return resultado;
   };
-  const palavras = ed.contexto.map((w) => {
-    const classes = ["palavra-ctx", w.dentro ? "dentro" : "fora"];
-    const span = h("span", { class: classes.join(" "), onclick: async () => {
+  const duracaoEstimada = () => faixas().reduce((s, [a, b]) => s + (porN.get(b).f - porN.get(a).i), 0);
+  const faixaDe = (a, b) => { const r = []; for (let n = Math.min(a, b); n <= Math.max(a, b); n++) if (porN.has(n)) r.push(n); return r; };
+
+  const resumo = h("div");
+  const texto = h("div", { class: "contexto-palavras" });
+  const ferramentas = h("div", { class: "segmentos" });
+  const acoes = h("div");
+
+  async function salvar() {
+    if (!pendente() || salvando) return null;
+    const lista = ordenadas();
+    if (!lista.length) { avisar("O corte ficaria sem nenhuma palavra."); return null; }
+    salvando = true;
+    try {
+      const novo = await editar(`${base}/pontas`, { indices: lista });
+      original = new Set(incl);
+      avisar("Alterações salvas no PC.");
+      return novo;
+    } catch (e) { avisar(e.message); return null; }
+    finally { salvando = false; }
+  }
+
+  function pintar() {
+    const lista = ordenadas();
+    const primeira = lista[0], ultima = lista[lista.length - 1];
+    const dur = lista.length ? duracaoEstimada() : 0;
+    const curto = dur < ed.minimo_s;
+    encher(resumo,
+      h("p", { class: "nota" }, `Duração ≈ ${duracao(dur)}${faixas().length > 1 ? ` (${faixas().length - 1} pedaço(s) cortado(s) no meio)` : ""}.`),
+      curto ? h("p", { class: "nota aviso-bloco" }, `Um Short precisa de pelo menos ${ed.minimo_s} s.`) : null,
+      dur > 180 ? h("p", { class: "nota aviso-bloco" }, "Acima de 3 minutos o corte não pode ser um Short.") : null,
+      h("p", { class: "nota" }, {
+        seta: "Toque numa palavra para começar ou terminar nela.",
+        borracha: "Toque numa palavra do meio para cortá-la (toque de novo para devolver).",
+        trecho: ancora === null ? "Toque na primeira palavra do trecho a cortar…" : "…e agora na última: o trecho todo sai (ou volta).",
+      }[ferramenta]));
+    encher(ferramentas, ...[["seta", "↔ Início e fim"], ["borracha", "✂ Borracha"], ["trecho", "✂ Trecho"]].map(([k, r]) =>
+      h("button", { class: ferramenta === k ? "ativo" : "", onclick: () => { ferramenta = k; ancora = null; pintar(); } }, r)));
+    encher(texto, ...ed.contexto.flatMap((w) => {
+      const dentroDoCorte = lista.length && w.n >= primeira && w.n <= ultima;
+      const classe = incl.has(w.n) ? "dentro" : dentroDoCorte ? "cortada" : "fora";
+      const pedacos = [];
+      if (w.n === primeira) pedacos.push(h("span", { class: "marca-ponta", id: "marca-inicio" }, "▶"));
+      pedacos.push(h("span", { class: `palavra-ctx ${classe}${ancora === w.n ? " ancora" : ""}`, onclick: () => tocar(w) }, w.t));
+      if (w.n === ultima) pedacos.push(h("span", { class: "marca-ponta" }, "◀"));
+      pedacos.push(" ");
+      return pedacos;
+    }));
+    const mudou = pendente();
+    encher(acoes,
+      mudou ? h("p", { class: "nota aviso-bloco" }, "Alterações ainda não salvas (o áudio é refeito ao salvar).") : null,
+      h("div", { class: "linha-botoes" },
+        h("button", { class: "botao", disabled: !mudou || curto || null, onclick: async () => { const novo = await salvar(); if (novo) await aoSalvar(novo); } }, "💾 Salvar alterações"),
+        mudou ? h("button", { class: "botao secundario", onclick: () => { incl = new Set(original); ancora = null; pintar(); } }, "Descartar") : null),
+      h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar"));
+  }
+
+  async function tocar(w) {
+    const lista = ordenadas();
+    const primeira = lista[0], ultima = lista[lista.length - 1];
+    if (ferramenta === "borracha") {
+      if (w.n < primeira || w.n > ultima) { avisar("Fora do corte: use “Início e fim” para aumentar."); return; }
+      if (incl.has(w.n)) incl.delete(w.n); else incl.add(w.n);
+    } else if (ferramenta === "trecho") {
+      if (ancora === null) { ancora = w.n; pintar(); return; }
+      const trecho = faixaDe(ancora, w.n);
+      const devolver = !incl.has(ancora);
+      for (const n of trecho) { if (devolver) incl.add(n); else incl.delete(n); }
+      ancora = null;
+    } else {
       const opcoes = [];
-      if (w.n <= ed.ultima) opcoes.push(["inicio", "▶ Começar nesta palavra"]);
-      if (w.n >= ed.primeira) opcoes.push(["fim", "Terminar nesta palavra ◀"]);
+      if (!lista.length || w.n <= ultima) opcoes.push(["inicio", "▶ Começar nesta palavra"]);
+      if (!lista.length || w.n >= primeira) opcoes.push(["fim", "Terminar nesta palavra ◀"]);
       const escolha = await escolher(`“${w.t}”`, opcoes);
-      if (escolha === "inicio") await mudar({ primeira: w.n });
-      if (escolha === "fim") await mudar({ ultima: w.n });
-    } }, w.t);
-    const pedacos = [];
-    if (w.n === ed.primeira) pedacos.push(h("span", { class: "marca-ponta", id: "marca-inicio" }, "▶"));
-    pedacos.push(span);
-    if (w.n === ed.ultima) pedacos.push(h("span", { class: "marca-ponta" }, "◀"));
-    return pedacos;
-  });
-  const passo = (ponta, n, rotulo) => h("button", { class: "botao-pequeno", onclick: () => mudar({ ponta, passo: n }) }, rotulo);
-  encher(painel, h("div", { class: "bloco" },
-    h("h3", {}, "Início e fim do corte"),
-    h("p", { class: "nota" }, `Duração: ${duracao(ed.duracao)}. Toque numa palavra para começar ou terminar nela; as setas mudam uma palavra.`),
-    ed.acima_do_limite ? h("p", { class: "aviso-bloco nota" }, "Acima de 3 minutos o corte não pode ser um Short: encurte.") : null,
-    h("div", { class: "linha-pontas" }, h("span", {}, "Início"), passo("inicio", -1, "‹ uma antes"), passo("inicio", 1, "uma depois ›")),
-    h("div", { class: "linha-pontas" }, h("span", {}, "Fim"), passo("fim", -1, "‹ uma antes"), passo("fim", 1, "uma depois ›")),
-    h("div", { class: "contexto-palavras" }, ...palavras.flatMap((p) => [...p, " "])),
-    h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar")));
+      if (escolha === "inicio") {
+        for (const n of [...incl]) if (n < w.n) incl.delete(n);
+        if (w.n < primeira) for (const n of faixaDe(w.n, primeira - 1)) incl.add(n);
+        incl.add(w.n);
+      } else if (escolha === "fim") {
+        for (const n of [...incl]) if (n > w.n) incl.delete(n);
+        if (w.n > ultima) for (const n of faixaDe(ultima + 1, w.n)) incl.add(n);
+        incl.add(w.n);
+      } else return;
+    }
+    pintar();
+  }
+
+  encher(painel, h("div", { class: "bloco" }, h("h3", {}, "Início, fim e borracha"), ferramentas, resumo, texto, acoes));
+  pintar();
   const marca = document.getElementById("marca-inicio");
   if (marca) marca.scrollIntoView({ block: "center" });
+  return { pendente, salvar };
 }
 
 const doisDigitos = (n) => String(n).padStart(2, "0");
@@ -731,9 +812,11 @@ async function telaShort(id, corte) {
   const pintarSeletor = () => {
     seletor.hidden = !s.renderizado;
     encher(seletor, ...[["ouvir", "🎧 Ouvir e editar"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
-      h("button", { class: modo === k ? "ativo" : "", onclick: () => {
+      h("button", { class: modo === k ? "ativo" : "", onclick: async () => {
         if (modo === k) return;
-        modo = k; guardarModo(k); edicao = ""; pintarSeletor(); mostrar();
+        if (rascunho && rascunho.pendente()) { const salvo = await rascunho.salvar(); if (salvo) s = salvo; }
+        rascunho = null;
+        modo = k; guardarModo(k); edicao = ""; pintarCabecalho(); pintarInfo(); pintarSeletor(); mostrar();
       } }, r)));
   };
 
@@ -744,8 +827,16 @@ async function telaShort(id, corte) {
     await mostrar();
   };
   const fecharEditor = () => { abrir(""); };
+  let rascunho = null; // o editor de início e fim com mudanças que ainda não foram ao PC
 
   async function abrir(qual) {
+    // trocar de ferramenta ou de aba salva o rascunho de início, fim e borracha (o áudio é refeito uma vez)
+    if (rascunho && rascunho.pendente() && qual !== "pontas") {
+      const salvo = await rascunho.salvar();
+      rascunho = null;
+      if (salvo) { s = salvo; edicao = qual; pintarCabecalho(); pintarInfo(); pintarSeletor(); await mostrar(); return; }
+    }
+    if (qual !== "pontas") rascunho = null;
     edicao = qual;
     pintarFerramentas();
     if (audicao) {
@@ -757,7 +848,7 @@ async function telaShort(id, corte) {
       else if (qual === "texto") {
         await editorDaLegenda(painel, base, async (novo) => { edicao = "legenda"; await depoisDeMudar(novo); }, () => abrir("legenda"));
       }
-      else if (qual === "pontas") await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
+      else if (qual === "pontas") rascunho = await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
       else if (qual === "postar") await editorDaPostagem(painel, base, id, async () => { s = await pegar(); pintarCabecalho(); pintarInfo(); pintarFerramentas(); }, fecharEditor);
       else encher(painel);
     } catch (e) {
@@ -782,7 +873,11 @@ async function telaShort(id, corte) {
         aoMudar: async (novo) => { s = novo; pintarCabecalho(); pintarInfo(); },
         aoTextoInteiro: () => abrir("texto"),
       });
-      limparTela = audicao.limpar;
+      const limparAudicao = audicao.limpar;
+      limparTela = () => { // sair do Short: o rascunho de início e fim vai para o PC
+        limparAudicao();
+        if (rascunho && rascunho.pendente()) rascunho.salvar();
+      };
     } catch (e) {
       encher(area, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
     }

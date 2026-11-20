@@ -175,6 +175,8 @@ a.botao { display: block; text-align: center; text-decoration: none; }
 .palavra-ctx { border-radius: 5px; padding: 1px 1px; cursor: pointer; }
 .palavra-ctx.fora { color: var(--texto-2); opacity: .55; }
 .palavra-ctx.dentro { color: var(--texto); }
+.palavra-ctx.cortada { color: var(--erro); text-decoration: line-through; opacity: .75; }
+.palavra-ctx.ancora { outline: 2px solid var(--destaque); background: color-mix(in srgb, var(--destaque) 30%, transparent); }
 .marca-ponta { color: var(--destaque); font-weight: 700; padding: 0 2px; }
 .marcador {
   flex: none; width: 34px; height: 34px; border-radius: 8px; border: 2px solid var(--linha);

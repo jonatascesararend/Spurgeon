@@ -66,6 +66,7 @@ def para_editar(pastas: PastasProjeto, id_do_corte: int) -> dict[str, Any]:
                 "n": i,
                 "t": palavras[i].texto,
                 "i": round(palavras[i].inicio, 2),
+                "f": round(palavras[i].fim, 2),
                 "dentro": i in incluidos,
             }
             for i in range(de, ate)
@@ -155,6 +156,19 @@ def mudar_pontas(
         *range(max(dentro[-1] + 1, de), ate + 1),
     ]
     return _aplicar(pastas, corte, palavras, corte_com_indices(palavras, corte, novas))
+
+
+def definir_palavras(pastas: PastasProjeto, id_do_corte: int, indices) -> Corte:
+    """O corte com exatamente estas palavras (posições na transcrição): o rascunho que o celular
+    montou com o início, o fim e a borracha, gravado de uma vez. O que fica entre dois pedaços vira
+    salto (`corte_com_indices`, como a borracha do Studio)."""
+    corte, palavras = _carregar(pastas, id_do_corte)
+    escolhidas = sorted({int(n) for n in indices})
+    if not escolhidas:
+        raise LimiteInvalido("O corte ficaria sem nenhuma palavra.")
+    if escolhidas[0] < 0 or escolhidas[-1] >= len(palavras):
+        raise LimiteInvalido("Essa palavra não está na transcrição.")
+    return _aplicar(pastas, corte, palavras, corte_com_indices(palavras, corte, escolhidas))
 
 
 def mover_ponta(pastas: PastasProjeto, id_do_corte: int, ponta: str, passo: int) -> Corte:
