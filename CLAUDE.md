@@ -22,6 +22,9 @@ A janela do PC fala com o celular por arquivos (`remoto/sessao.py`): a cada segu
 `JanelaPrincipal._conferir_o_celular` vê a trava `_work/celular.json` do projeto aberto, salva o Studio SEM perguntar
 (`EditorDeCortes.salvar_em_silencio`), dá o recibo e trava o Studio; também solta a revisão que o celular aprovou. Antes de
 processar, a janela e o servidor procuram outro `spurgeon.core.trabalhador` rodando (um por vez no PC, `remoto/fila.py`).
+App do celular (`remoto/web/app.js`, sem build): monte o conteúdo com `encher(el, ...)` (ignora null; o `replaceChildren`
+escreveria "null"); confira com `node --check`. Shorts livre no servidor: `remoto/livre.py` (índices = palavras da janela do
+vídeo, como no PC; a criação com a IA roda numa thread e segura a trava do celular até gravar o corte).
 
 ## Comandos
 

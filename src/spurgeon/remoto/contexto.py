@@ -10,6 +10,7 @@ from pathlib import Path
 from spurgeon.remoto.avisos import Avisos
 from spurgeon.remoto.config import ConfigRemoto, salvar_config_remoto
 from spurgeon.remoto.fila import Fila
+from spurgeon.remoto.livre import Criacoes
 
 
 @dataclass
@@ -24,6 +25,8 @@ class Contexto:
     encerrar: Callable[[], None] = lambda: None
     #: o processamento que o celular pede (um por vez no PC)
     fila: Fila = field(default_factory=Fila)
+    #: o Short livre que a IA está criando (um por vez)
+    criacoes: Criacoes = field(default_factory=Criacoes)
     _trava: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def mudar_config(self, **campos) -> ConfigRemoto:

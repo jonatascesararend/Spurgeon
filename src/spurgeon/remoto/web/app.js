@@ -26,6 +26,12 @@ function h(tag, atributos = {}, ...filhos) {
   return el;
 }
 
+/** Troca o conteúdo de `el` pelos filhos dados, ignorando null/false/undefined (o
+ * `replaceChildren` do navegador os escreveria como texto: "null"). */
+function encher(el, ...filhos) {
+  el.replaceChildren(...filhos.flat().filter((f) => f !== null && f !== undefined && f !== false));
+}
+
 function avisar(texto) {
   const t = h("div", { class: "toast", role: "status" }, texto);
   document.body.append(t);
@@ -72,7 +78,7 @@ function marcarPonto(estado) {
 
 function mostrarDormindo(dormindo) {
   const faixa = $("faixa");
-  faixa.replaceChildren();
+  encher(faixa);
   faixa.hidden = !dormindo;
   if (dormindo) {
     marcarPonto("dormindo");
@@ -115,7 +121,7 @@ function repetir(fn, ms) {
 function pararRepeticao() { if (atualizador) clearInterval(atualizador); atualizador = null; }
 
 function mostrarErro(e) {
-  tela.replaceChildren(h("div", { class: "vazio-lista" }, e.message || String(e),
+  encher(tela, h("div", { class: "vazio-lista" }, e.message || String(e),
     h("button", { class: "botao secundario", onclick: rotear }, "Tentar de novo")));
 }
 
@@ -177,10 +183,10 @@ async function telaProjetos() {
   const desenhar = async () => {
     const lista = await api("/api/projetos");
     if (!lista.length) {
-      tela.replaceChildren(h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
+      encher(tela, h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
       return;
     }
-    tela.replaceChildren(...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
+    encher(tela, ...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
       h("div", { class: "nome" }, p.nome),
       h("div", { class: "meta" }, `${dataBr(p.data)} · ${p.detalhes}`),
       h("div", { class: "chips" }, h("span", { class: `chip ${classeDaSituacao(p.situacao)}` }, p.situacao)),
@@ -204,7 +210,7 @@ function desenharAndamento(caixa, a) {
       e.erro ? h("div", { class: "meta" }, e.erro) : null),
   ));
   const log = h("details", {}, h("summary", {}, "Últimas linhas do log"), h("pre", { class: "log" }, a.log.join("\n") || "(vazio)"));
-  caixa.replaceChildren(h("div", { class: "cartao" }, ...etapas, log));
+  encher(caixa, h("div", { class: "cartao" }, ...etapas, log));
 }
 
 function chipsDoShort(s) {
@@ -291,7 +297,7 @@ async function telaProjeto(id) {
   const projeto = await api(`/api/projetos/${enc(id)}`);
   cabecalho(projeto.nome, dataBr(projeto.data), "");
   const situacao = h("div", { class: "chips" });
-  const pintarSituacao = (a) => situacao.replaceChildren(
+  const pintarSituacao = (a) => encher(situacao, 
     h("span", { class: `chip ${classeDaSituacao(a.situacao)}` }, a.situacao),
     h("span", { class: "chip" }, projeto.resultados));
   pintarSituacao(projeto.andamento);
@@ -302,26 +308,29 @@ async function telaProjeto(id) {
   let shorts = [];
   const pintarShorts = () => {
     titulo.textContent = `Shorts (${shorts.filter((s) => s.incluir).length} marcados)`;
-    segmentos.replaceChildren(...[["marcados", "Marcados"], ["renderizados", "Renderizados"], ["todos", "Todos"]].map(([k, r]) =>
+    encher(segmentos, ...[["marcados", "Marcados"], ["renderizados", "Renderizados"], ["todos", "Todos"]].map(([k, r]) =>
       h("button", { class: filtroDosShorts === k ? "ativo" : "", onclick: () => { filtroDosShorts = k; pintarShorts(); } }, r)));
     const visiveis = shorts.filter((s) => filtroDosShorts === "todos" || (filtroDosShorts === "renderizados" ? s.renderizado : s.incluir));
-    caixaShorts.replaceChildren(...(visiveis.length
+    encher(caixaShorts, ...(visiveis.length
       ? visiveis.map((s) => linhaDoShort(id, s))
       : [h("div", { class: "vazio-lista" }, shorts.length ? "Nenhum Short neste filtro." : "Este projeto ainda não tem Shorts.")]));
   };
   shorts = await api(`/api/projetos/${enc(id)}/shorts`);
   pintarShorts();
+  const livre = shorts.length
+    ? h("a", { class: "botao secundario", href: `#/p/${enc(id)}/livre` }, "✚ Shorts livre: criar um Short de qualquer trecho")
+    : null;
 
   const etapasAbertas = projeto.andamento.em_andamento || projeto.andamento.esperando_revisao;
   const blocoEtapas = h("details", { open: etapasAbertas || null }, h("summary", {}, "Etapas do processamento"), caixaAndamento);
-  tela.replaceChildren(situacao, caixaAcoes, blocoEtapas, titulo, segmentos, caixaShorts);
+  encher(tela, situacao, caixaAcoes, blocoEtapas, titulo, segmentos, livre || "", caixaShorts);
 
   let andava = projeto.andamento.em_andamento;
   const atualizar = async () => {
     const a = await api(`/api/projetos/${enc(id)}/andamento`);
     pintarSituacao(a);
     desenharAndamento(caixaAndamento, a);
-    caixaAcoes.replaceChildren(...acoesDoProjeto(id, a, atualizar));
+    encher(caixaAcoes, ...acoesDoProjeto(id, a, atualizar));
     if (andava || a.em_andamento) { shorts = await api(`/api/projetos/${enc(id)}/shorts`); pintarShorts(); }
     andava = a.em_andamento;
   };
@@ -341,7 +350,7 @@ async function telaAprovar(id) {
     const marcados = shorts.filter((s) => s.incluir).length;
     aprovar.textContent = `Aprovar e continuar (${plural(marcados, "marcado", "marcados")})`;
     aprovar.disabled = marcados === 0;
-    lista.replaceChildren(...shorts.map((s) => {
+    encher(lista, ...shorts.map((s) => {
       const caixa = h("button", { class: `marcador ${s.incluir ? "ligado" : ""}`, "aria-label": s.incluir ? "Desmarcar" : "Marcar", "aria-pressed": String(s.incluir),
         onclick: async (ev) => {
           ev.currentTarget.disabled = true;
@@ -367,7 +376,7 @@ async function telaAprovar(id) {
     } catch (e) { avisar(e.message); aprovar.disabled = false; }
   });
   pintar();
-  tela.replaceChildren(
+  encher(tela, 
     h("p", { class: "nota" }, "Toque no quadrado para marcar ou desmarcar; toque no título para ouvir e editar o corte."),
     lista, h("div", { class: "barra-fixa" }, aprovar));
 }
@@ -381,12 +390,12 @@ function guardarModo(modo) {
 
 /** Ouvir com a legenda: o PC monta só o áudio do Short; a palavra falada acende. */
 async function montarAudicao(area, base) {
-  area.replaceChildren(h("div", { class: "bloco" }, "Carregando a legenda…"));
+  encher(area, h("div", { class: "bloco" }, "Carregando a legenda…"));
   const leg = await api(`${base}/legenda`);
   const palavras = leg.frases.flat();
   if (!leg.fonte) {
     const aviso = h("div", { class: "bloco aviso-bloco" }, leg.aviso);
-    area.replaceChildren(aviso);
+    encher(area, aviso);
     return { limpar: () => {}, legenda: aviso };
   }
   const audio = h("audio", { src: `${base}/audio`, preload: "auto" });
@@ -414,7 +423,7 @@ async function montarAudicao(area, base) {
     h("div", { class: "audicao-linha" }, tocar, h("div", { class: "audicao-meio" }, barra, h("div", { class: "audicao-info" }, tempo, estado)), voltar, velocidade));
   const aviso = leg.aviso ? h("div", { class: "bloco aviso-bloco" }, leg.aviso) : null;
   const legendaViva = h("div", { class: "legenda-viva" }, ...linhas);
-  area.replaceChildren(barraDoAudio, aviso || "", legendaViva, audio);
+  encher(area, barraDoAudio, aviso || "", legendaViva, audio);
   barraDoAudio.style.top = `${document.querySelector(".topo").offsetHeight}px`;
 
   let atual = -1;
@@ -476,7 +485,7 @@ async function editorDaLegenda(painel, base, aoSalvar, aoFechar) {
   const botaoTranscricao = ed.corrigida ? h("button", { class: "botao secundario", onclick: () => {
     if (confirm("Desfazer as correções e voltar ao texto da transcrição?")) salvar("", botaoTranscricao);
   } }, "Voltar ao texto da transcrição") : null;
-  painel.replaceChildren(h("div", { class: "bloco" },
+  encher(painel, h("div", { class: "bloco" },
     h("h3", {}, "Corrigir a legenda"),
     h("p", { class: "nota" }, "Escreva a legenda inteira como deve aparecer e ouça acima para conferir. As quebras de linha não importam: o PC refaz a divisão."),
     caixa,
@@ -508,7 +517,7 @@ async function editorDasPontas(painel, base, aoMudar, aoFechar) {
     return pedacos;
   });
   const passo = (ponta, n, rotulo) => h("button", { class: "botao-pequeno", onclick: () => mudar({ ponta, passo: n }) }, rotulo);
-  painel.replaceChildren(h("div", { class: "bloco" },
+  encher(painel, h("div", { class: "bloco" },
     h("h3", {}, "Início e fim do corte"),
     h("p", { class: "nota" }, `Duração: ${duracao(ed.duracao)}. Toque numa palavra para começar ou terminar nela; as setas mudam uma palavra.`),
     ed.acima_do_limite ? h("p", { class: "aviso-bloco nota" }, "Acima de 3 minutos o corte não pode ser um Short: encurte.") : null,
@@ -537,13 +546,13 @@ async function telaShort(id, corte) {
   const info = h("div");
 
   const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
-  const pintarInfo = () => info.replaceChildren(
+  const pintarInfo = () => encher(info, 
     h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s)),
     s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
     s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null);
   const pintarFerramentas = () => {
     ferramentas.hidden = modo !== "ouvir";
-    ferramentas.replaceChildren(
+    encher(ferramentas, 
       h("button", { class: `botao-ferramenta ${edicao === "legenda" ? "ativo" : ""}`, onclick: () => abrir(edicao === "legenda" ? "" : "legenda") }, "✎ Legenda"),
       h("button", { class: `botao-ferramenta ${edicao === "pontas" ? "ativo" : ""}`, onclick: () => abrir(edicao === "pontas" ? "" : "pontas") }, "⇤ Início e fim ⇥"),
       h("button", { class: `botao-ferramenta ${s.incluir ? "marcado" : ""}`, onclick: async (ev) => {
@@ -555,7 +564,7 @@ async function telaShort(id, corte) {
   };
   const pintarSeletor = () => {
     seletor.hidden = !s.renderizado;
-    seletor.replaceChildren(...[["ouvir", "🎧 Ouvir e editar"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
+    encher(seletor, ...[["ouvir", "🎧 Ouvir e editar"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
       h("button", { class: modo === k ? "ativo" : "", onclick: () => {
         if (modo === k) return;
         modo = k; guardarModo(k); edicao = ""; pintarSeletor(); mostrar();
@@ -577,9 +586,9 @@ async function telaShort(id, corte) {
     try {
       if (qual === "legenda") await editorDaLegenda(painel, base, depoisDeMudar, fecharEditor);
       else if (qual === "pontas") await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
-      else painel.replaceChildren();
+      else encher(painel);
     } catch (e) {
-      painel.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
+      encher(painel, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
     }
   }
 
@@ -589,8 +598,8 @@ async function telaShort(id, corte) {
     audicao = null;
     pintarFerramentas();
     if (modo === "video") {
-      painel.replaceChildren();
-      area.replaceChildren(h("div", { class: "player" },
+      encher(painel);
+      encher(area, h("div", { class: "player" },
         h("video", { src: `${base}/video`, controls: true, playsinline: true, preload: "metadata" })),
         h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto)));
       return;
@@ -599,14 +608,193 @@ async function telaShort(id, corte) {
       audicao = await montarAudicao(area, base);
       limparTela = audicao.limpar;
     } catch (e) {
-      area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
+      encher(area, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
     }
     await abrir(edicao);
   }
 
   pintarCabecalho(); pintarInfo(); pintarSeletor();
-  tela.replaceChildren(seletor, ferramentas, area, painel, info);
+  encher(tela, seletor, ferramentas, area, painel, info);
   await mostrar();
+}
+
+// --- Shorts livre (Fase R3) -----------------------------------------------------------------
+
+async function telaLivre(id) {
+  await entrarNoProjeto(id);
+  const base = `/api/projetos/${enc(id)}/livre`;
+  const projeto = await api(`/api/projetos/${enc(id)}`);
+  cabecalho("Shorts livre", projeto.nome, `#/p/${enc(id)}`);
+  encher(tela, h("div", { class: "vazio-lista" }, "Carregando o texto do sermão…"));
+  const dados = await api(`${base}/texto`);
+  const cats = dados.categorias;
+
+  // o texto: uma linha por frase, com a hora e a cor da categoria; palavras com o índice
+  const spans = [];
+  const fraseDe = [];
+  const linhas = dados.frases.map((f, k) => {
+    const cor = f.cat && cats[f.cat] ? cats[f.cat].cor : "transparent";
+    return h("p", { class: "frase-livre", style: `border-left-color:${cor}`, title: f.cat && cats[f.cat] ? cats[f.cat].rotulo : null },
+      h("span", { class: "hora" }, minSeg(f.i)), " ",
+      ...f.palavras.flatMap(([t, sid], j) => {
+        const n = f.de + j;
+        const feito = sid ? dados.shorts[String(sid)] : null;
+        const corDoShort = feito && cats[feito.cat] ? cats[feito.cat].cor : "var(--texto-2)";
+        const span = h("span", { class: `pl${sid ? " em-short" : ""}`, "data-n": String(n),
+          style: sid ? `text-decoration-color:${corDoShort}` : null, title: feito ? `Já está no Short “${feito.titulo}”` : null }, t);
+        spans[n] = span;
+        fraseDe[n] = k;
+        return j ? [" ", span] : [span];
+      }));
+  });
+  const textoEl = h("div", { class: "texto-livre" }, ...linhas);
+  const legenda = Object.values(cats).length
+    ? h("details", { class: "cores" }, h("summary", {}, "Cores das categorias"),
+      h("div", { class: "chips" }, ...Object.values(cats).map((c) => h("span", { class: "chip" }, h("span", { class: "cor", style: `background:${c.cor}` }), c.rotulo)),
+        h("span", { class: "chip" }, h("span", { class: "sublinhado" }, "palavra"), " já está num Short")))
+    : null;
+
+  // a busca
+  const consulta = h("input", { type: "search", class: "campo", placeholder: "Buscar palavras ou um tema", enterkeyhint: "search" });
+  let modoDaBusca = "palavras";
+  const modos = h("div", { class: "segmentos" });
+  const pintarModos = () => encher(modos, ...[["palavras", "Palavras"], ["tema", "Tema"]].map(([k, r]) =>
+    h("button", { class: modoDaBusca === k ? "ativo" : "", onclick: () => { modoDaBusca = k; pintarModos(); if (consulta.value.trim()) buscar(); } }, r)));
+  const achados = h("div");
+  const buscar = async () => {
+    const q = consulta.value.trim();
+    if (!q) { encher(achados); return; }
+    encher(achados, h("p", { class: "nota" }, modoDaBusca === "tema" ? "Procurando o tema (a primeira vez demora uns segundos)…" : "Procurando…"));
+    try {
+      const lista = await api(`${base}/buscar?q=${enc(q)}&modo=${modoDaBusca}`);
+      encher(achados, ...(lista.length ? lista.map((a) => h("button", { class: "cartao achado", onclick: () => {
+        encher(achados);
+        selecionar(a.de, a.ate);
+        spans[a.de].scrollIntoView({ block: "center" });
+      } }, h("div", { class: "meta" }, `${minSeg(a.i)} · ${Math.round(a.pontos)} pontos`), h("div", {}, a.texto.length > 220 ? `${a.texto.slice(0, 220)}…` : a.texto)))
+        : [h("p", { class: "nota" }, "Nada parecido no sermão.")]),
+      h("button", { class: "botao fechar", onclick: () => encher(achados) }, "Fechar a busca"));
+    } catch (e) { encher(achados, h("p", { class: "nota" }, e.message)); }
+  };
+  consulta.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); consulta.blur(); buscar(); } });
+  pintarModos();
+
+  // o trecho escolhido
+  let sel = null; // {de, ate, fora: Set}
+  let ancora = null;
+  let pintadas = [];
+  const painel = h("div", { class: "painel-livre" });
+  const audio = h("audio", { preload: "none" });
+  const pintarSelecao = () => {
+    for (const n of pintadas) spans[n].classList.remove("sel", "fora-sel", "ancora");
+    pintadas = [];
+    if (ancora !== null) { spans[ancora].classList.add("ancora"); pintadas.push(ancora); }
+    if (!sel) return;
+    for (let n = sel.de; n <= sel.ate; n++) {
+      spans[n].classList.add(sel.fora.has(n) ? "fora-sel" : "sel");
+      pintadas.push(n);
+    }
+  };
+  const consultaDoTrecho = () => `de=${sel.de}&ate=${sel.ate}&fora=${[...sel.fora].join(",")}`;
+  let pedido = 0;
+  const atualizarTrecho = async () => {
+    pintarSelecao();
+    audio.pause();
+    audio.removeAttribute("src");
+    if (!sel) {
+      encher(painel, h("p", { class: "nota" }, ancora === null
+        ? "Toque na primeira palavra do trecho que você quer (ou busque acima)."
+        : "Agora toque na última palavra do trecho."));
+      return;
+    }
+    const meu = ++pedido;
+    encher(painel, h("p", { class: "nota" }, "Conferindo o trecho…"));
+    let r;
+    try { r = await api(`${base}/trecho?${consultaDoTrecho()}`); } catch (e) { encher(painel, h("p", { class: "nota" }, e.message)); return; }
+    if (meu !== pedido) return;
+    const tocar = h("button", { class: "botao secundario", disabled: !r.tem_som || null, onclick: () => {
+      if (!audio.getAttribute("src")) audio.src = `${base}/audio?${consultaDoTrecho()}`;
+      if (audio.paused) audio.play().catch(() => avisar("Não deu para tocar o trecho.")); else audio.pause();
+    } }, r.tem_som ? "🎧 Ouvir o trecho" : "Sem som (o vídeo original não está no PC)");
+    audio.onplay = () => { tocar.textContent = "❚❚ Pausar"; };
+    audio.onpause = () => { tocar.textContent = "🎧 Ouvir o trecho"; };
+    audio.onwaiting = () => { tocar.textContent = "Preparando o som no PC…"; };
+    encher(painel, 
+      h("div", { class: "nome" }, `Trecho de ${duracao(r.duracao)}${sel.fora.size ? " (com pedaços tirados)" : ""}`),
+      h("p", { class: "nota" }, r.pontas),
+      r.problema ? h("p", { class: "nota aviso-bloco" }, r.problema) : null,
+      h("div", { class: "linha-botoes" }, tocar,
+        h("button", { class: "botao secundario", onclick: () => { sel = null; ancora = null; atualizarTrecho(); } }, "Limpar")),
+      h("button", { class: "botao", disabled: r.problema ? true : null, onclick: criar }, "✚ Criar Short deste trecho"),
+      audio);
+  };
+  const selecionar = (de, ate) => { sel = { de: Math.min(de, ate), ate: Math.max(de, ate), fora: new Set() }; ancora = null; atualizarTrecho(); };
+
+  textoEl.addEventListener("click", async (ev) => {
+    const alvo = ev.target.closest(".pl");
+    if (!alvo || criando) return;
+    const n = Number(alvo.dataset.n);
+    if (!sel) {
+      if (ancora === null) { ancora = n; pintarSelecao(); atualizarTrecho(); } else selecionar(ancora, n);
+      return;
+    }
+    const dentro = n > sel.de && n < sel.ate;
+    const opcoes = [];
+    if (n <= sel.ate) opcoes.push(["inicio", "▶ Começar nesta palavra"]);
+    if (n >= sel.de) opcoes.push(["fim", "Terminar nesta palavra ◀"]);
+    if (dentro && sel.fora.has(n)) opcoes.push(["incluir", "Voltar a incluir esta frase"]);
+    if (dentro && !sel.fora.has(n)) opcoes.push(["tirar-frase", "Tirar esta frase do trecho"], ["tirar", "Tirar só esta palavra"]);
+    opcoes.push(["novo", "Começar um trecho novo aqui"]);
+    const escolha = await escolher(`“${alvo.textContent}”`, opcoes);
+    const daFrase = () => { const k = fraseDe[n]; const f = dados.frases[k]; return Array.from({ length: f.palavras.length }, (_, j) => f.de + j).filter((m) => m > sel.de && m < sel.ate); };
+    if (escolha === "inicio") { sel.de = n; for (const m of [...sel.fora]) if (m <= n) sel.fora.delete(m); }
+    else if (escolha === "fim") { sel.ate = n; for (const m of [...sel.fora]) if (m >= n) sel.fora.delete(m); }
+    else if (escolha === "tirar-frase") for (const m of daFrase()) sel.fora.add(m);
+    else if (escolha === "tirar") sel.fora.add(n);
+    else if (escolha === "incluir") for (const m of daFrase()) sel.fora.delete(m);
+    else if (escolha === "novo") { sel = null; ancora = n; }
+    else return;
+    atualizarTrecho();
+  });
+
+  // criar (a IA, cerca de 2 minutos)
+  let criando = false;
+  const acompanhar = async () => {
+    criando = true;
+    const caixa = h("div", { class: "cartao destaque" }, h("div", { class: "nome" }, "A IA está criando o Short…"), h("p", { class: "nota" }, "Leva cerca de 2 minutos no PC. Pode sair do app: o celular avisa quando ficar pronto."));
+    encher(painel, caixa);
+    for (;;) {
+      let c;
+      try { c = await api(`${base}/criacao`); } catch (e) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      if (!c) break;
+      caixa.querySelector(".nota").textContent = c.texto;
+      if (!c.rodando) {
+        criando = false;
+        if (c.corte_id !== null) { avisar(c.texto); location.hash = `#/p/${enc(id)}/s/${c.corte_id}`; }
+        else { encher(painel, h("div", { class: "cartao aviso-bloco" }, `Não deu para criar o Short: ${c.erro}`)); setTimeout(atualizarTrecho, 6000); }
+        return;
+      }
+      if (!location.hash.endsWith("/livre")) return; // a pessoa saiu da tela: o aviso chega
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    criando = false;
+  };
+  async function criar(ev) {
+    if (!sel) return;
+    if (!confirm("A IA vai avaliar o trecho e criar título, descrição e hashtags (cerca de 2 minutos no PC). Criar o Short?")) return;
+    ev.currentTarget.disabled = true;
+    try {
+      await editar(`${base}/criar`, { de: sel.de, ate: sel.ate, fora: [...sel.fora] });
+      sel = null; ancora = null; pintarSelecao();
+      acompanhar();
+    } catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+  }
+
+  encher(tela, 
+    h("div", { class: "busca" }, consulta, modos), achados,
+    legenda || "", textoEl, painel);
+  limparTela = () => { audio.pause(); audio.removeAttribute("src"); };
+  if (dados.criacao && dados.criacao.rodando) acompanhar(); else atualizarTrecho();
 }
 
 // --- roteador -------------------------------------------------------------------------------
@@ -619,6 +807,7 @@ async function rotear() {
   try {
     if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
     else if (partes[0] === "p" && partes[1] && partes[2] === "aprovar") await telaAprovar(partes[1]);
+    else if (partes[0] === "p" && partes[1] && partes[2] === "livre") await telaLivre(partes[1]);
     else if (partes[0] === "p" && partes[1]) await telaProjeto(partes[1]);
     else await telaProjetos();
   } catch (e) {
@@ -694,7 +883,7 @@ acao("encerrar", async () => {
   fecharMenu();
   pararRepeticao();
   marcarPonto("fora");
-  tela.replaceChildren(h("div", { class: "vazio-lista" }, "Servidor encerrado. Para usar de novo, abra-o no PC."));
+  encher(tela, h("div", { class: "vazio-lista" }, "Servidor encerrado. Para usar de novo, abra-o no PC."));
 });
 
 // --- início ---------------------------------------------------------------------------------

@@ -141,12 +141,13 @@ src/spurgeon/
     sessao.py                      [R2] R8: trava do celular, recibo do PC e a janela aberta
     fila.py                        [R2] S7: um processamento por vez (psutil), roda o trabalhador
     edicao.py                      [R2] legenda, início e fim, marcar (as regras do Studio)
+    livre.py                       [R3] Shorts livre: texto, busca, trecho, criação com a IA em segundo plano
     rotas/
       __init__.py
       projetos.py                  [R1/R2] lista, detalhe, andamento, Shorts, vídeo (Range), aprovar, renderizar
       sistema.py                   [R1] estado, dormir, acordar, encerrar e os avisos
       cortes.py                    [R2] trava (tomar/soltar), legenda, pontas, marcar
-      livre.py                     busca, categorias, criar Short livre
+      livre.py                     [R3] texto vivo, busca, trecho (ouvir) e criar o Short livre
       previa.py                    [R1] legenda e áudio do Short (ouvir, R16); depois o proxy da prévia rápida
       postagem.py                  agendar, já postado, refazer título com a IA
       canal.py                     vídeos do canal, baixar e criar projeto
@@ -162,9 +163,10 @@ tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vi
 tests/test_remoto_audicao.py       [R1] ouvir com a legenda (um teste roda o FFmpeg de verdade)
 tests/test_remoto_edicao.py        [R2] trava, edição, fila, aprovar e renderizar
 tests/test_janela_remoto.py        [R2] a janela do PC: salva e trava, revisão aprovada, um por vez (-m gui)
+tests/test_remoto_livre.py         [R3] Shorts livre (a IA trocada por uma função de mentira)
 ```
 
-`[R1]`, `[R2]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
+`[R1]`, `[R2]`, `[R3]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
 extra `remoto` (`starlette`, `uvicorn`, `http-ece`, `cryptography`) e o `httpx` no grupo `dev` (cliente de teste). Ambiente:
 `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`.
 
@@ -286,6 +288,36 @@ fotografadas com os projetos reais, sem gravar neles). Como ficou:
 
 **Fase R3: Shorts livre** pelo celular: busca, categorias, criar o Short.
 
+**Estado da R3 (2026-11-20): feita e testada** (`tests/test_remoto_livre.py`; tela fotografada com o sermão 09 real, 8668
+palavras, sem criar nada nele). Como ficou (`remoto/livre.py`, `rotas/livre.py`, tela `#/p/<projeto>/livre`):
+
+* **O texto vivo.** O botão "✚ Shorts livre" do projeto abre o sermão inteiro, uma linha por frase com a hora, a barra
+  da cor da categoria que a IA detectou (`trechos_detectados` + `categoria_de_cada_frase`) e as palavras que já estão
+  num Short sublinhadas na cor dele (`short_de_cada_palavra`). São as palavras da janela do vídeo do projeto
+  (`palavras_da_janela`), como no PC, e os índices são os dessa lista. O texto fica guardado no servidor enquanto a
+  transcrição e o estado não mudam.
+* **Escolher o trecho por toques.** Um toque na primeira palavra e outro na última. Depois, tocar numa palavra oferece
+  "Começar nesta palavra", "Terminar nesta palavra", "Tirar esta frase do trecho", "Tirar só esta palavra", "Voltar a
+  incluir esta frase" e "Começar um trecho novo aqui". O painel de baixo mostra a duração (`duracao_do_trecho`), onde
+  começa e termina (`resumo_das_pontas`) e o problema, se houver (`problema_do_trecho`: menos de 10 s ou mais do que
+  cabe).
+* **Buscar.** "Palavras" (`procurar_palavras`, parecidas) ou "Tema" (`procurar_tema`; o modelo de vetores do spaCy é
+  carregado na primeira busca e fica na memória do servidor). Tocar num achado escolhe aquele trecho.
+* **Ouvir o trecho antes de criar.** O mesmo áudio da audição (`audicao.audio_do_corte`, generalizado na R3), de um
+  corte provisório (`corte_de_previa`: as pontas com o respiro e os pedaços tirados como saltos). Só com o áudio tratado
+  ou o vídeo original no PC.
+* **Criar.** "✚ Criar Short deste trecho" roda `gerar_corte_livre` (a IA: categoria, nota, título, descrição e hashtags)
+  numa thread do servidor, uma criação por vez, com as opções do projeto (modelo do Ollama, threads). O celular mostra
+  o andamento e, pronto, abre o Short novo; se a pessoa saiu do app, chega um aviso ("Shorts livre: Short criado…").
+  Enquanto a IA trabalha, o servidor renova a trava do celular, e o corte só entra no `cortes_shorts.json` com a trava
+  valendo (a janela do PC não regrava a lista por cima).
+* **Medido com a IA de verdade** (numa cópia do sermão 09, fora dos projetos): busca por palavras com 9 achados, por
+  tema com 12 em 2,8 s (com a carga do modelo), e um Short livre de 45 s criado em **190 s** ("Eles usavam a construção
+  para cobrar impostos", nota 76) pelo mesmo caminho do servidor.
+* Escolhas feitas sem consulta: (a) o destaque do trecho é palavra a palavra (os espaços não se pintam); (b) não há
+  "ouvir com a palavra acendendo" no trecho (só tocar e pausar); (c) a criação pode rodar junto com um processamento
+  (como no PC); a CPU fica dividida.
+
 **Fase R4: postar.** Agendar no YouTube pelo navegador, com o vídeo relacionado (S3), já postado, refazer o título com a
 IA.
 
@@ -304,6 +336,8 @@ salvas.
   liga numa porta que outro programa já usa, **sem erro**, e quem responde é o outro. Na R0.1 o `tailscale serve`
   chegou a expor outro aplicativo por isso. O servidor liga com reuso desligado (ou `SO_EXCLUSIVEADDRUSE`), numa porta
   incomum, e confere a resposta antes de chamar o `tailscale serve`.
+* **No app do celular, `encher(el, ...)` em vez de `el.replaceChildren(...)`.** O `replaceChildren` do navegador escreve
+  `null` como texto (apareceu "null" no painel do Shorts livre). Confira a sintaxe do `app.js` com `node --check`.
 * **Sem console** (CLAUDE.md): o servidor roda no `pythonw`, todo `subprocess` usa `CREATE_NO_WINDOW` e a saída vai para
   `%LOCALAPPDATA%\Spurgeon\Logs\remoto.log`.
 * **Testes nunca tocam a internet nem o navegador de verdade.** HTTP pelo `TransporteFalso`; o Playwright é trocado por um

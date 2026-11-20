@@ -25,7 +25,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from spurgeon.core.config import raiz_repositorio
 from spurgeon.remoto.contexto import Contexto
-from spurgeon.remoto.rotas import cortes, previa, projetos, sistema
+from spurgeon.remoto.rotas import cortes, livre, previa, projetos, sistema
 from spurgeon.remoto.seguranca import autorizado
 
 log = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ def criar_app(ctx: Contexto) -> ASGIApp:
         *projetos.rotas(ctx),
         *previa.rotas(ctx),
         *cortes.rotas(ctx),
+        *livre.rotas(ctx),
         Route("/icone-{tamanho:int}.png", _icone),
         Mount("/", app=StaticFiles(directory=PASTA_WEB, html=True), name="web"),
     ]

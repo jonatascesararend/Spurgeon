@@ -98,7 +98,8 @@ def legenda_para_json(legenda: LegendaDoShort) -> dict[str, Any]:
     }
 
 
-def fonte_do_audio(pastas: PastasProjeto, short: ShortNoDisco) -> FonteDoAudio:
+def fonte_do_original(pastas: PastasProjeto) -> FonteDoAudio | None:
+    """O áudio tratado do projeto, senão o vídeo original (None se nenhum está mais no PC)."""
     estado = carregar_estado(pastas.raiz)
     if estado is not None:
         tratado = pastas.audio_final(estado.opcoes)
@@ -107,6 +108,12 @@ def fonte_do_audio(pastas: PastasProjeto, short: ShortNoDisco) -> FonteDoAudio:
         original = Path(estado.entrada.caminho)
         if original.is_file():
             return FonteDoAudio(original, "original")
+    return None
+
+
+def fonte_do_audio(pastas: PastasProjeto, short: ShortNoDisco) -> FonteDoAudio:
+    if (fonte := fonte_do_original(pastas)) is not None:
+        return fonte
     if short.arquivo is not None:
         entrada = ler_registro(pastas.shorts_renderizados).get(str(short.corte.id))
         situacao = situacao_do_short(short.corte, entrada, True, com_legenda=False)
@@ -171,28 +178,34 @@ class AudioDoShort:
     aviso: str
 
 
+def audio_do_corte(
+    pastas: PastasProjeto, corte: Corte, nome: str, fonte: FonteDoAudio, *, rodar=None
+) -> Path:
+    """O `.m4a` deste corte, guardado como `_work/remoto/<nome>_<assinatura>.m4a` (o anterior com o
+    mesmo nome é apagado). Serve aos Shorts da lista e ao trecho do Shorts livre."""
+    pasta = pastas.work / PASTA
+    destino = pasta / f"{nome}_{_assinatura(fonte, corte)}.m4a"
+    with _trava(destino):
+        if not destino.is_file():
+            pasta.mkdir(parents=True, exist_ok=True)
+            legenda = legenda_do_short(carregar_palavras(pastas), corte)
+            parcial = destino.with_name(destino.name + ".parcial")
+            (rodar or executar_ffmpeg)(
+                argumentos_do_ffmpeg(fonte, corte, legenda, parcial), duracao_s=legenda.duracao
+            )
+            parcial.replace(destino)
+            log.info("Áudio de %s pronto (%s, %.1f s).", nome, fonte.tipo, legenda.duracao)
+            for velho in pasta.glob(f"{nome}_*.m4a"):
+                if velho != destino:
+                    velho.unlink(missing_ok=True)
+    return destino
+
+
 def audio_do_short(pastas: PastasProjeto, id_do_corte: int, *, rodar=None) -> AudioDoShort:
     """O `.m4a` do Short (feito agora ou o que já estava guardado para este mesmo corte)."""
     short = next((s for s in shorts_no_disco(pastas) if s.corte.id == id_do_corte), None)
     if short is None:
         raise LookupError(f"corte {id_do_corte}")
     fonte = fonte_do_audio(pastas, short)
-    pasta = pastas.work / PASTA
-    destino = pasta / f"audio_{id_do_corte}_{_assinatura(fonte, short.corte)}.m4a"
-    with _trava(destino):
-        if not destino.is_file():
-            pasta.mkdir(parents=True, exist_ok=True)
-            legenda = legenda_do_short(carregar_palavras(pastas), short.corte)
-            parcial = destino.with_name(destino.name + ".parcial")
-            (rodar or executar_ffmpeg)(
-                argumentos_do_ffmpeg(fonte, short.corte, legenda, parcial),
-                duracao_s=legenda.duracao,
-            )
-            parcial.replace(destino)
-            log.info(
-                "Áudio do corte %s pronto (%s, %.1f s).", id_do_corte, fonte.tipo, legenda.duracao
-            )
-            for velho in pasta.glob(f"audio_{id_do_corte}_*.m4a"):
-                if velho != destino:
-                    velho.unlink(missing_ok=True)
-    return AudioDoShort(destino, fonte.aviso)
+    arquivo = audio_do_corte(pastas, short.corte, f"audio_{id_do_corte}", fonte, rodar=rodar)
+    return AudioDoShort(arquivo, fonte.aviso)

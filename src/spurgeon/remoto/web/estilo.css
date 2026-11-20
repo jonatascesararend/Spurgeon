@@ -176,6 +176,31 @@ a.botao { display: block; text-align: center; text-decoration: none; }
   background: linear-gradient(transparent, var(--fundo) 30%);
 }
 
+/* Shorts livre (Fase R3) */
+.busca { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.busca .segmentos { margin: 0; }
+.campo {
+  width: 100%; font: 16px system-ui, sans-serif; color: var(--texto); background: var(--cartao);
+  border: 1px solid var(--linha); border-radius: 10px; padding: 11px 12px;
+}
+.cartao.achado { font-size: 15px; }
+.cores { margin: 4px 0 8px; }
+.sublinhado { text-decoration: underline 2px var(--texto-2); text-underline-offset: 3px; }
+.texto-livre { font-size: 17px; line-height: 1.7; padding-bottom: 45vh; }
+.frase-livre { margin: 0 0 6px; padding: 2px 0 2px 9px; border-left: 4px solid transparent; }
+.frase-livre .hora { color: var(--texto-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pl { border-radius: 4px; cursor: pointer; }
+.pl.em-short { text-decoration: underline 2px; text-underline-offset: 4px; }
+.pl.sel { background: color-mix(in srgb, var(--destaque) 35%, transparent); }
+.pl.fora-sel { text-decoration: line-through; opacity: .45; }
+.pl.ancora { outline: 2px solid var(--destaque); background: color-mix(in srgb, var(--destaque) 35%, transparent); }
+.painel-livre {
+  position: sticky; bottom: 0; z-index: 4; background: var(--cartao); border: 1px solid var(--linha);
+  border-radius: 14px 14px 0 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  box-shadow: 0 -6px 18px rgba(0,0,0,.25);
+}
+.painel-livre .cartao { margin: 0; }
+
 .vazio-lista { color: var(--texto-2); text-align: center; padding: 40px 16px; }
 .botao {
   display: block; width: 100%; border: 0; border-radius: 10px; padding: 13px 14px; margin: 8px 0;
