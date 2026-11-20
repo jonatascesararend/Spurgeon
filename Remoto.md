@@ -78,8 +78,9 @@ O fluxo de ponta a ponta:
 * **S7. Uma fila de processamento só.** O servidor é quem dispara o trabalhador quando o pedido vem do celular, e o Studio do
   PC respeita uma trava global (arquivo em `%LOCALAPPDATA%\Spurgeon\`) para não haver dois trabalhadores no mesmo projeto.
 * **S8. Segurança.** Só responde pelo endereço do Tailscale (nunca em `0.0.0.0`). Confere a identidade que o
-  `tailscale serve` passa (cabeçalho `Tailscale-User-Login`) e um token do aparelho, guardado no `Cofre`. As chaves do Web
-  Push (VAPID) também ficam no `Cofre`. Nada no `config.toml`, nada em log.
+  `tailscale serve` passa (cabeçalho `Tailscale-User-Login`). Na R1 isso bastou: o servidor só escuta em `127.0.0.1`, e o
+  token do aparelho ficou de fora (um programa hostil rodando no próprio PC passaria pelos dois). A chave do Web Push
+  (VAPID) e as inscrições ficam no `Cofre`. Nada no `config.toml`, nada em log.
 * **S9. App do celular sem Node**: HTML, CSS e JavaScript em módulos, servidos pelo próprio PC (`remoto/web/`). Não há etapa
   de build nem conta em loja.
 * **S10. Revisão dos cortes no celular.** Com "Pausar para aprovar os cortes" ligado, o pipeline espera a revisão
@@ -124,21 +125,28 @@ Remoto.md                          este documento
 src/spurgeon/
   remoto/
     __init__.py
-    servidor.py                    app web: rotas + arquivos de web/
-    seguranca.py                   S8: só Tailscale, token do aparelho
+    cli.py                         [R1] `spurgeon remoto iniciar|configurar|inicializacao|aviso-teste`
+    config.py                      [R1] `remoto.json` (porta, contas, dormindo, avisos), fora do config.toml
+    contexto.py                    [R1] o que as rotas compartilham (config, pasta de projetos, avisos)
+    servidor.py                    [R1] Starlette + uvicorn, porta exclusiva, `Porteiro` (conta e dormindo)
+    seguranca.py                   [R1] S8: só a conta do Tailscale autorizada (`Tailscale-User-Login`)
+    tailscale.py                   [R1] conta, endereço, HTTPS e `tailscale serve` pela linha de comando
+    inicializacao.py               [R1] atalho na pasta "Inicializar" do Windows (pythonw, sem console)
+    dados.py                       [R1] leitura dos projetos, andamento e Shorts (só leitura)
+    avisos.py                      [R1] R6: Web Push (VAPID e inscrições no Cofre)
+    vigia.py                       [R1] R6: olha os `estado.json` e avisa o que mudou
     sessao.py                      R8: trava do celular com batimento; o PC salva e trava
     fila.py                        S7: um processamento por vez, servidor e Studio
-    avisos.py                      R6: Web Push (VAPID no Cofre)
     rotas/
       __init__.py
-      projetos.py                  lista, andamento ao vivo, iniciar/pausar/cancelar, aprovar cortes
+      projetos.py                  [R1] lista, detalhe, andamento, Shorts, vídeo (Range); depois iniciar/aprovar
+      sistema.py                   [R1] estado, dormir, acordar, encerrar e os avisos
       cortes.py                    legenda, início/fim, enviar (salva + renderiza)
       livre.py                     busca, categorias, criar Short livre
       previa.py                    proxy (range requests) e dados da prévia rápida
       postagem.py                  agendar, já postado, refazer título com a IA
       canal.py                     vídeos do canal, baixar e criar projeto
-      sistema.py                   dormir, acordar, encerrar, estado do PC
-    web/                           o app do celular (PWA, sem build)
+    web/                           [R1] o app do celular (index.html, app.js, estilo.css, sw.js, manifest)
   canal/
     __init__.py
     navegador.py                   S5: perfil persistente do Playwright
@@ -146,10 +154,12 @@ src/spurgeon/
     baixar.py                      R11: baixar pelo YouTube Studio
     postar.py                      S3: postar o Short pelo YouTube Studio (Plataforma, sem API)
   render/proxy.py                  S2: proxy 480p para a prévia rápida
-tests/                             test_remoto_*.py e test_canal_*.py (sem internet, sem navegador)
+tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vigia (sem internet, sem Tailscale)
 ```
 
-Os módulos já existem no branch só com a descrição; o código entra fase por fase.
+`[R1]` = já tem código. Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
+extra `remoto` (`starlette`, `uvicorn`, `http-ece`, `cryptography`) e o `httpx` no grupo `dev` (cliente de teste). Ambiente:
+`uv sync --extra ui --extra transcricao --extra shorts --extra remoto`.
 
 ## 6. Fases
 
@@ -190,8 +200,32 @@ podem mudar o desenho:
 * **R0.4, proxy:** do arquivo de 720p (1h08), 480p H.264 `veryfast` CRF 28, `-g 24`, AAC 96k, `+faststart`: **211 s e
   190 MB** nesta máquina (cerca de 1/20 da duração). Cabe logo depois do download, antes de a transcrição terminar.
 
+* **R0.3 (postar um Short de teste):** adiada pelo autor em 2026-11-20; fica para a Fase R4.
+
 **Fase R1: só ver.** Servidor, segurança, `spurgeon remoto` na inicialização do Windows, PWA com a lista de projetos e o
 andamento ao vivo, Shorts já renderizados tocando no celular, Web Push (R6), dormir e encerrar (S1).
+
+**Estado da R1 (2026-11-20): feita e testada com os 3 projetos reais do PC** (31 testes em `tests/test_remoto.py`; teste
+de fumaça no servidor de verdade; fotos do app em 393×851, temas escuro e claro). Como ficou:
+
+* `spurgeon remoto configurar` autoriza a conta dona do PC no Tailscale (`remoto.json`) e publica a porta 18765 pelo
+  `tailscale serve` (fica guardado no Tailscale). `spurgeon remoto iniciar` (ou só `spurgeon remoto`) sobe o servidor e o
+  vigia; `spurgeon remoto inicializacao ligar` cria o atalho do Windows. O log fica em
+  `%LOCALAPPDATA%\Spurgeon\Logs\remoto.log`.
+* App: lista de projetos (situação, data, Shorts), projeto (etapas com progresso e fim do log, recarregando a cada 4 s
+  enquanto processa; Shorts com filtro Marcados/Renderizados/Todos, selos de postado, agendado e renderizado, categoria
+  com cor), Short (player com pulo no vídeo, título, descrição, hashtags e texto/legenda) e menu (ativar e testar avisos,
+  pausar avisos, dormir/acordar, encerrar).
+* Avisos sem `pywebpush` (que traria `aiohttp` e `requests`): o VAPID é assinado com o `cryptography`, a cifra é do
+  `http-ece`, e o POST sai pelo `Transporte` da `publicacao/`. Os avisos do vigia são: "esperando a sua revisão",
+  "pronto: N de M Shorts renderizados", "N Shorts renderizados" e "parou com erro". Cada projeto tem uma marca própria, e um
+  aviso novo substitui o anterior do mesmo projeto no celular.
+* Escolhas feitas sem consulta: (a) a segurança confia só no cabeçalho do Tailscale (sem token do aparelho, que S8
+  previa; o servidor só escuta em `127.0.0.1`); (b) a lista vazia de contas barra todo mundo, e `configurar`/`iniciar`
+  põem a conta dona do PC; (c) "Dormir" para os avisos e a API, mas o app continua abrindo para mostrar "Acordar"; (d)
+  o vigia olha a cada 15 s e a primeira olhada não avisa nada.
+* **Falta na R1:** ligar o atalho de inicialização no PC do autor (pedir antes) e receber no celular um aviso do vigia
+  numa execução real.
 
 **Fase R2: editar.** Trava e "o PC salva sozinho" (R8), aprovar cortes (S10), legenda inteira com "Enviar", início e
 fim por toque na palavra (±0,1 s), proxy e prévia rápida (S2), renderizar os Shorts enviados.

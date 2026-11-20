@@ -13,6 +13,11 @@ pelo PC, Web Push, Playwright no YouTube Studio, que também posta: sem a API do
 (`src/spurgeon/remoto/`, `src/spurgeon/canal/`, `render/proxy.py`) e as fases R0 a R5 estão no [Remoto.md](Remoto.md):
 leia antes de mexer nele e atualize-o junto com o código. Código novo fica nesses pacotes; no código que já existe, mexa
 o mínimo (o branch precisa acompanhar a `main`). Para trazer a `main`: `git merge main` neste branch, nunca o contrário.
+No branch: `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`; `uv run spurgeon remoto` sobe o
+servidor (porta 18765, só em `127.0.0.1`, publicada pelo `tailscale serve`). O servidor NÃO importa a interface e só lê os
+projetos com as funções do núcleo (`remoto/dados.py`); a porta é ligada com `SO_EXCLUSIVEADDRUSE` (no Windows, sem isso
+outro programa divide a porta em silêncio). Testes do servidor pelo `TestClient` do Starlette, com o cabeçalho
+`Tailscale-User-Login`; Web Push pelo `TransporteFalso`.
 
 ## Comandos
 

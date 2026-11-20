@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121820">
+<meta name="color-scheme" content="dark light">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icone-192.png">
+<link rel="stylesheet" href="/estilo.css">
+<title>Studio Spurgeon</title>
+</head>
+<body>
+<header class="topo">
+  <button class="voltar" id="voltar" aria-label="Voltar" hidden>‹</button>
+  <div class="titulo-topo">
+    <span id="titulo">Studio Spurgeon</span>
+    <span class="sub" id="subtitulo"></span>
+  </div>
+  <span class="ponto" id="ponto" title="Situação do PC"></span>
+  <button class="menu" id="abrir-menu" aria-label="Menu">⋮</button>
+</header>
+<div class="faixa" id="faixa" hidden></div>
+<main id="tela" aria-live="polite"></main>
+
+<div class="fundo" id="fundo" hidden></div>
+<aside class="folha" id="folha" hidden>
+  <h2>PC e avisos</h2>
+  <div class="linha-info" id="info-pc"></div>
+  <button class="botao" id="ativar-avisos">Ativar avisos neste celular</button>
+  <button class="botao secundario" id="testar-avisos">Mandar um aviso de teste</button>
+  <button class="botao secundario" id="ligar-avisos"></button>
+  <hr>
+  <button class="botao secundario" id="dormir"></button>
+  <button class="botao perigo" id="encerrar">Encerrar o servidor</button>
+  <p class="nota">Encerrado, o servidor só volta no PC ou quando o Windows reiniciar.</p>
+  <button class="botao fechar" id="fechar-menu">Fechar</button>
+</aside>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

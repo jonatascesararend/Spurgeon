@@ -44,6 +44,13 @@ ai = [
     "pandas>=2.2",
     "numpy>=1.26",
 ]
+# Controle remoto pelo celular (branch particular `controle-remoto`; veja Remoto.md).
+remoto = [
+    "starlette>=1.0",
+    "uvicorn>=0.30",
+    "http-ece>=1.2",  # Web Push: cifra o aviso (aes128gcm) para o navegador do celular
+    "cryptography>=42",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -54,6 +61,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "pre-commit>=3.8",
+    "httpx>=0.27",  # cliente de teste do Starlette (servidor do controle remoto)
 ]
 
 [project.scripts]

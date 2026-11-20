@@ -418,6 +418,10 @@ def main(argv: list[str] | None = None) -> int:
     processar.add_argument("--pausa-residual", help="pausa mantida em cada corte, em s (1,0)")
     processar.set_defaults(funcao=_processar)
 
+    from spurgeon.remoto.cli import adicionar_comando  # branch controle-remoto (Remoto.md)
+
+    adicionar_comando(sub)
+
     args = parser.parse_args(argv)
     if not getattr(args, "funcao", None):
         parser.print_help()
