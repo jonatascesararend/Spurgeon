@@ -36,6 +36,7 @@ O fluxo de ponta a ponta:
 | R12 | **Postar no YouTube só por automação de navegador, SEM a API do YouTube**: envio, detalhes, agendamento e o vídeo relacionado (o sermão original), que a API não faz | 2026-11-20 |
 | R13 | O PC fica disponível o dia todo | 2026-11-20 |
 | R14 | Tailscale instalado no PC (`souza-arend`) e no celular (`jonatas-arend`), mesma conta, MagicDNS ligado | 2026-11-20 |
+| R15 | O vídeo de um projeto novo vem do **"Baixar" do YouTube Studio (720p)**, não do yt-dlp a 1080p | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -65,11 +66,15 @@ O fluxo de ponta a ponta:
   (fora do repositório), onde o autor faz o login na conta da igreja **uma vez, à mão**. Nesse login é um Chrome comum,
   sem automação, porque o Google costuma barrar login de navegador automatizado. Depois, a automação abre esse perfil
   (`launch_persistent_context` com `channel="chrome"`, ou Chrome + `--remote-debugging-port` só em `127.0.0.1` e
-  `connect_over_cdp`; a prova R0.2 decide). Esse perfil não pode estar aberto à mão enquanto a automação roda. Se a sessão
-  cair, o celular avisa "entre de novo no PC".
-* **S6. Listar os vídeos (R11)** pela página "Conteúdo" do YouTube Studio, no mesmo perfil, para não depender da API em
-  nada do canal (R12). Só os longos, que ficam na aba "Vídeos" e não em "Shorts" nem em "Ao vivo"; se os sermões forem
-  transmissões, a aba é "Ao vivo" (conferir na R0.2).
+  `connect_over_cdp`). Esse perfil não pode estar aberto à mão enquanto a automação roda. Se a sessão cair, o celular avisa
+  "entre de novo no PC".
+  **Provado em 2026-11-20 (R0.2a):** `launch_persistent_context(perfil, channel="chrome")` com o Chrome 157 abre o Studio
+  já logado e lê a lista "Conteúdo → Vídeos" (`ytcp-video-row`, id em `a[href*="/video/"]`, `#video-title`). **Uma conta
+  Google pode ter vários canais**, e o Studio abriu num canal que não era o da igreja. Por isso a automação tem que
+  **conferir o canal** antes de qualquer ação (id do canal guardado na configuração, comparado com a URL
+  `studio.youtube.com/channel/<id>`) e, se for outro, trocar ou parar com aviso. Nunca agir no canal errado.
+* **S6. Listar os vídeos (R11)** pela página "Conteúdo → Vídeos" do YouTube Studio, no mesmo perfil, para não depender da
+  API em nada do canal (R12). Os sermões são **vídeos enviados** (não transmissões): a aba é "Vídeos".
 * **S7. Uma fila de processamento só.** O servidor é quem dispara o trabalhador quando o pedido vem do celular, e o Studio do
   PC respeita uma trava global (arquivo em `%LOCALAPPDATA%\Spurgeon\`) para não haver dois trabalhadores no mesmo projeto.
 * **S8. Segurança.** Só responde pelo endereço do Tailscale (nunca em `0.0.0.0`). Confere a identidade que o
@@ -163,6 +168,28 @@ podem mudar o desenho:
 4. Medir o tempo do proxy 480p de um sermão inteiro nesta máquina, e o tamanho do arquivo.
 5. Conferir que um vídeo baixado do YouTube passa pelo pipeline completo (SDR, sem HDR).
 
+**Resultados da R0 (2026-11-20):**
+
+* **R0.1:** `tailscale serve --bg --https=443 http://127.0.0.1:<porta>` publica em
+  `https://souza-arend.tailf58721.ts.net/`, só dentro da rede privada. Os certificados HTTPS foram ligados pelo autor.
+  **Funcionou no Android fora do Wi-Fi:** a página abriu, o service worker registrou, o celular se inscreveu no push (FCM
+  do Chrome, chaves VAPID geradas no PC, `pywebpush`) e recebeu os avisos (resposta 201). O `tailscale serve` passa o
+  cabeçalho `Tailscale-User-Login` com a conta do autor: a segurança (S8) pode confiar nele, junto com o servidor ligado
+  só em `127.0.0.1`.
+* **R0.2, canal:** o perfil da automação entra logado. O autor é **editor** do canal **Revendo Meus Conceitos**, que
+  não é o canal padrão da conta: foi preciso trocar de conta no Studio uma vez, e o Studio lembra a escolha. O nome do canal
+  fica em `#entity-name`; a automação confere esse nome (e o id) antes de agir (S5).
+* **R0.2, download pelo Studio:** com o papel de editor, o menu "Opções → Baixar" da linha funciona
+  (`ytcp-video-row` filtrada pelo título → botão `aria-label="Opções"` → item "Baixar" → `expect_download`). Um sermão de
+  1h08 deu **503 MB em 54 s**, mas em **720p, 24 qps, H.264 a 0,85 Mbps, AAC 128 kbps estéreo**.
+* **R0.2, qualidade:** o mesmo vídeo existe no YouTube em **até 1080p** (H.264 `137` a 1,6 Mbps, HLS `270` a 2,5 Mbps,
+  AV1 `399`), mas o "Baixar" do Studio entrega só 720p. No 720p, a faixa 9:16 dos Shorts tem 405 px de largura (ampliação de
+  2,7×); no 1080p, 607 px (1,8×). Os formatos têm **duas faixas de som** (`-0`/`-1`: a original e uma dublagem
+  automática). **Decisão do autor (R15): a fonte é o "Baixar" do YouTube Studio, em 720p**, mesmo sabendo da ampliação
+  nos Shorts (o yt-dlp a 1080p foi descartado).
+* **R0.4, proxy:** do arquivo de 720p (1h08), 480p H.264 `veryfast` CRF 28, `-g 24`, AAC 96k, `+faststart`: **211 s e
+  190 MB** nesta máquina (cerca de 1/20 da duração). Cabe logo depois do download, antes de a transcrição terminar.
+
 **Fase R1: só ver.** Servidor, segurança, `spurgeon remoto` na inicialização do Windows, PWA com a lista de projetos e o
 andamento ao vivo, Shorts já renderizados tocando no celular, Web Push (R6), dormir e encerrar (S1).
 
@@ -185,6 +212,10 @@ salvas.
 * **O repositório é público**: o branch publicado também é. Nenhum segredo, id de canal, e-mail ou token nos arquivos.
 * **Automação do YouTube Studio quebra quando a página muda.** Os seletores ficam num lugar só (`canal/`). Cada falha
   grava uma foto da tela no log e avisa o celular em vez de travar.
+* **A porta do servidor tem que ser exclusiva.** No Windows, o `http.server` do Python (`allow_reuse_address = True`)
+  liga numa porta que outro programa já usa, **sem erro**, e quem responde é o outro. Na R0.1 o `tailscale serve`
+  chegou a expor outro aplicativo por isso. O servidor liga com reuso desligado (ou `SO_EXCLUSIVEADDRUSE`), numa porta
+  incomum, e confere a resposta antes de chamar o `tailscale serve`.
 * **Sem console** (CLAUDE.md): o servidor roda no `pythonw`, todo `subprocess` usa `CREATE_NO_WINDOW` e a saída vai para
   `%LOCALAPPDATA%\Spurgeon\Logs\remoto.log`.
 * **Testes nunca tocam a internet nem o navegador de verdade.** HTTP pelo `TransporteFalso`; o Playwright é trocado por um
