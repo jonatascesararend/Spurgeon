@@ -50,6 +50,7 @@ remoto = [
     "uvicorn>=0.30",
     "http-ece>=1.2",  # Web Push: cifra o aviso (aes128gcm) para o navegador do celular
     "cryptography>=42",
+    "playwright>=1.50",  # canal/: o YouTube Studio pelo Chrome instalado (perfil da automação)
 ]
 
 [tool.hatch.metadata]

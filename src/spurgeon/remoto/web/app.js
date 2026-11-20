@@ -223,6 +223,10 @@ function chipsDoShort(s) {
   else if (s.incluir) chips.push(h("span", { class: "chip" }, "Não renderizado"));
   if (s.reserva && !s.incluir) chips.push(h("span", { class: "chip" }, "Reserva"));
   if (s.origem === "manual") chips.push(h("span", { class: "chip" }, "Shorts livre"));
+  if (s.youtube) {
+    const rotulo = { agendado: "YouTube: programado", enviado: "YouTube: publicado", rascunho: "YouTube: rascunho", erro: "YouTube: falhou" };
+    chips.push(h("span", { class: `chip ${s.youtube.estado === "erro" ? "erro" : s.youtube.estado === "rascunho" ? "aviso" : "ok"}` }, rotulo[s.youtube.estado] || "YouTube"));
+  }
   return h("div", { class: "chips" }, ...chips);
 }
 
@@ -529,6 +533,85 @@ async function editorDasPontas(painel, base, aoMudar, aoFechar) {
   if (marca) marca.scrollIntoView({ block: "center" });
 }
 
+const doisDigitos = (n) => String(n).padStart(2, "0");
+const dataLocal = (d) => `${d.getFullYear()}-${doisDigitos(d.getMonth() + 1)}-${doisDigitos(d.getDate())}`;
+
+/** Postar no YouTube pelo PC (o YouTube Studio, sem a API): programar ou publicar agora (Fase R4). */
+async function editorDaPostagem(painel, base, idProjeto, aoTerminar, aoFechar) {
+  const prep = await api(`${base}/postar`);
+  const yt = prep.youtube;
+  const estado = yt ? h("div", { class: `bloco ${yt.estado === "erro" || yt.estado === "rascunho" ? "aviso-bloco" : ""}` },
+    h("h3", {}, "No YouTube"),
+    h("p", {}, { agendado: "📅 Programado", enviado: "✔ Publicado", rascunho: "⚠ Ficou como rascunho privado (a próxima tentativa o retoma)", erro: "✕ A última tentativa falhou" }[yt.estado] || yt.estado,
+      yt.quando && yt.estado === "agendado" ? ` para ${new Date(yt.quando).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}` : ""),
+    yt.url ? h("p", {}, h("a", { href: yt.url, target: "_blank", rel: "noopener" }, yt.url)) : null,
+    yt.detalhe ? h("p", { class: "nota" }, yt.detalhe) : null) : null;
+  const jaFeito = yt && (yt.estado === "agendado" || yt.estado === "enviado");
+
+  let modo = "programar";
+  const modos = h("div", { class: "segmentos" });
+  const sugestao = new Date(Date.now() + 60 * 60 * 1000);
+  sugestao.setMinutes(sugestao.getMinutes() < 30 ? 30 : 60, 0, 0);
+  const dia = h("input", { type: "date", class: "campo", value: dataLocal(sugestao) });
+  const hora = h("input", { type: "time", class: "campo", value: `${doisDigitos(sugestao.getHours())}:${doisDigitos(sugestao.getMinutes())}`, step: "300" });
+  const quando = h("div", { class: "linha-botoes" }, dia, hora);
+  const pintarModos = () => {
+    encher(modos, ...[["programar", "📅 Programar"], ["agora", "Publicar agora"]].map(([k, r]) =>
+      h("button", { class: modo === k ? "ativo" : "", onclick: () => { modo = k; pintarModos(); } }, r)));
+    quando.hidden = modo !== "programar";
+  };
+  pintarModos();
+  const vincular = h("input", { type: "checkbox", checked: true, id: "vincular" });
+  const relacionado = h("input", { type: "text", class: "campo", value: prep.relacionado });
+  const andamento = h("p", { class: "nota" });
+  const botao = h("button", { class: "botao" }, jaFeito ? "Postar de novo no YouTube" : "📤 Postar no YouTube");
+
+  const acompanhar = async () => {
+    botao.disabled = true;
+    for (;;) {
+      let e;
+      try { e = await api(`/api/projetos/${enc(idProjeto)}/postagem`); } catch (_) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      if (!e) break;
+      andamento.textContent = e.texto;
+      if (!e.rodando) {
+        if (e.erro) { avisar(`Não deu para postar: ${e.erro}`); andamento.textContent = `Não deu para postar: ${e.erro}`; botao.disabled = false; }
+        else { avisar(e.texto); await aoTerminar(); aoFechar(); }
+        return;
+      }
+      if (!document.body.contains(andamento)) return; // saiu da tela: o aviso chega
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    botao.disabled = false;
+  };
+  botao.addEventListener("click", async () => {
+    let corpo = { relacionado: vincular.checked ? relacionado.value.trim() : "", forcar: Boolean(jaFeito) };
+    let resumo;
+    if (modo === "programar") {
+      if (!dia.value || !hora.value) { avisar("Escolha o dia e a hora."); return; }
+      corpo.quando = `${dia.value}T${hora.value}`;
+      resumo = `Programar no YouTube para ${dia.value.split("-").reverse().join("/")} às ${hora.value}`;
+    } else {
+      resumo = "Publicar agora no YouTube";
+    }
+    if (corpo.relacionado) resumo += `, vinculado a “${corpo.relacionado}”`;
+    if (jaFeito) resumo += ". ATENÇÃO: ele já está no YouTube; isto cria outro vídeo";
+    if (!confirm(`${resumo}?`)) return;
+    try { await editar(`${base}/postar`, corpo); acompanhar(); }
+    catch (e) { avisar(e.message); }
+  });
+
+  encher(painel, h("div", { class: "bloco" },
+    h("h3", {}, "Postar no YouTube"),
+    estado,
+    h("p", { class: "nota" }, "O PC posta pelo YouTube Studio da igreja (uma janela do Chrome abre lá e faz tudo sozinha). Leva alguns minutos."),
+    modos, quando,
+    h("label", { class: "opcao", for: "vincular" }, vincular, " Vincular ao vídeo do sermão (vídeo relacionado)"),
+    relacionado,
+    botao, andamento,
+    h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar")));
+  if (prep.envio && prep.envio.rodando) acompanhar();
+}
+
 async function telaShort(id, corte) {
   await entrarNoProjeto(id);
   const pegar = async () => (await api(`/api/projetos/${enc(id)}/shorts`)).find((x) => String(x.id) === String(corte));
@@ -555,6 +638,9 @@ async function telaShort(id, corte) {
     encher(ferramentas, 
       h("button", { class: `botao-ferramenta ${edicao === "legenda" ? "ativo" : ""}`, onclick: () => abrir(edicao === "legenda" ? "" : "legenda") }, "✎ Legenda"),
       h("button", { class: `botao-ferramenta ${edicao === "pontas" ? "ativo" : ""}`, onclick: () => abrir(edicao === "pontas" ? "" : "pontas") }, "⇤ Início e fim ⇥"),
+      s.renderizado && s.situacao === "pronto"
+        ? h("button", { class: `botao-ferramenta ${edicao === "postar" ? "ativo" : ""}`, onclick: () => abrir(edicao === "postar" ? "" : "postar") }, "📤 Postar")
+        : null,
       h("button", { class: `botao-ferramenta ${s.incluir ? "marcado" : ""}`, onclick: async (ev) => {
         ev.currentTarget.disabled = true;
         try { s = await editar(`${base}/marcar`, { incluir: !s.incluir }); avisar(s.incluir ? "Corte marcado." : "Corte desmarcado."); }
@@ -586,6 +672,7 @@ async function telaShort(id, corte) {
     try {
       if (qual === "legenda") await editorDaLegenda(painel, base, depoisDeMudar, fecharEditor);
       else if (qual === "pontas") await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
+      else if (qual === "postar") await editorDaPostagem(painel, base, id, async () => { s = await pegar(); pintarCabecalho(); pintarInfo(); pintarFerramentas(); }, fecharEditor);
       else encher(painel);
     } catch (e) {
       encher(painel, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));

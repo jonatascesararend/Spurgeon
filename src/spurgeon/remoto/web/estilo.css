@@ -201,6 +201,13 @@ a.botao { display: block; text-align: center; text-decoration: none; }
 }
 .painel-livre .cartao { margin: 0; }
 
+/* postar (Fase R4) */
+.opcao { display: flex; align-items: center; gap: 8px; margin: 12px 2px 6px; font-size: 15px; }
+.opcao input { width: 20px; height: 20px; accent-color: var(--destaque); }
+.bloco .segmentos { margin: 10px 0 8px; }
+.bloco .linha-botoes .campo { flex: 1; }
+.bloco a { color: var(--destaque); word-break: break-all; }
+
 .vazio-lista { color: var(--texto-2); text-align: center; padding: 40px 16px; }
 .botao {
   display: block; width: 100%; border: 0; border-radius: 10px; padding: 13px 14px; margin: 8px 0;

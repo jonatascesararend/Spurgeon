@@ -11,6 +11,7 @@ from spurgeon.remoto.avisos import Avisos
 from spurgeon.remoto.config import ConfigRemoto, salvar_config_remoto
 from spurgeon.remoto.fila import Fila
 from spurgeon.remoto.livre import Criacoes
+from spurgeon.remoto.postagem import Postagens
 
 
 @dataclass
@@ -27,6 +28,8 @@ class Contexto:
     fila: Fila = field(default_factory=Fila)
     #: o Short livre que a IA está criando (um por vez)
     criacoes: Criacoes = field(default_factory=Criacoes)
+    #: a postagem no YouTube pelo navegador (uma por vez)
+    postagens: Postagens = field(default_factory=Postagens)
     _trava: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def mudar_config(self, **campos) -> ConfigRemoto:

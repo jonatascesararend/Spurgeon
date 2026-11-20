@@ -33,7 +33,7 @@ O fluxo de ponta a ponta:
 | R9 | No celular: **legenda inteira** editada de uma vez e mandada com "Enviar", **início e fim** do corte e **Shorts livre**. Marca-texto, borracha e saltos ficam para depois | 2026-11-20 |
 | R10 | **Só a prévia rápida** no celular (sem a prévia fiel do FFmpeg); o resultado de verdade é a **renderização final** do Short | 2026-11-20 |
 | R11 | **O vídeo de um projeto novo vem do YouTube.** Listar os vídeos longos do canal e **baixar pelo YouTube Studio**, por automação de navegador (Python + **Playwright**) numa **sessão já configurada** | 2026-11-20 |
-| R12 | **Postar no YouTube só por automação de navegador, SEM a API do YouTube**: envio, detalhes, agendamento e o vídeo relacionado (o sermão original), que a API não faz | 2026-11-20 |
+| R12 | **Postar no YouTube só por automação de navegador, SEM a API do YouTube** (feito na R4): envio, detalhes, agendamento e o vídeo relacionado (o sermão original), que a API não faz | 2026-11-20 |
 | R13 | O PC fica disponível o dia todo | 2026-11-20 |
 | R14 | Tailscale instalado no PC (`souza-arend`) e no celular (`jonatas-arend`), mesma conta, MagicDNS ligado | 2026-11-20 |
 | R15 | O vídeo de um projeto novo vem do **"Baixar" do YouTube Studio (720p)**, não do yt-dlp a 1080p | 2026-11-20 |
@@ -141,6 +141,7 @@ src/spurgeon/
     sessao.py                      [R2] R8: trava do celular, recibo do PC e a janela aberta
     fila.py                        [R2] S7: um processamento por vez (psutil), roda o trabalhador
     edicao.py                      [R2] legenda, início e fim, marcar (as regras do Studio)
+    postagem.py                    [R4] postar no YouTube: uma por vez, registro, agendado/postado
     livre.py                       [R3] Shorts livre: texto, busca, trecho, criação com a IA em segundo plano
     rotas/
       __init__.py
@@ -149,24 +150,26 @@ src/spurgeon/
       cortes.py                    [R2] trava (tomar/soltar), legenda, pontas, marcar
       livre.py                     [R3] texto vivo, busca, trecho (ouvir) e criar o Short livre
       previa.py                    [R1] legenda e áudio do Short (ouvir, R16); depois o proxy da prévia rápida
-      postagem.py                  agendar, já postado, refazer título com a IA
+      postagem.py                  [R4] postar (programar ou agora) e o andamento da postagem
       canal.py                     vídeos do canal, baixar e criar projeto
     web/                           [R1] o app do celular (index.html, app.js, estilo.css, sw.js, manifest)
   canal/
     __init__.py
-    navegador.py                   S5: perfil persistente do Playwright
+    navegador.py                   [R4] S5: o Chrome com o perfil da automação; confere o canal
     listar.py                      S6: vídeos longos do canal (página Conteúdo do Studio)
     baixar.py                      R11: baixar pelo YouTube Studio
-    postar.py                      S3: postar o Short pelo YouTube Studio (Plataforma, sem API)
+    postar.py                      [R4] S3: postar pelo YouTube Studio (sem API), vídeo relacionado
   render/proxy.py                  S2: proxy 480p para a prévia rápida
 tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vigia (sem internet, sem Tailscale)
 tests/test_remoto_audicao.py       [R1] ouvir com a legenda (um teste roda o FFmpeg de verdade)
 tests/test_remoto_edicao.py        [R2] trava, edição, fila, aprovar e renderizar
 tests/test_janela_remoto.py        [R2] a janela do PC: salva e trava, revisão aprovada, um por vez (-m gui)
 tests/test_remoto_livre.py         [R3] Shorts livre (a IA trocada por uma função de mentira)
+tests/test_remoto_postagem.py      [R4] postar pelo celular (o navegador trocado por uma função de mentira)
+tests/test_canal_postar.py         [R4] descrição, data do Studio e id pelo link
 ```
 
-`[R1]`, `[R2]`, `[R3]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
+`[R1]` a `[R4]` = já tem código (fase em que entrou). Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
 extra `remoto` (`starlette`, `uvicorn`, `http-ece`, `cryptography`) e o `httpx` no grupo `dev` (cliente de teste). Ambiente:
 `uv sync --extra ui --extra transcricao --extra shorts --extra remoto`.
 
@@ -209,7 +212,7 @@ podem mudar o desenho:
 * **R0.4, proxy:** do arquivo de 720p (1h08), 480p H.264 `veryfast` CRF 28, `-g 24`, AAC 96k, `+faststart`: **211 s e
   190 MB** nesta máquina (cerca de 1/20 da duração). Cabe logo depois do download, antes de a transcrição terminar.
 
-* **R0.3 (postar um Short de teste):** adiada pelo autor em 2026-11-20; fica para a Fase R4.
+* **R0.3 (postar um Short de teste):** feita na Fase R4, com o Short 6 de Filipenses (veja o estado da R4).
 
 **Fase R1: só ver.** Servidor, segurança, `spurgeon remoto` na inicialização do Windows, PWA com a lista de projetos e o
 andamento ao vivo, Shorts já renderizados tocando no celular, Web Push (R6), dormir e encerrar (S1).
@@ -320,6 +323,39 @@ palavras, sem criar nada nele). Como ficou (`remoto/livre.py`, `rotas/livre.py`,
 
 **Fase R4: postar.** Agendar no YouTube pelo navegador, com o vídeo relacionado (S3), já postado, refazer o título com a
 IA.
+
+**Estado da R4 (2026-11-20): feita e testada, com uma postagem de verdade** (autorizada pelo autor):
+`canal/navegador.py`, `canal/postar.py`, `remoto/postagem.py`, `rotas/postagem.py`, testes em `test_remoto_postagem.py`
+e `test_canal_postar.py`.
+
+* **A primeira postagem real.** O Short 6 de Filipenses ("Por que as crianças foram batizadas?", corte 930) estava
+  revisado mas não renderizado: foi renderizado pela rota do celular (`/renderizar`, 4 min 54 s) e postado pelo YouTube
+  Studio, programado para 20/11/2026 às 18:30 e vinculado ao sermão "01. A nossa identidade em Cristo (Filipenses
+  1.1-2)": https://youtube.com/shorts/ZDv879YTw24. O projeto ficou com `agendado_para`, o resultado `agendado` em
+  `postagens.json` e o arquivo em `shorts_gerados/agendados/`.
+* **O caminho no Studio** (`postar`): "Enviar vídeos" (`/videos/upload?d=ud`, `ytcp-uploads-file-picker input[type=file]`)
+  → título e descrição (`#title-textarea #textbox`, `#description-textarea #textbox`; a descrição leva as hashtags numa
+  linha própria, como o autor posta) → "Não é conteúdo para crianças" (`VIDEO_MADE_FOR_KIDS_NOT_MFK`) → `#next-button`
+  ×3 → "Programar" (`#second-container-expand-button`, `#datepicker-trigger` com "20 de nov. de 2026",
+  `#time-of-day-container input` com "18:30") ou "Público" → `#done-button` ("Programar"). O id sai do texto da janela
+  ("Link do vídeo"). Depois, na página de edição (`/video/<id>/edit`): `#linked-video-editor-link` → busca
+  `input#search-yours` com o título do sermão → o primeiro `ytcp-entity-card` → `ytcp-button#save`; e confere que a
+  visibilidade (`ytcp-video-metadata-visibility`) ficou "Programado" (ou "Público").
+* **Achados no primeiro envio** (viraram regra no código): (a) **a janela de envio não tem "Vídeo relacionado"**: só a
+  página de edição; (b) com a verificação de direitos ainda rodando, "Programar" abre o aviso "Ainda estamos verificando
+  seu conteúdo" e **só grava com "Ok"** (sem ele o Short continua rascunho); (c) um envio que para no meio deixa no canal
+  um **rascunho privado**: `postar(..., rascunho=True)` o retoma pela lista ("Editar rascunho") em vez de mandar de novo,
+  e o registro guarda `rascunho` para a próxima tentativa fazer isso sozinha; (d) não é preciso esperar a verificação
+  de direitos terminar para programar.
+* **No celular:** "📤 Postar" na tela do Short (só renderizado e em dia): o que já está no YouTube (programado,
+  publicado, rascunho ou erro, com o link), "📅 Programar" (dia e hora, pelo menos 15 min à frente) ou "Publicar
+  agora", "Vincular ao vídeo do sermão" (o nome do projeto já vem preenchido) e "📤 Postar no YouTube". O PC abre o
+  Chrome da automação e faz tudo; o celular mostra o andamento e recebe um aviso no fim. Short já programado ou
+  publicado pede confirmação e vira "Postar de novo" (criaria outro vídeo). A lista mostra o selo "YouTube:
+  programado/publicado/rascunho/falhou".
+* Escolhas feitas sem consulta: (a) sem tags (as hashtags vão na descrição, como o autor já faz); (b) o navegador da
+  automação abre visível no PC (o Google costuma estranhar o modo invisível); (c) "refazer o título com a IA" ficou para
+  depois (não era o pedido desta rodada).
 
 **Fase R5: começar pelo celular.** Listar o canal, baixar pelo Studio, criar o projeto (S4) e processar com as opções
 salvas.

@@ -214,7 +214,21 @@ def resumo_do_short(short: ShortNoDisco) -> dict[str, Any]:
 
 
 def shorts(pastas: PastasProjeto) -> list[dict[str, Any]]:
-    return [resumo_do_short(s) for s in shorts_no_disco(pastas)]
+    """Os Shorts para o celular, cada um com o que já foi feito no YouTube (`postagens.json`)."""
+    from spurgeon.publicacao.agenda import NOME_DO_ARQUIVO, RegistroDePostagens
+
+    registro = RegistroDePostagens(pastas.work / NOME_DO_ARQUIVO)
+    lista = []
+    for short in shorts_no_disco(pastas):
+        resumo = resumo_do_short(short)
+        youtube = registro.do_corte(short.corte.id).get("youtube")
+        resumo["youtube"] = (
+            {"estado": youtube.estado, "url": youtube.url, "quando": youtube.quando}
+            if youtube
+            else None
+        )
+        lista.append(resumo)
+    return lista
 
 
 def arquivo_do_short(pastas: PastasProjeto, id_do_corte: int) -> Path | None:

@@ -85,7 +85,9 @@ def _iniciar(args: argparse.Namespace) -> int:
     from spurgeon.remoto.avisos import Avisos
     from spurgeon.remoto.config import INTERVALO_DO_VIGIA_S, carregar_config_remoto
     from spurgeon.remoto.contexto import Contexto
+    from spurgeon.remoto.fila import trabalhadores_rodando
     from spurgeon.remoto.livre import Criacoes
+    from spurgeon.remoto.postagem import Postagens
     from spurgeon.remoto.servidor import servir
     from spurgeon.remoto.vigia import Vigia
 
@@ -96,6 +98,10 @@ def _iniciar(args: argparse.Namespace) -> int:
     pasta_projetos = carregar_config().pastas.projetos
     ctx = Contexto(config, pasta_projetos, Avisos(), __version__)
     ctx.criacoes = Criacoes(ao_terminar=lambda c: avisar_da_criacao(ctx, c))
+    ctx.postagens = Postagens(
+        ao_terminar=lambda e: avisar_da_postagem(ctx, e),
+        processando=lambda: bool(trabalhadores_rodando()),
+    )
     vigia = Vigia(
         pasta_projetos, ctx.avisos.enviar, intervalo_s=INTERVALO_DO_VIGIA_S,
         pode_avisar=lambda: ctx.config.avisos_ligados and not ctx.config.dormindo,
@@ -127,6 +133,19 @@ def avisar_da_criacao(ctx, criacao) -> None:
     else:
         url, texto = f"/#/p/{projeto}/livre", f"O Short livre não foi criado: {criacao.erro}"
     ctx.avisos.enviar(Aviso("Shorts livre", texto, url=url, marca=f"livre-{criacao.projeto}"))
+
+
+def avisar_da_postagem(ctx, envio) -> None:
+    """A postagem no YouTube terminou (ou falhou): avisa o celular."""
+    from urllib.parse import quote
+
+    from spurgeon.remoto.avisos import Aviso
+
+    if ctx.config.dormindo or not ctx.config.avisos_ligados:
+        return
+    url = f"/#/p/{quote(envio.projeto, safe='')}/s/{envio.id_do_corte}"
+    texto = envio.texto if not envio.erro else f"Não deu para postar: {envio.erro}"
+    ctx.avisos.enviar(Aviso("YouTube", texto, url=url, marca=f"postagem-{envio.projeto}"))
 
 
 def _configurar(args: argparse.Namespace) -> int:
