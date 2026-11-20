@@ -333,10 +333,13 @@ async function telaProjeto(id) {
   const livre = shorts.length
     ? h("a", { class: "botao secundario", href: `#/p/${enc(id)}/livre` }, "✚ Shorts livre: criar um Short de qualquer trecho")
     : null;
+  const exportar = projeto.tem_transcricao
+    ? h("a", { class: "botao secundario", href: `/api/projetos/${enc(id)}/legenda.txt`, download: "" }, "⬇ Exportar a legenda do sermão (texto com os tempos)")
+    : null;
 
   const etapasAbertas = projeto.andamento.em_andamento || projeto.andamento.esperando_revisao;
   const blocoEtapas = h("details", { open: etapasAbertas || null }, h("summary", {}, "Etapas do processamento"), caixaAndamento);
-  encher(tela, situacao, caixaAcoes, blocoEtapas, titulo, segmentos, livre || "", caixaShorts);
+  encher(tela, situacao, caixaAcoes, blocoEtapas, exportar, titulo, segmentos, livre, caixaShorts);
 
   let andava = projeto.andamento.em_andamento;
   const atualizar = async () => {
@@ -807,8 +810,7 @@ async function telaShort(id, corte) {
 
   const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
   const pintarInfo = () => encher(info, 
-    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s),
-      h("a", { class: "botao secundario", href: `${base}/legenda.txt`, download: "" }, "⬇ Exportar a legenda (texto com os tempos)")),
+    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s)),
     s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
     s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null);
   const pintarFerramentas = () => {

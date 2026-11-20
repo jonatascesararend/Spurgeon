@@ -48,7 +48,6 @@ from spurgeon.render.shorts import (
     aplicar_marcas_de_postado,
     ler_registro,
     pasta_do_estado,
-    planejar_shorts,
     sincronizar_arquivos,
     situacao_do_short,
 )
@@ -105,7 +104,7 @@ from spurgeon.shorts.etapas import (
     gravar_cortes,
     nome_do_sermao,
 )
-from spurgeon.shorts.exportar import legenda_no_tempo_do_short, nome_do_arquivo, texto_da_legenda
+from spurgeon.shorts.exportar import nome_do_arquivo_do_sermao, texto_da_legenda_do_sermao
 from spurgeon.shorts.livre import ContextoDaIA, preparar_cliente
 from spurgeon.shorts.llm import CAMPOS_REFAZIVEIS
 from spurgeon.shorts.marcas import Detectado, categoria_de_cada_frase, trechos_detectados
@@ -810,16 +809,6 @@ class EditorDeCortes(ctk.CTkFrame):
         ctk.CTkLabel(cabeca_legenda, text="Legenda do Short", anchor="w").pack(side="left")
         self._rotulo_editada = ctk.CTkLabel(cabeca_legenda, text="", text_color=_COR_ALERTA)
         self._rotulo_editada.pack(side="left", padx=8)
-        self._botao_exportar_legenda = ctk.CTkButton(
-            cabeca_legenda, text="Exportar a legenda…", width=150, height=26,
-            fg_color="transparent", border_width=1, command=self._exportar_legenda,
-        )  # fmt: skip
-        self._botao_exportar_legenda.pack(side="right")
-        dica(
-            self._botao_exportar_legenda,
-            "Salva a legenda deste Short num arquivo de texto, uma frase por linha, com o tempo de "
-            "cada frase no Short pronto (o que está na caixa agora, mesmo sem salvar).",
-        )
         self._dica_legenda = ctk.CTkLabel(
             d,
             text="Cada bloco de até 2 linhas é o que aparece na tela de uma vez, como no vídeo. "
@@ -891,6 +880,16 @@ class EditorDeCortes(ctk.CTkFrame):
             command=self.abrir_dicionario,
         )
         botao_dicionario.pack(side="left")
+        self._botao_exportar_legenda = ctk.CTkButton(
+            botoes, text="Exportar a legenda do sermão…", width=200,
+            fg_color=("gray70", "gray30"), command=self._exportar_legenda,
+        )  # fmt: skip
+        self._botao_exportar_legenda.pack(side="left", padx=(10, 0))
+        dica(
+            self._botao_exportar_legenda,
+            "Salva a legenda do sermão inteiro num arquivo de texto, uma frase por linha, com o "
+            "tempo de cada frase no vídeo original (o mesmo do YouTube).",
+        )
         dica(
             botao_dicionario,
             "Abre o dicionário personalizado: os termos que você guardou como certos. Dá para "
@@ -2383,27 +2382,25 @@ class EditorDeCortes(ctk.CTkFrame):
         return legenda_corrigida(self._palavras, corte, texto)
 
     def texto_da_legenda_exportada(self) -> tuple[str, str] | None:
-        """O nome sugerido e o texto do arquivo da legenda do Short aberto (None se não há)."""
-        if self._atual is None or not self._palavras:
+        """O nome sugerido e o texto do arquivo da legenda do sermão inteiro (None sem transcrição).
+
+        É a transcrição inteira (não só a janela do vídeo), com os tempos do vídeo original."""
+        if not self._pastas.transcricao.exists():
             return None
-        self._guardar_detalhe()  # o que está na caixa agora, mesmo sem salvar
-        corte = self._cortes[self._atual]
-        numero = next(
-            (p.numero for p in planejar_shorts(self._cortes) if p.corte.id == corte.id), None
+        transcricao = Transcricao.carregar(self._pastas.transcricao)
+        sermao = nome_do_sermao(self._pastas.raiz)
+        texto = texto_da_legenda_do_sermao(
+            transcricao.palavras, sermao=sermao, duracao_s=transcricao.duracao_s
         )
-        legenda = legenda_no_tempo_do_short(self._palavras, corte)
-        texto = texto_da_legenda(
-            corte, legenda, sermao=nome_do_sermao(self._pastas.raiz), numero=numero
-        )
-        return nome_do_arquivo(corte, numero), texto
+        return nome_do_arquivo_do_sermao(sermao), texto
 
     def _exportar_legenda(self) -> None:
-        """Pergunta onde salvar e grava a legenda do Short aberto num arquivo de texto."""
+        """Pergunta onde salvar e grava a legenda do sermão inteiro num arquivo de texto."""
         pronto = self.texto_da_legenda_exportada()
         if pronto is None:
             return
         nome, texto = pronto
-        pasta = self._pastas.shorts if self._pastas.shorts.is_dir() else self._pastas.raiz
+        pasta = self._pastas.raiz
         caminho = filedialog.asksaveasfilename(
             parent=self.winfo_toplevel(), title="Exportar a legenda", initialdir=str(pasta),
             initialfile=nome, defaultextension=".txt", filetypes=[("Texto", "*.txt")],

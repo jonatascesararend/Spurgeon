@@ -6,11 +6,12 @@ Ainda por vir aqui (Remoto.md, Fases R2 e R5): iniciar, pausar, cancelar e aprov
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from spurgeon.core.estado import StatusEtapa, carregar_estado
@@ -34,6 +35,7 @@ def rotas(ctx: Contexto) -> list[Route]:
         resposta = dados.detalhe_do_projeto(pastas)
         resposta["a_renderizar"] = len(dados.a_renderizar(pastas))
         resposta["tem_video_original"] = dados.video_original(pastas) is not None
+        resposta["tem_transcricao"] = pastas.transcricao.is_file()
         return JSONResponse(resposta)
 
     def andamento(request: Request) -> JSONResponse:
@@ -110,7 +112,32 @@ def rotas(ctx: Contexto) -> list[Route]:
             raise HTTPException(409, str(erro)) from erro
         return JSONResponse({"ok": True, "fila": ctx.fila.estado()})
 
+    def legenda_do_sermao(request: Request) -> PlainTextResponse:
+        """A legenda do sermão inteiro num arquivo de texto, com o tempo de cada frase."""
+        from spurgeon.core.projeto import ler_nome_e_data
+        from spurgeon.shorts.exportar import nome_do_arquivo_do_sermao, texto_da_legenda_do_sermao
+        from spurgeon.transcricao.formato import Transcricao
+
+        pastas = _pastas(request)
+        try:
+            transcricao = Transcricao.carregar(pastas.transcricao)
+        except (OSError, ValueError) as erro:
+            raise HTTPException(
+                404, "Este projeto ainda não tem a transcrição do sermão."
+            ) from erro
+        lido = ler_nome_e_data(pastas.raiz)
+        sermao = lido[0] if lido else pastas.raiz.name
+        texto = texto_da_legenda_do_sermao(
+            transcricao.palavras, sermao=sermao, duracao_s=transcricao.duracao_s
+        )
+        nome = nome_do_arquivo_do_sermao(sermao)
+        return PlainTextResponse(
+            texto, media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"},
+        )  # fmt: skip
+
     return [
+        Route("/api/projetos/{projeto}/legenda.txt", legenda_do_sermao),
         Route("/api/projetos/{projeto}/processar", processar, methods=["POST"]),
         Route("/api/projetos/{projeto}/aprovar", aprovar, methods=["POST"]),
         Route("/api/projetos/{projeto}/renderizar", renderizar, methods=["POST"]),

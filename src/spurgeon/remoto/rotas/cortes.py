@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import quote
 
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from spurgeon.core.estado import StatusEtapa, carregar_estado
@@ -145,42 +144,7 @@ def rotas(ctx: Contexto) -> list[Route]:
             _mudar, request, corpo, lambda p, c, d: edicao.marcar(p, c, bool(d["incluir"]))
         )
 
-    def legenda_em_texto(request: Request) -> PlainTextResponse:
-        """A legenda do Short num arquivo de texto, com o tempo de cada frase (para baixar)."""
-        from spurgeon.remoto.postagem import sermao_do_projeto
-        from spurgeon.shorts.exportar import (
-            legenda_no_tempo_do_short,
-            nome_do_arquivo,
-            texto_da_legenda,
-        )
-        from spurgeon.transcricao.formato import Transcricao
-
-        pastas = _pastas(request)
-        short = next(
-            (
-                s
-                for s in dados.shorts_no_disco(pastas)
-                if s.corte.id == request.path_params["corte"]
-            ),
-            None,
-        )
-        if short is None:
-            raise HTTPException(404, "Este corte não existe no projeto.")
-        try:
-            palavras = Transcricao.carregar(pastas.transcricao).palavras
-        except (OSError, ValueError) as erro:
-            raise HTTPException(404, "A transcrição deste projeto não foi encontrada.") from erro
-        legenda = legenda_no_tempo_do_short(palavras, short.corte)
-        texto = texto_da_legenda(short.corte, legenda, sermao=sermao_do_projeto(pastas),
-                                 numero=short.numero)  # fmt: skip
-        nome = nome_do_arquivo(short.corte, short.numero)
-        return PlainTextResponse(
-            texto, media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"},
-        )  # fmt: skip
-
     return [
-        Route("/api/projetos/{projeto}/shorts/{corte:int}/legenda.txt", legenda_em_texto),
         Route("/api/projetos/{projeto}/sessao", tomar, methods=["POST"]),
         Route("/api/projetos/{projeto}/sessao/soltar", soltar, methods=["POST"]),
         Route("/api/projetos/{projeto}/shorts/{corte:int}/edicao", para_editar),
