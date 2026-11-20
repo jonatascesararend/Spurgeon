@@ -37,6 +37,7 @@ O fluxo de ponta a ponta:
 | R13 | O PC fica disponível o dia todo | 2026-11-20 |
 | R14 | Tailscale instalado no PC (`souza-arend`) e no celular (`jonatas-arend`), mesma conta, MagicDNS ligado | 2026-11-20 |
 | R15 | O vídeo de um projeto novo vem do **"Baixar" do YouTube Studio (720p)**, não do yt-dlp a 1080p | 2026-11-20 |
+| R16 | Para conferir a legenda basta **ouvir**: opção de montar **só o áudio** do Short, com a legenda acompanhando, sem renderizar o vídeo | 2026-11-20 |
 
 ## 3. Escolhas técnicas (sugeridas, confirmar)
 
@@ -135,6 +136,7 @@ src/spurgeon/
     dados.py                       [R1] leitura dos projetos, andamento e Shorts (só leitura)
     avisos.py                      [R1] R6: Web Push (VAPID e inscrições no Cofre)
     vigia.py                       [R1] R6: olha os `estado.json` e avisa o que mudou
+    audicao.py                     [R1] R16: só o áudio do Short, com a legenda no tempo dele
     sessao.py                      R8: trava do celular com batimento; o PC salva e trava
     fila.py                        S7: um processamento por vez, servidor e Studio
     rotas/
@@ -143,7 +145,7 @@ src/spurgeon/
       sistema.py                   [R1] estado, dormir, acordar, encerrar e os avisos
       cortes.py                    legenda, início/fim, enviar (salva + renderiza)
       livre.py                     busca, categorias, criar Short livre
-      previa.py                    proxy (range requests) e dados da prévia rápida
+      previa.py                    [R1] legenda e áudio do Short (ouvir, R16); depois o proxy da prévia rápida
       postagem.py                  agendar, já postado, refazer título com a IA
       canal.py                     vídeos do canal, baixar e criar projeto
     web/                           [R1] o app do celular (index.html, app.js, estilo.css, sw.js, manifest)
@@ -155,6 +157,7 @@ src/spurgeon/
     postar.py                      S3: postar o Short pelo YouTube Studio (Plataforma, sem API)
   render/proxy.py                  S2: proxy 480p para a prévia rápida
 tests/test_remoto.py               [R1] servidor, segurança, dados, avisos e vigia (sem internet, sem Tailscale)
+tests/test_remoto_audicao.py       [R1] ouvir com a legenda (um teste roda o FFmpeg de verdade)
 ```
 
 `[R1]` = já tem código. Os outros módulos só têm a descrição; o código entra fase por fase. Dependências do branch: o
@@ -224,8 +227,20 @@ de fumaça no servidor de verdade; fotos do app em 393×851, temas escuro e clar
   previa; o servidor só escuta em `127.0.0.1`); (b) a lista vazia de contas barra todo mundo, e `configurar`/`iniciar`
   põem a conta dona do PC; (c) "Dormir" para os avisos e a API, mas o app continua abrindo para mostrar "Acordar"; (d)
   o vigia olha a cada 15 s e a primeira olhada não avisa nada.
-* **Falta na R1:** ligar o atalho de inicialização no PC do autor (pedir antes) e receber no celular um aviso do vigia
-  numa execução real.
+* O autor confirmou o app no celular e pediu a abertura com o Windows (2026-11-20): o atalho
+  `Studio Spurgeon - controle remoto.lnk` está na pasta "Inicializar" (o `pythonw` do `.venv`, sem console). **Falta na
+  R1:** receber no celular um aviso do vigia numa execução real.
+* **Ouvir com a legenda (R16, `remoto/audicao.py`, `rotas/previa.py`).** Na tela do Short, "🎧 Ouvir com a legenda" é o
+  modo padrão (o celular lembra a escolha); "▶ Vídeo pronto" só aparece se o Short já foi renderizado. O PC monta só o
+  som do Short, com os MESMOS trechos do render (`trechos_mantidos` + `linhas_do_audio_cortado`: sem os saltos, pausas
+  encurtadas), em AAC mono 64 kbps, guardado em `_work/remoto/audio_<id>_<assinatura>.m4a`. A legenda é a do render
+  (`palavras_com_a_legenda` → `palavras_do_short` → `remapear_palavras` → `agrupar_em_frases`). No celular: tocar e pausar,
+  voltar 3 s, velocidade (1×, 1,25×, 1,5×, 2×), a palavra falada acende, a frase atual fica em destaque e rola para o
+  meio, e tocar numa palavra pula o áudio para ela. **De onde vem o som:** o áudio tratado do projeto (se ainda existe),
+  senão o vídeo original, senão o Short renderizado (com aviso se o corte mudou depois). Medido nos projetos reais: cerca
+  de **1 s por Short** (350 a 750 KB). O sermão 08 não tem mais o original em `Downloads`: só os Shorts renderizados dele
+  têm som. Limites: o som do original não leva o tratamento (limpeza e volume) quando o áudio tratado já foi apagado, e um
+  Short renderizado do vídeo longo traz as pausas já cortadas pelo longo (a legenda pode adiantar).
 
 **Fase R2: editar.** Trava e "o PC salva sozinho" (R8), aprovar cortes (S10), legenda inteira com "Enviar", início e
 fim por toque na palavra (±0,1 s), proxy e prévia rápida (S2), renderizar os Shorts enviados.

@@ -206,28 +206,138 @@ async function telaProjeto(id) {
   }, projeto.andamento.em_andamento ? 4000 : 15000);
 }
 
+function lerModo() {
+  try { return localStorage.getItem("modoDoShort") || "ouvir"; } catch (_) { return "ouvir"; }
+}
+function guardarModo(modo) {
+  try { localStorage.setItem("modoDoShort", modo); } catch (_) { /* sem armazenamento: tudo bem */ }
+}
+const minSeg = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+/** Ouvir com a legenda: o PC monta só o áudio do Short; a palavra falada acende. Devolve a limpeza. */
+async function montarAudicao(area, base) {
+  area.replaceChildren(h("div", { class: "bloco" }, "Carregando a legenda…"));
+  const leg = await api(`${base}/legenda`);
+  const palavras = leg.frases.flat();
+  if (!leg.fonte) {
+    area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, leg.aviso));
+    return () => {};
+  }
+  const audio = h("audio", { src: `${base}/audio`, preload: "auto" });
+  const estado = h("span", { class: "estado-audio" }, "Preparando o áudio no PC…");
+  const tempo = h("span", { class: "tempo" }, `0:00 / ${minSeg(leg.duracao)}`);
+  const barra = h("input", { type: "range", min: "0", max: String(leg.duracao), step: "0.05", value: "0", class: "barra-tempo", "aria-label": "Posição" });
+  const tocar = h("button", { class: "botao-redondo", "aria-label": "Tocar" }, "▶");
+  const VELOCIDADES = [1, 1.25, 1.5, 2];
+  let vel = 0;
+  const velocidade = h("button", { class: "botao-pequeno", "aria-label": "Velocidade" }, "1×");
+  const voltar = h("button", { class: "botao-pequeno", "aria-label": "Voltar 3 segundos" }, "↺ 3 s");
+
+  const spans = [];
+  const linhas = leg.frases.map((frase) => h("p", { class: "frase" }, ...frase.flatMap((p, k) => {
+    const span = h("span", { class: "palavra", onclick: () => { audio.currentTime = p.i; audio.play().catch(() => {}); } }, p.t);
+    spans.push(span);
+    return k ? [" ", span] : [span];
+  })));
+  // a frase de cada palavra (para acender a linha inteira)
+  let n = 0;
+  const fraseDe = [];
+  leg.frases.forEach((frase, i) => { for (let k = 0; k < frase.length; k++) fraseDe[n++] = i; });
+
+  const barraDoAudio = h("div", { class: "audicao-barra" },
+    h("div", { class: "audicao-linha" }, tocar, h("div", { class: "audicao-meio" }, barra, h("div", { class: "audicao-info" }, tempo, estado)), voltar, velocidade));
+  const aviso = leg.aviso ? h("div", { class: "bloco aviso-bloco" }, leg.aviso) : null;
+  area.replaceChildren(barraDoAudio, aviso || "", h("div", { class: "legenda-viva" }, ...linhas), audio);
+  barraDoAudio.style.top = `${document.querySelector(".topo").offsetHeight}px`;
+
+  let atual = -1;
+  let quadro = 0;
+  let arrastando = false;
+  const acender = () => {
+    const t = audio.currentTime;
+    if (!arrastando) barra.value = String(t);
+    tempo.textContent = `${minSeg(t)} / ${minSeg(leg.duracao)}`;
+    // a última palavra que já começou (busca binária: as palavras estão em ordem)
+    let lo = 0, hi = palavras.length - 1, achada = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (palavras[m].i <= t + 0.03) { achada = m; lo = m + 1; } else hi = m - 1; }
+    if (achada !== atual) {
+      if (atual >= 0) { spans[atual].classList.remove("atual"); linhas[fraseDe[atual]].classList.remove("atual"); }
+      if (achada >= 0) {
+        spans[achada].classList.add("atual");
+        const linha = linhas[fraseDe[achada]];
+        if (!linha.classList.contains("atual")) {
+          linha.classList.add("atual");
+          linha.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      }
+      atual = achada;
+    }
+  };
+  const laco = () => { acender(); if (!audio.paused) quadro = requestAnimationFrame(laco); };
+  audio.addEventListener("play", () => { tocar.textContent = "❚❚"; tocar.setAttribute("aria-label", "Pausar"); cancelAnimationFrame(quadro); laco(); });
+  audio.addEventListener("pause", () => { tocar.textContent = "▶"; tocar.setAttribute("aria-label", "Tocar"); acender(); });
+  audio.addEventListener("seeked", acender);
+  audio.addEventListener("waiting", () => { estado.textContent = "Carregando…"; });
+  audio.addEventListener("canplay", () => { estado.textContent = ""; });
+  audio.addEventListener("error", () => { estado.textContent = "O PC não conseguiu montar o áudio."; });
+  tocar.addEventListener("click", () => (audio.paused ? audio.play().catch(() => {}) : audio.pause()));
+  voltar.addEventListener("click", () => { audio.currentTime = Math.max(0, audio.currentTime - 3); });
+  velocidade.addEventListener("click", () => {
+    vel = (vel + 1) % VELOCIDADES.length;
+    audio.playbackRate = VELOCIDADES[vel];
+    velocidade.textContent = `${String(VELOCIDADES[vel]).replace(".", ",")}×`;
+  });
+  barra.addEventListener("input", () => { arrastando = true; tempo.textContent = `${minSeg(+barra.value)} / ${minSeg(leg.duracao)}`; });
+  barra.addEventListener("change", () => { arrastando = false; audio.currentTime = +barra.value; });
+  return () => { cancelAnimationFrame(quadro); audio.pause(); audio.removeAttribute("src"); audio.load(); };
+}
+
+let limparTela = null; // o que a tela atual precisa desligar ao sair (áudio tocando)
+
 async function telaShort(id, corte) {
   const lista = await api(`/api/projetos/${enc(id)}/shorts`);
   const s = lista.find((x) => String(x.id) === String(corte));
   if (!s) throw new Error("Este Short não existe mais no projeto.");
   cabecalho(s.numero ? `Short ${s.numero}` : "Short desmarcado", duracao(s.duracao), `#/p/${enc(id)}`);
-  const player = h("div", { class: "player" }, s.renderizado
-    ? h("video", { src: `/api/projetos/${enc(id)}/shorts/${s.id}/video`, controls: true, playsinline: true, preload: "metadata" })
-    : h("div", { class: "vazio" }, "Este Short ainda não foi renderizado.", h("br"), "A prévia rápida chega na próxima fase."));
+  const base = `/api/projetos/${enc(id)}/shorts/${s.id}`;
+  let modo = s.renderizado ? lerModo() : "ouvir";
+  const area = h("div");
+  const seletor = s.renderizado ? h("div", { class: "segmentos" }) : null;
+  const texto = h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto));
+  const mostrar = async () => {
+    if (limparTela) limparTela();
+    limparTela = null;
+    if (modo === "video") {
+      area.replaceChildren(h("div", { class: "player" },
+        h("video", { src: `${base}/video`, controls: true, playsinline: true, preload: "metadata" })), texto);
+    } else {
+      try { limparTela = await montarAudicao(area, base); } catch (e) {
+        area.replaceChildren(h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
+      }
+    }
+  };
+  const pintarSeletor = () => seletor && seletor.replaceChildren(
+    ...[["ouvir", "🎧 Ouvir com a legenda"], ["video", "▶ Vídeo pronto"]].map(([k, r]) =>
+      h("button", { class: modo === k ? "ativo" : "", onclick: () => {
+        if (modo === k) return;
+        modo = k; guardarModo(k); pintarSeletor(); mostrar();
+      } }, r)));
   const chips = linhaDoShort(id, s).querySelector(".chips");
   const blocos = [
     h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chips),
     s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
     s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null,
-    h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto)),
   ];
-  tela.replaceChildren(player, ...blocos);
+  tela.replaceChildren(...(seletor ? [seletor] : []), area, ...blocos);
+  pintarSeletor();
+  await mostrar();
 }
 
 // --- roteador -------------------------------------------------------------------------------
 
 async function rotear() {
   pararRepeticao();
+  if (limparTela) { limparTela(); limparTela = null; }
   window.scrollTo(0, 0);
   const partes = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   try {
