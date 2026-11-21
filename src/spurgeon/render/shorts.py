@@ -697,7 +697,10 @@ class RenderizarShorts(Etapa):
     def executar(self, ctx: ContextoProjeto) -> None:
         planejados = planejar_shorts(carregar_cortes(ctx.pastas.cortes_shorts))
         if not planejados:
-            ctx.log.warning("Nenhum corte foi aprovado: nenhum Short será gerado.")
+            ctx.log.info(
+                "Nenhum Short marcado: os cortes sugeridos ficam no Studio Shorts para você "
+                "marcar, ajustar e renderizar."
+            )
             return
         longos = [s for s in planejados if passa_do_limite(s.corte)]
         if longos:

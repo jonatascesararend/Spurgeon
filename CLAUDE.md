@@ -103,6 +103,9 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   assinatura do Short só leva `fonte_id` quando sai do longo (`assinatura_do_short(..., fonte_id=)`): não mude as
   `opcoes_relevantes` das duas etapas por causa disso (refaria o que já está pronto). Longo de versão antiga (sem o
   bloco) não serve: os Shorts saem do original. Subiu o formato do bloco? Suba `VERSAO_DA_FONTE`.
+- Shorts sugeridos saem TODOS desmarcados (`montar_cortes`: `incluir=False`) e o processamento não para para aprovar
+  (`AprovarCortes.ativa` é sempre False; a etapa fica só para projetos antigos parados nela): nenhum Short sai pronto
+  da IA, a pessoa marca e ajusta no Studio Shorts e renderiza de lá. Não volte a marcar pela nota nem a pausar.
 - IA dos Shorts (`shorts/`): nunca ponha exemplos concretos de título nos prompts (a IA os copia);
   o Ollama roda só em CPU quando não há GPU utilizável (`num_gpu=0`).
 - Começo e fim do vídeo (`video_inicio_s`/`video_fim_s`, 0 = até o fim): vale em `calcular_cortes`

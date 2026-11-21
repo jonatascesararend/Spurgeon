@@ -264,7 +264,7 @@ def test_modo_so_shorts_marca_os_shorts_e_apaga_o_video_longo(tela):
     assert estado_do(tela, "gerar_shorts") == "disabled"
     assert estado_do(tela, "gerar_video_longo") == "disabled"
     assert estado_do(tela, "limiar_pausa") == "disabled"
-    assert estado_do(tela, "aprovar_cortes") == "normal"
+    assert "aprovar_cortes" not in tela.opcoes.bools  # os Shorts não param mais para aprovar
     assert tela.opcoes.valores().modo == "so_shorts"
 
 
@@ -425,9 +425,7 @@ def test_renderizar_do_studio_confirma_e_inicia_so_os_shorts(tela, projeto_pront
     chamadas = []
     monkeypatch.setattr(tela, "_iniciar", lambda ajustes=None: chamadas.append(ajustes))
     tela._renderizar_do_studio()
-    assert chamadas == [
-        {"modo": "so_shorts", "aprovar_cortes": False, "revisar_transcricao": False}
-    ]
+    assert chamadas == [{"modo": "so_shorts", "revisar_transcricao": False}]
     _, texto = next((t, m) for t, m in tela.caixas.mostradas if t == "Renderizar os Shorts")
     assert "Tempo estimado" in texto and "não mudaram" in texto
     assert tela._abas.get() == app_mod.ABA_PROCESSAMENTO

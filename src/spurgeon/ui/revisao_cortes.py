@@ -1,9 +1,9 @@
 """Janela de aprovação dos cortes dos Shorts: o editor de cortes numa janela que pausa o fluxo.
 
-Todos os cortes escolhidos já vêm marcados; as reservas (nota baixa ou acima do limite) vêm
-desmarcadas. Tudo o que se faz com os cortes (marcar, corrigir título e legenda, ajustar o início e
-o fim) está em `studio_shorts.EditorDeCortes`, que é o mesmo da aba "Studio Shorts". O que sobra
-marcado ao salvar é o que vira Short.
+Só serve a um projeto antigo parado na aprovação (a etapa não roda mais: os cortes vêm todos
+desmarcados e são escolhidos no Studio Shorts). Tudo o que se faz com os cortes (marcar, corrigir
+título e legenda, ajustar o início e o fim) está em `studio_shorts.EditorDeCortes`, que é o mesmo da
+aba "Studio Shorts". O que sobra marcado ao salvar é o que vira Short.
 """
 
 from __future__ import annotations

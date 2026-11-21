@@ -41,8 +41,8 @@ def test_cada_opcao_avancada_tem_uma_legendinha_explicando(tela):
         "Quanto silêncio sobra em cada pausa cortada",
         "Trechos mais curtos que isto não viram Short",
         "180 s (3 min) é o limite do YouTube",
-        "O máximo de cortes que vêm marcados",
-        "aparecem na aprovação, mas desmarcados",
+        "O máximo de cortes sugeridos como principais",
+        "aparecem como reserva no Studio Shorts",
         "A IA local que avalia os trechos",
         "Move o enquadramento vertical dos Shorts",
         "Ajustar o zoom e a legenda dos Shorts",  # a altura da legenda mudou para o painel próprio

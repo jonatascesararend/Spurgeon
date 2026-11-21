@@ -138,6 +138,85 @@ function escolher(titulo, opcoes) {
   });
 }
 
+/** Uma folha de confirmação com a explicação (parágrafos) e um botão de seguir; resolve true/false. */
+function confirmarNaFolha(titulo, paragrafos, rotulo, classe = "perigo") {
+  return new Promise((resolver) => {
+    const fundo = h("div", { class: "fundo" });
+    const fechar = (valor) => { fundo.remove(); folha.remove(); resolver(valor); };
+    const folha = h("div", { class: "folha" }, h("h2", {}, titulo),
+      ...paragrafos.filter(Boolean).map((p) => h("p", { class: "texto-da-folha" }, p)),
+      h("button", { class: `botao ${classe}`, onclick: () => fechar(true) }, rotulo),
+      h("button", { class: "botao fechar", onclick: () => fechar(false) }, "Cancelar"));
+    fundo.addEventListener("click", () => fechar(false));
+    document.body.append(fundo, folha);
+  });
+}
+
+function tamanhoLegivel(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1).replace(".", ",")} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** "Espaço no PC": varrer (apagar os vídeos e o original, guardando a análise) ou apagar o projeto. */
+function blocoDoEspaco(id) {
+  const corpo = h("div", {}, h("p", { class: "nota" }, "Calculando…"));
+  const bloco = h("details", { class: "bloco-espaco" }, h("summary", {}, "🧹 Espaço no PC: varrer ou apagar o projeto"), corpo);
+  const carregar = async () => {
+    let e;
+    try { e = await api(`/api/projetos/${enc(id)}/espaco`); } catch (erro) { encher(corpo, h("p", { class: "nota" }, erro.message)); return; }
+    const v = e.varrer, a = e.apagar;
+    const varrido = e.varrido ? h("p", { class: "nota" }, `Varrido em ${dataBr(e.varrido.quando.slice(0, 10))} às ${e.varrido.quando.slice(11, 16)} (liberou ${tamanhoLegivel(e.varrido.bytes || 0)}).`) : null;
+    const botaoVarrer = h("button", { class: "botao secundario", disabled: !v.bytes || Boolean(e.impedimento_varrer) },
+      v.bytes ? `🧹 Varrer o projeto (libera ${tamanhoLegivel(v.bytes)})` : "🧹 Nada pesado para varrer");
+    const botaoApagar = h("button", { class: "botao perigo", disabled: Boolean(e.impedimento_apagar) },
+      `🗑 Apagar o projeto (do app e do PC: ${tamanhoLegivel(a.bytes)})`);
+    botaoVarrer.addEventListener("click", async () => {
+      const ok = await confirmarNaFolha("Varrer o projeto?", [
+        `Libera ${tamanhoLegivel(v.bytes)} no PC.`,
+        `Apaga: os Shorts renderizados e o vídeo longo pronto, os arquivos de trabalho grandes${v.original ? ` e o vídeo original (“${v.original}”, ${tamanhoLegivel(v.bytes_do_original)})` : ""}.`,
+        v.original_fica,
+        "Fica: a transcrição, os cortes, os títulos e as legendas, e o registro do que foi postado e agendado. O projeto continua abrindo e a legenda continua exportável.",
+        v.original ? "Sem o vídeo original não dá mais para renderizar nem processar este projeto (seria preciso baixar o vídeo de novo)." : null,
+      ], "🧹 Varrer", "perigo");
+      if (!ok) return;
+      botaoVarrer.disabled = true;
+      try {
+        const r = await post(`/api/projetos/${enc(id)}/varrer`, { confirmar: id });
+        avisar(`Projeto varrido: ${tamanhoLegivel(r.bytes)} liberados.${r.falhas.length ? ` ${r.falhas.length} arquivo(s) em uso ficaram.` : ""}`);
+        await rotear();
+      } catch (erro) { avisar(erro.message); botaoVarrer.disabled = false; }
+    });
+    botaoApagar.addEventListener("click", async () => {
+      const ok = await confirmarNaFolha("Apagar o projeto?", [
+        `Apaga a pasta inteira do projeto (${tamanhoLegivel(a.bytes_do_projeto)}): a transcrição, os cortes, os Shorts e tudo o que foi feito nele${a.original ? `, e o vídeo original (“${a.original}”, ${tamanhoLegivel(a.bytes_do_original)})` : ""}.`,
+        a.original_fica,
+        "Os vídeos que já estão no YouTube não são mexidos. No PC, não dá para desfazer.",
+      ], "Continuar…", "perigo");
+      if (!ok) return;
+      const certeza = await confirmarNaFolha("Tem certeza?", [`“${projetoAtualNome || id}” vai sumir do app e do PC, de vez.`], "🗑 Apagar de vez", "perigo");
+      if (!certeza) return;
+      botaoApagar.disabled = true;
+      sairDoProjeto(); // solta a trava antes: a renovação não pode recriar a pasta
+      try {
+        const r = await post(`/api/projetos/${enc(id)}/apagar`, { confirmar: id });
+        avisar(`Projeto apagado: ${tamanhoLegivel(r.bytes)} liberados.${r.falhas.length ? " Alguns arquivos estavam em uso e ficaram." : ""}`);
+        try { localStorage.removeItem(CHAVE_DA_ULTIMA_TELA); } catch (_) { /* tudo bem */ }
+        location.hash = "";
+      } catch (erro) { avisar(erro.message); botaoApagar.disabled = false; entrarNoProjeto(id).catch(() => {}); }
+    });
+    encher(corpo,
+      varrido,
+      botaoVarrer,
+      e.impedimento_varrer ? h("p", { class: "nota" }, e.impedimento_varrer) : null,
+      botaoApagar,
+      e.impedimento_apagar ? h("p", { class: "nota" }, e.impedimento_apagar) : null);
+  };
+  bloco.addEventListener("toggle", () => { if (bloco.open) carregar(); });
+  return bloco;
+}
+let projetoAtualNome = "";
+
 // --- a trava do projeto: o celular abriu, o PC salva e trava (Remoto.md, R8) ---------------
 
 let sessao = { projeto: "", timer: null };
@@ -180,21 +259,37 @@ async function editar(caminho, corpo) {
 async function telaProjetos() {
   sairDoProjeto();
   cabecalho("Studio Spurgeon", "Projetos no PC");
+  const abas = abasDoInicio("projetos");
   const desenhar = async () => {
     const lista = await api("/api/projetos");
     const novo = h("a", { class: "botao", href: "#/canal" }, "✚ Novo projeto de um vídeo do canal");
     if (!lista.length) {
-      encher(tela, novo, h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
+      encher(tela, abas, novo, h("div", { class: "vazio-lista" }, "Nenhum projeto no PC ainda."));
       return;
     }
-    encher(tela, novo, ...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
+    encher(tela, abas, novo, ...lista.map((p) => h("a", { class: "cartao", href: `#/p/${enc(p.id)}` },
       h("div", { class: "nome" }, p.nome),
       h("div", { class: "meta" }, `${dataBr(p.data)} · ${p.detalhes}`),
-      h("div", { class: "chips" }, h("span", { class: `chip ${classeDaSituacao(p.situacao)}` }, p.situacao)),
+      h("div", { class: "chips" }, h("span", { class: `chip ${classeDaSituacao(p.situacao)}` }, p.situacao),
+        p.varrido ? h("span", { class: "chip varrido" }, `🧹 Varrido em ${dataBr(p.varrido.quando.slice(0, 10)).slice(0, 5)}${p.varrido.bytes ? ` · ${tamanhoLegivel(p.varrido.bytes)} liberados` : ""}`) : null),
+      publicacaoDoProjeto(p.publicacao),
     )));
   };
   await desenhar();
   repetir(desenhar, 20000);
+}
+
+/** O resumo dos Shorts do projeto: postados, agendados (com o próximo horário) e os que faltam postar. */
+function publicacaoDoProjeto(pub) {
+  if (!pub || !(pub.postados || pub.agendados || pub.a_postar)) return null;
+  const chips = [];
+  if (pub.postados) chips.push(h("span", { class: "chip ok" }, `✔ ${plural(pub.postados, "postado", "postados")}`));
+  if (pub.agendados) {
+    const proximo = pub.proximo ? ` · próximo ${dataBr(pub.proximo.slice(0, 10)).slice(0, 5)} às ${pub.proximo.slice(11, 16)}` : "";
+    chips.push(h("span", { class: "chip azul" }, `📅 ${plural(pub.agendados, "agendado", "agendados")}${proximo}`));
+  }
+  if (pub.a_postar) chips.push(h("span", { class: "chip" }, `${plural(pub.a_postar, "Short", "Shorts")} a postar`));
+  return h("div", { class: "chips" }, ...chips);
 }
 
 const ICONE_DA_ETAPA = {
@@ -281,7 +376,8 @@ function acoesDoProjeto(id, a, atualizar) {
   } else if (a.fila && a.fila.ultimo_resultado === "erro") {
     itens.push(h("div", { class: "cartao aviso-bloco" }, `O último processamento parou com erro: ${a.fila.ultimo_erro || "veja o log"}.`));
   }
-  if (!fila && !a.em_andamento && !revisao && !/conclu/i.test(a.situacao)) {
+  const naoComecou = a.etapas.every((e) => e.status === "pendente"); // o "Começar" fica nas opções
+  if (!fila && !a.em_andamento && !revisao && !naoComecou && !/conclu/i.test(a.situacao)) {
     itens.push(h("button", { class: "botao", onclick: async (ev) => {
       if (!confirm("Processar este projeto no PC (continua de onde parou, com as opções dele)?")) return;
       ev.currentTarget.disabled = true;
@@ -301,6 +397,120 @@ function acoesDoProjeto(id, a, atualizar) {
   return itens;
 }
 
+/** "12:05" ou "1:02:03" (o 0 vira "0:00"). */
+function textoDoTempo(segundos) {
+  const s = Math.max(0, Math.round(Number(segundos) || 0));
+  const horas = Math.floor(s / 3600), minutos = Math.floor((s % 3600) / 60), resto = s % 60;
+  return horas ? `${horas}:${doisDigitos(minutos)}:${doisDigitos(resto)}` : `${minutos}:${doisDigitos(resto)}`;
+}
+
+/** "1:02:03", "62:03" ou "45" → segundos (NaN se não deu para ler). */
+function segundosDoTexto(texto) {
+  const partes = String(texto).trim().split(":");
+  if (!partes.length || partes.length > 3 || partes.some((p) => !/^\d+$/.test(p))) return NaN;
+  return partes.reduce((total, p) => total * 60 + Number(p), 0);
+}
+
+/** As opções do processamento do projeto e o "Começar" (baixa o vídeo do canal, se preciso, e processa). */
+function blocoDasOpcoes(id, projeto, aoComecar) {
+  const bloco = h("div", { class: "bloco bloco-opcoes" });
+  const andamento = h("div");
+  let config = null;
+  let tarefa = projeto.tarefa;
+
+  const salvar = async (campo, valor) => {
+    try { config = await post(`/api/projetos/${enc(id)}/opcoes`, { [campo]: valor }); }
+    catch (e) { avisar(e.message); }
+    desenhar();
+  };
+
+  const campoDaOpcao = (c, pode) => {
+    const desligado = !pode || (c.desligado && !c.valor);
+    const ajuda = c.desligado && !c.valor ? c.desligado : c.ajuda;
+    let controle;
+    if (c.tipo === "sim_nao") {
+      const caixa = h("input", { type: "checkbox", checked: c.valor || null, disabled: desligado || null });
+      caixa.addEventListener("change", () => salvar(c.campo, caixa.checked));
+      return h("div", { class: "campo-opcao" }, h("label", { class: "opcao" }, caixa, ` ${c.rotulo}`),
+        ajuda ? h("p", { class: "nota" }, ajuda) : null);
+    }
+    if (c.tipo === "escolha") {
+      controle = h("div", { class: "segmentos" }, ...c.opcoes.map(([valor, rotulo]) =>
+        h("button", { class: String(c.valor) === String(valor) ? "ativo" : "", disabled: !pode || null,
+          onclick: () => { if (String(c.valor) !== String(valor)) salvar(c.campo, valor); } }, rotulo)));
+    } else if (c.tipo === "numero") {
+      const entrada = h("input", { type: "number", class: "campo", inputmode: "decimal", min: c.min, max: c.max,
+        step: c.passo, value: c.valor, disabled: !pode || null });
+      entrada.addEventListener("change", () => {
+        const valor = Number(entrada.value.replace(",", "."));
+        if (Number.isNaN(valor)) { avisar("Escreva um número."); desenhar(); return; }
+        salvar(c.campo, valor);
+      });
+      controle = h("div", { class: "linha-campo" }, entrada, c.unidade ? h("span", { class: "unidade" }, c.unidade) : null);
+    } else if (c.tipo === "tempo") {
+      const entrada = h("input", { type: "text", class: "campo", inputmode: "numeric", placeholder: "0:00",
+        value: textoDoTempo(c.valor), disabled: !pode || null });
+      entrada.addEventListener("change", () => {
+        const valor = segundosDoTexto(entrada.value);
+        if (Number.isNaN(valor)) { avisar("Escreva o tempo como 1:02:03 ou 12:05."); desenhar(); return; }
+        salvar(c.campo, valor);
+      });
+      controle = entrada;
+    }
+    return h("div", { class: "campo-opcao" }, h("div", { class: "rotulo-opcao" }, c.rotulo), controle,
+      ajuda ? h("p", { class: "nota" }, ajuda) : null);
+  };
+
+  const acompanhar = async () => {
+    while (tarefa && tarefa.rodando) {
+      await new Promise((r) => setTimeout(r, 2500));
+      if (!document.body.contains(bloco)) return; // saiu da tela: o aviso chega
+      try { tarefa = await api("/api/canal/tarefa"); } catch (_) { continue; }
+      desenharAndamento();
+      if (tarefa && !tarefa.rodando) {
+        if (tarefa.erro) avisar(`Não deu para começar: ${tarefa.erro}`);
+        else { avisar(tarefa.texto); await aoComecar(); }
+      }
+    }
+  };
+
+  const desenharAndamento = () => {
+    if (!tarefa) { encher(andamento); return; }
+    encher(andamento, h("div", { class: `cartao ${tarefa.erro ? "aviso-bloco" : "destaque"}` },
+      h("div", { class: "nome" }, tarefa.rodando ? "⏳ Começando…" : tarefa.erro ? "Não deu para começar" : "Começou"),
+      h("p", { class: "nota" }, tarefa.erro || tarefa.texto)));
+  };
+
+  const desenhar = () => {
+    if (!config) { encher(bloco, h("p", { class: "nota" }, "Carregando as opções…")); return; }
+    const pode = config.pode_mudar && !(tarefa && tarefa.rodando);
+    const comecar = config.pode_mudar ? h("button", { class: "botao", disabled: (tarefa && tarefa.rodando) || null, onclick: async (ev) => {
+      const texto = projeto.baixado
+        ? "Começar o processamento no PC com estas opções?"
+        : "Baixar o vídeo pelo YouTube Studio e começar o processamento no PC com estas opções?";
+      if (!confirm(texto)) return;
+      ev.currentTarget.disabled = true;
+      try { tarefa = await post(`/api/projetos/${enc(id)}/comecar`); desenhar(); acompanhar(); }
+      catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+    } }, projeto.baixado ? "▶ Começar o processamento" : "▶ Começar (baixa o vídeo e processa)") : null;
+    encher(bloco,
+      h("h3", {}, config.pode_mudar ? "Opções do processamento" : "Opções usadas"),
+      config.pode_mudar
+        ? h("p", { class: "nota" }, `Ajuste antes de começar: cada mudança já fica salva no projeto.${projeto.baixado ? "" : " O vídeo só é baixado quando você tocar em Começar."}`)
+        : h("p", { class: "nota" }, config.motivo),
+      ...config.grupos.map((g) => h("details", { class: "grupo-opcoes", open: config.pode_mudar || null },
+        h("summary", {}, g.titulo), ...g.campos.map((c) => campoDaOpcao(c, pode)))),
+      andamento, comecar);
+    desenharAndamento();
+  };
+
+  desenhar();
+  api(`/api/projetos/${enc(id)}/opcoes`).then((c) => { config = c; desenhar(); acompanhar(); })
+    .catch((e) => encher(bloco, h("p", { class: "nota" }, e.message)));
+  bloco.recarregar = async () => { try { config = await api(`/api/projetos/${enc(id)}/opcoes`); desenhar(); } catch (_) { /* fica como está */ } };
+  return bloco;
+}
+
 async function telaProjeto(id) {
   await entrarNoProjeto(id);
   voltarDoShort = `#/p/${enc(id)}`;
@@ -309,6 +519,7 @@ async function telaProjeto(id) {
   const caixaShorts = h("div");
   const projeto = await api(`/api/projetos/${enc(id)}`);
   cabecalho(projeto.nome, dataBr(projeto.data), "");
+  projetoAtualNome = projeto.nome;
   const situacao = h("div", { class: "chips" });
   const pintarSituacao = (a) => encher(situacao, 
     h("span", { class: `chip ${classeDaSituacao(a.situacao)}` }, a.situacao),
@@ -339,11 +550,18 @@ async function telaProjeto(id) {
 
   const etapasAbertas = projeto.andamento.em_andamento || projeto.andamento.esperando_revisao;
   const blocoEtapas = h("details", { open: etapasAbertas || null }, h("summary", {}, "Etapas do processamento"), caixaAndamento);
-  encher(tela, situacao, caixaAcoes, blocoEtapas, exportar, titulo, segmentos, livre, caixaShorts);
+  let atualizar = null;
+  const naoComecou = projeto.nao_comecou;
+  const opcoes = blocoDasOpcoes(id, projeto, async () => { if (atualizar) await atualizar(); });
+  // antes de começar, as opções vêm primeiro; depois, ficam recolhidas lá embaixo
+  const opcoesDepois = naoComecou ? null : h("details", { class: "bloco-espaco" }, h("summary", {}, "⚙ Opções usadas no processamento"), opcoes);
+  encher(tela, situacao, caixaAcoes, naoComecou ? opcoes : null, blocoEtapas, exportar, titulo, segmentos, livre, caixaShorts, opcoesDepois, blocoDoEspaco(id));
 
   let andava = projeto.andamento.em_andamento;
-  const atualizar = async () => {
+  let comecou = !naoComecou;
+  atualizar = async () => {
     const a = await api(`/api/projetos/${enc(id)}/andamento`);
+    if (!comecou && !a.etapas.every((e) => e.status === "pendente")) { comecou = true; opcoes.recarregar(); }
     pintarSituacao(a);
     desenharAndamento(caixaAndamento, a);
     encher(caixaAcoes, ...acoesDoProjeto(id, a, atualizar));
@@ -716,6 +934,34 @@ async function editorDasPontas(painel, base, aoSalvar, aoFechar) {
 const doisDigitos = (n) => String(n).padStart(2, "0");
 const dataLocal = (d) => `${d.getFullYear()}-${doisDigitos(d.getMonth() + 1)}-${doisDigitos(d.getDate())}`;
 
+/** `25/12/2026` → `2026-12-25` ("" se não é uma data que existe). */
+function isoDeDataBr(texto) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(texto.trim());
+  if (!m) return "";
+  const [dia, mes, ano] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const d = new Date(ano, mes - 1, dia);
+  if (d.getFullYear() !== ano || d.getMonth() !== mes - 1 || d.getDate() !== dia) return "";
+  return dataLocal(d);
+}
+
+/** Campo de data sempre em dia/mês/ano (o `<input type="date">` segue o idioma do celular e pode
+ * mostrar mês/dia/ano). As barras entram sozinhas; o 📅 abre o calendário do celular. */
+function campoDeData(inicial) {
+  const campo = h("input", { type: "text", class: "campo", inputmode: "numeric", placeholder: "dd/mm/aaaa",
+    maxlength: "10", autocomplete: "off", value: dataBr(dataLocal(inicial)) });
+  campo.addEventListener("input", () => {
+    const n = campo.value.replace(/\D/g, "").slice(0, 8);
+    campo.value = [n.slice(0, 2), n.slice(2, 4), n.slice(4)].filter(Boolean).join("/");
+  });
+  const nativo = h("input", { type: "date", class: "data-escondida", tabindex: "-1", "aria-hidden": "true" });
+  nativo.addEventListener("change", () => { if (nativo.value) campo.value = dataBr(nativo.value); });
+  const calendario = h("button", { type: "button", class: "botao-icone", "aria-label": "Abrir o calendário", onclick: () => {
+    nativo.value = isoDeDataBr(campo.value) || dataLocal(new Date());
+    try { nativo.showPicker(); } catch (_) { nativo.click(); }
+  } }, "📅");
+  return { caixa: h("div", { class: "campo-data" }, campo, calendario, nativo), iso: () => isoDeDataBr(campo.value) };
+}
+
 /** Postar no YouTube pelo PC (o YouTube Studio, sem a API): programar ou publicar agora (Fase R4). */
 async function editorDaPostagem(painel, base, idProjeto, aoTerminar, aoFechar) {
   const prep = await api(`${base}/postar`);
@@ -732,9 +978,9 @@ async function editorDaPostagem(painel, base, idProjeto, aoTerminar, aoFechar) {
   const modos = h("div", { class: "segmentos" });
   const sugestao = new Date(Date.now() + 60 * 60 * 1000);
   sugestao.setMinutes(sugestao.getMinutes() < 30 ? 30 : 60, 0, 0);
-  const dia = h("input", { type: "date", class: "campo", value: dataLocal(sugestao) });
+  const dia = campoDeData(sugestao);
   const hora = h("input", { type: "time", class: "campo", value: `${doisDigitos(sugestao.getHours())}:${doisDigitos(sugestao.getMinutes())}`, step: "300" });
-  const quando = h("div", { class: "linha-botoes" }, dia, hora);
+  const quando = h("div", { class: "linha-botoes" }, dia.caixa, hora);
   const pintarModos = () => {
     encher(modos, ...[["programar", "📅 Programar"], ["agora", "Publicar agora"]].map(([k, r]) =>
       h("button", { class: modo === k ? "ativo" : "", onclick: () => { modo = k; pintarModos(); } }, r)));
@@ -767,9 +1013,10 @@ async function editorDaPostagem(painel, base, idProjeto, aoTerminar, aoFechar) {
     let corpo = { relacionado: vincular.checked ? relacionado.value.trim() : "", forcar: Boolean(jaFeito) };
     let resumo;
     if (modo === "programar") {
-      if (!dia.value || !hora.value) { avisar("Escolha o dia e a hora."); return; }
-      corpo.quando = `${dia.value}T${hora.value}`;
-      resumo = `Programar no YouTube para ${dia.value.split("-").reverse().join("/")} às ${hora.value}`;
+      if (!dia.iso()) { avisar("Escreva o dia como dd/mm/aaaa (por exemplo, 05/12/2026)."); return; }
+      if (!hora.value) { avisar("Escolha a hora."); return; }
+      corpo.quando = `${dia.iso()}T${hora.value}`;
+      resumo = `Programar no YouTube para ${dataBr(dia.iso())} às ${hora.value}`;
     } else {
       resumo = "Publicar agora no YouTube";
     }
@@ -809,10 +1056,41 @@ async function telaShort(id, corte) {
   const info = h("div");
 
   const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
-  const pintarInfo = () => encher(info, 
-    h("div", { class: "bloco" }, h("p", { class: "titulo-short" }, s.titulo), chipsDoShort(s)),
-    s.descricao ? h("div", { class: "bloco" }, h("h3", {}, "Descrição"), h("p", {}, s.descricao)) : null,
-    s.hashtags.length ? h("div", { class: "bloco" }, h("h3", {}, "Hashtags"), h("p", {}, s.hashtags.join(" "))) : null);
+  // título, descrição e hashtags: cada caixa com o ✎ Editar (grava no PC ao tocar em Salvar)
+  let editandoTexto = ""; // "", "titulo", "descricao" ou "hashtags"
+  // `cabeca`: o que vai ao lado do ✎ Editar (o título vai ali mesmo; os outros, o rótulo)
+  const caixaDeTexto = (campo, rotulo, valor, mostrar, cabeca = null) => {
+    if (editandoTexto !== campo) {
+      return h("div", { class: "bloco" },
+        h("div", { class: "cabeca-do-bloco" }, cabeca || h("h3", {}, rotulo),
+          h("button", { class: "botao-editar", onclick: () => { editandoTexto = campo; pintarInfo(); } }, "✎ Editar")),
+        mostrar(valor));
+    }
+    const multilinha = campo === "descricao";
+    const caixa = h(multilinha ? "textarea" : "input", { class: "campo", rows: multilinha ? "6" : null,
+      maxlength: campo === "titulo" ? "100" : null,
+      placeholder: campo === "hashtags" ? "#shorts #fé (separadas por espaço)" : "" });
+    caixa.value = valor;
+    const contador = campo === "titulo" ? h("p", { class: "nota" }, `${valor.length}/100`) : null;
+    if (contador) caixa.addEventListener("input", () => { contador.textContent = `${caixa.value.length}/100`; });
+    const salvar = h("button", { class: "botao", onclick: async () => {
+      salvar.disabled = true;
+      try {
+        s = await editar(`${base}/textos`, { [campo]: caixa.value });
+        editandoTexto = "";
+        avisar({ titulo: "Título salvo no PC.", descricao: "Descrição salva no PC.", hashtags: "Hashtags salvas no PC." }[campo]);
+        pintarCabecalho(); pintarInfo(); pintarFerramentas();
+      } catch (e) { avisar(e.message); salvar.disabled = false; }
+    } }, "Salvar");
+    const cancelar = h("button", { class: "botao secundario", onclick: () => { editandoTexto = ""; pintarInfo(); } }, "Cancelar");
+    setTimeout(() => caixa.focus(), 0);
+    return h("div", { class: "bloco editando" }, h("h3", {}, rotulo), caixa, contador,
+      h("div", { class: "linha-botoes" }, cancelar, salvar));
+  };
+  const pintarInfo = () => encher(info,
+    caixaDeTexto("titulo", "Título", s.titulo, () => chipsDoShort(s), h("p", { class: "titulo-short" }, s.titulo)),
+    caixaDeTexto("descricao", "Descrição", s.descricao, (v) => h("p", { class: v ? "texto-longo" : "nota" }, v || "Sem descrição.")),
+    caixaDeTexto("hashtags", "Hashtags", s.hashtags.join(" "), (v) => h("p", { class: v ? "" : "nota" }, v || "Sem hashtags.")));
   const pintarFerramentas = () => {
     ferramentas.hidden = modo !== "ouvir";
     encher(ferramentas, 
@@ -1096,12 +1374,22 @@ async function telaCanal() {
   const topo = h("div");
   const tarefaEl = h("div");
   const carregar = async (atualizar) => {
-    encher(lista, h("div", { class: "vazio-lista" }, "Abrindo o YouTube Studio no PC (uns 15 segundos)…"));
-    const r = await api(`/api/canal/videos${atualizar ? "?atualizar=1" : ""}`);
+    encher(lista, h("div", { class: "vazio-lista" }, atualizar
+      ? "Lendo o canal no YouTube Studio (uns 15 segundos)…"
+      : "Carregando a lista guardada (na primeira vez, o PC lê o canal: uns 15 segundos)…"));
+    let r;
+    try { r = await api(`/api/canal/videos${atualizar ? "?atualizar=1" : ""}`); }
+    catch (e) { avisar(e.message); if (atualizar && ultima) { desenhar(ultima); return; } throw e; }
+    ultima = r;
+    desenhar(r);
+  };
+  let ultima = null;
+  const desenhar = (r) => {
     encher(topo,
-      h("div", { class: "bloco" }, h("h3", {}, "O PC vai processar com as opções salvas"),
+      h("div", { class: "bloco" }, h("h3", {}, "O projeto novo começa com as opções salvas (dá para mudar na tela dele)"),
         h("div", { class: "chips" }, ...r.opcoes.map((o) => h("span", { class: "chip" }, o)))),
       r.ocupado ? h("div", { class: "bloco aviso-bloco" }, r.ocupado) : null,
+      h("p", { class: "nota" }, r.lido_em ? `Lista lida do canal em ${dataBr(r.lido_em.slice(0, 10))} às ${r.lido_em.slice(11, 16)}.` : ""),
       h("button", { class: "botao secundario", onclick: () => carregar(true) }, "↻ Atualizar a lista do canal"));
     encher(lista, ...r.videos.map((v) => {
       const chips = [h("span", { class: "chip" }, duracao(v.duracao_s)), h("span", { class: "chip" }, v.visibilidade || v.situacao)];
@@ -1134,16 +1422,160 @@ async function telaCanal() {
       if (ir === "abrir") location.hash = `#/p/${enc(v.projeto)}`;
       return;
     }
-    const ok = await escolher(v.titulo, [["comecar", "⬇ Baixar e processar no PC", "botao"]]);
-    if (ok !== "comecar") return;
+    const ok = await escolher(v.titulo, [["criar", "✚ Criar o projeto (você ajusta as opções antes de começar)", "botao"]]);
+    if (ok !== "criar") return;
     try {
-      await post("/api/canal/novo", { id: v.id });
-      window.scrollTo(0, 0);
-      acompanhar();
+      const r = await post("/api/canal/novo", { id: v.id });
+      avisar("Projeto criado. Ajuste as opções e toque em Começar.");
+      location.hash = `#/p/${enc(r.projeto)}`;
     } catch (e) { avisar(e.message); }
   };
   encher(tela, tarefaEl, topo, lista);
   try { await carregar(false); } catch (e) { encher(lista, h("div", { class: "vazio-lista" }, e.message)); }
+}
+
+// --- cronograma do canal -----------------------------------------------------------------
+
+/** As abas da tela inicial: os projetos do PC e o cronograma do canal. */
+function abasDoInicio(ativa) {
+  return h("div", { class: "segmentos abas-inicio" },
+    h("a", { class: ativa === "projetos" ? "ativo" : "", href: "#/" }, "📁 Projetos"),
+    h("a", { class: ativa === "cronograma" ? "ativo" : "", href: "#/cronograma" }, "📅 Cronograma"));
+}
+
+const NOMES_DOS_MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+  "setembro", "outubro", "novembro", "dezembro"];
+const DIAS_DA_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const diaIso = (d) => `${d.getFullYear()}-${doisDigitos(d.getMonth() + 1)}-${doisDigitos(d.getDate())}`;
+const deIso = (iso) => { const [a, m, d] = iso.slice(0, 10).split("-").map(Number); return new Date(a, m - 1, d); };
+const diaDaSemana = (iso) => DIAS_DA_SEMANA[deIso(iso).getDay()];
+
+function linhaDoItem(item) {
+  const tipo = item.tipo === "short" ? "Short" : "Vídeo";
+  return h("div", { class: `item-crono ${item.tipo} ${item.situacao}` },
+    h("span", { class: "hora-crono" }, item.quando.slice(11, 16)),
+    h("span", { class: `marca-tipo ${item.tipo}` }, tipo),
+    h("span", { class: "titulo-crono" }, item.titulo,
+      h("span", { class: "nota" }, ` · ${item.situacao === "programado" ? "programado" : "publicado"}${item.duracao_s ? ` · ${duracao(item.duracao_s)}` : ""}`),
+      relacionadoDoItem(item),
+      item.origem === "spurgeon" ? h("span", { class: "origem-crono" }, "Marcado no Spurgeon (ainda não conferido no YouTube)") : null));
+}
+
+/** O sermão do Short (o vídeo relacionado no YouTube), para saber de onde ele é. */
+function relacionadoDoItem(item) {
+  if (item.tipo !== "short") return null;
+  if (!item.relacionado_id) {
+    if (item.relacionado) return h("span", { class: "relacionado-crono" }, `🔗 Sermão: ${item.relacionado}`);
+    return item.origem === "spurgeon" ? null : h("span", { class: "relacionado-crono sem" }, "Sem vídeo relacionado");
+  }
+  return h("a", { class: "relacionado-crono", href: `https://www.youtube.com/watch?v=${encodeURIComponent(item.relacionado_id)}`, target: "_blank", rel: "noopener" },
+    `🔗 Sermão: ${item.relacionado || "vídeo relacionado (título não encontrado)"}`);
+}
+
+function contagem(itens) {
+  const shorts = itens.filter((i) => i.tipo === "short").length;
+  const videos = itens.length - shorts;
+  return [shorts ? plural(shorts, "Short", "Shorts") : "", videos ? plural(videos, "vídeo", "vídeos") : ""].filter(Boolean).join(" e ");
+}
+
+/** Um mês em grade (domingo primeiro): cada dia mostra quantos Shorts e vídeos tem. */
+function mesDoCronograma(ano, mes, porDia, hoje, aoEscolher, escolhido) {
+  const primeiro = new Date(ano, mes, 1);
+  const dias = new Date(ano, mes + 1, 0).getDate();
+  const celulas = [];
+  for (let i = 0; i < primeiro.getDay(); i++) celulas.push(h("div", { class: "dia-crono vazio" }));
+  for (let d = 1; d <= dias; d++) {
+    const iso = `${ano}-${doisDigitos(mes + 1)}-${doisDigitos(d)}`;
+    const itens = porDia.get(iso) || [];
+    const marcas = [];
+    for (const tipo of ["short", "video"]) {
+      const doTipo = itens.filter((i) => i.tipo === tipo);
+      if (!doTipo.length) continue;
+      const programados = doTipo.some((i) => i.situacao === "programado");
+      marcas.push(h("span", { class: `qt ${tipo} ${programados ? "programado" : "publicado"}` }, `${tipo === "short" ? "S" : "V"}${doTipo.length}`));
+    }
+    const classes = ["dia-crono", iso === hoje ? "hoje" : "", iso < hoje ? "passado" : "", iso === escolhido ? "escolhido" : "", itens.length ? "com-itens" : ""];
+    celulas.push(h("button", { class: classes.filter(Boolean).join(" "), disabled: !itens.length,
+      "aria-label": `${d} de ${NOMES_DOS_MESES[mes]}: ${itens.length ? contagem(itens) : "nada"}`,
+      onclick: () => aoEscolher(iso) },
+      h("span", { class: "num-dia" }, String(d)), h("span", { class: "marcas-dia" }, ...marcas)));
+  }
+  return h("div", { class: "mes-crono" },
+    h("h3", {}, `${NOMES_DOS_MESES[mes][0].toUpperCase()}${NOMES_DOS_MESES[mes].slice(1)} de ${ano}`),
+    h("div", { class: "grade-crono" }, ...DIAS_DA_SEMANA.map((n) => h("div", { class: "semana-crono" }, n)), ...celulas));
+}
+
+async function telaCronograma() {
+  sairDoProjeto();
+  cabecalho("Studio Spurgeon", "Cronograma do canal");
+  const situacao = h("div");
+  const corpo = h("div");
+  let escolhido = "";
+  let dados = null;
+
+  const desenhar = () => {
+    const r = dados;
+    const lido = r.lido_em ? `Lido do YouTube Studio em ${dataBr(r.lido_em.slice(0, 10))} às ${r.lido_em.slice(11, 16)}.` : "O canal ainda não foi lido.";
+    encher(situacao, h("div", { class: "bloco" },
+      r.rodando ? h("p", { class: "nota" }, "⏳ Lendo o canal no YouTube Studio (uns 20 segundos)…") : h("p", { class: "nota" }, lido),
+      r.erro ? h("p", { class: "nota erro-texto" }, r.erro) : null,
+      h("button", { class: "botao secundario", disabled: r.rodando, onclick: async () => {
+        try { dados = await post("/api/canal/cronograma/atualizar"); desenhar(); acompanhar(); } catch (e) { avisar(e.message); }
+      } }, "↻ Atualizar agora")));
+    if (!r.itens.length) {
+      encher(corpo, h("div", { class: "vazio-lista" }, r.rodando ? "Lendo o canal…" : "Nada programado nem publicado desde o mês passado."));
+      return;
+    }
+    const porDia = new Map();
+    for (const item of r.itens) {
+      const dia = item.quando.slice(0, 10);
+      if (!porDia.has(dia)) porDia.set(dia, []);
+      porDia.get(dia).push(item);
+    }
+    const futuros = r.itens.filter((i) => i.situacao === "programado");
+    const resumo = h("div", { class: "bloco" },
+      h("h3", {}, "Programados"),
+      h("p", { class: "resumo-crono" }, futuros.length ? contagem(futuros) : "Nada programado no canal."),
+      h("div", { class: "legenda-crono" },
+        h("span", { class: "qt short programado" }, "S"), " Shorts ",
+        h("span", { class: "qt video programado" }, "V"), " vídeos longos ",
+        h("span", { class: "nota" }, "· cor forte = programado, clara = já publicado")));
+    // do mês passado até o último mês com algo programado (no mínimo, o mês que vem)
+    const inicio = deIso(r.desde);
+    const hojeData = deIso(r.hoje);
+    let fim = new Date(hojeData.getFullYear(), hojeData.getMonth() + 1, 1);
+    const ultimo = deIso(r.itens[r.itens.length - 1].quando);
+    if (ultimo > fim) fim = new Date(ultimo.getFullYear(), ultimo.getMonth(), 1);
+    const meses = [];
+    for (let d = new Date(inicio.getFullYear(), inicio.getMonth(), 1); d <= fim; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+      const ano = d.getFullYear(), mes = d.getMonth();
+      const grade = mesDoCronograma(ano, mes, porDia, r.hoje, (iso) => { escolhido = escolhido === iso ? "" : iso; desenhar(); }, escolhido);
+      const doDia = escolhido && escolhido.startsWith(`${ano}-${doisDigitos(mes + 1)}`) ? porDia.get(escolhido) || [] : [];
+      meses.push(h("div", { class: "bloco" }, grade,
+        doDia.length ? h("div", { class: "dia-escolhido" },
+          h("h3", {}, `${diaDaSemana(escolhido)}, ${dataBr(escolhido)} · ${contagem(doDia)}`), ...doDia.map(linhaDoItem)) : null));
+    }
+    const dias = [...new Set(futuros.map((i) => i.quando.slice(0, 10)))];
+    const proximos = futuros.length ? h("div", { class: "bloco" }, h("h3", {}, "Próximos agendados"),
+      ...dias.map((dia) => h("div", { class: "grupo-crono" },
+        h("div", { class: "dia-grupo" }, `${diaDaSemana(dia)}, ${dataBr(dia)}`),
+        ...futuros.filter((i) => i.quando.startsWith(dia)).map(linhaDoItem)))) : null;
+    encher(corpo, resumo, ...meses, proximos);
+  };
+
+  const acompanhar = async () => {
+    while (dados && dados.rodando) {
+      await new Promise((r) => setTimeout(r, 3000));
+      if (location.hash !== "#/cronograma") return; // saiu da tela
+      try { dados = await api("/api/canal/cronograma"); } catch (_) { continue; }
+      desenhar();
+    }
+  };
+
+  encher(tela, abasDoInicio("cronograma"), situacao, corpo);
+  dados = await api("/api/canal/cronograma?auto=1");
+  desenhar();
+  acompanhar();
 }
 
 // --- roteador -------------------------------------------------------------------------------
@@ -1161,7 +1593,7 @@ function restaurarUltimaTela() {
   if (location.hash && location.hash !== "#" && location.hash !== "#/") return;
   let ultima = "";
   try { ultima = localStorage.getItem(CHAVE_DA_ULTIMA_TELA) || ""; } catch (_) { return; }
-  if (ultima.startsWith("#/p/") || ultima === "#/canal") {
+  if (ultima.startsWith("#/p/") || ultima === "#/canal" || ultima === "#/cronograma") {
     restaurando = true;
     history.replaceState(null, "", ultima); // sem disparar o hashchange: o rotear() de início já lê o endereço
   }
@@ -1177,6 +1609,7 @@ async function rotear() {
   guardarUltimaTela();
   try {
     if (partes[0] === "canal") await telaCanal();
+    else if (partes[0] === "cronograma") await telaCronograma();
     else if (partes[0] === "p" && partes[1] && partes[2] === "s" && partes[3]) await telaShort(partes[1], partes[3]);
     else if (partes[0] === "p" && partes[1] && partes[2] === "aprovar") await telaAprovar(partes[1]);
     else if (partes[0] === "p" && partes[1] && partes[2] === "livre") await telaLivre(partes[1]);

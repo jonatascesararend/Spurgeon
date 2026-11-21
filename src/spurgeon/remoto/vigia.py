@@ -108,11 +108,14 @@ class Vigia:
         *,
         intervalo_s: float,
         pode_avisar: Callable[[], bool] = lambda: True,
+        a_cada_olhada: Callable[[], object] = lambda: None,
     ):
         self.pasta_projetos = pasta_projetos
         self.enviar = enviar
         self.intervalo_s = intervalo_s
         self.pode_avisar = pode_avisar
+        #: o que mais roda a cada olhada (os agendados que venceram viram "já postado")
+        self.a_cada_olhada = a_cada_olhada
         self._parar = threading.Event()
         self._thread: threading.Thread | None = None
         self._antes: dict[str, Foto] | None = None
@@ -133,6 +136,10 @@ class Vigia:
 
     def _rodar(self) -> None:
         while not self._parar.is_set():
+            try:
+                self.a_cada_olhada()
+            except Exception:
+                log.exception("A tarefa periódica do vigia tropeçou (tenta de novo depois).")
             try:
                 self.olhar()
             except Exception:

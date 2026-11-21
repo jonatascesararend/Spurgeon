@@ -16,6 +16,7 @@
 > | 1.8.1 | Studio Shorts à mão durante a renderização, selos de postado/agendado com filtro e "fechar ao terminar" |
 > | 1.9 | Os Shorts cortados do vídeo longo já tratado, o ícone do programa e a lista de projetos ao abrir |
 > | 2.0 | **Controle remoto pelo celular** (opcional): ver, editar, aprovar, renderizar, Shorts livre, postar no YouTube pelo navegador, começar projetos do canal; e "Exportar a legenda do sermão" no Studio |
+> | 2.1 | Shorts saem desmarcados (sem a pausa de aprovação); no celular: cronograma do canal, editar título/descrição/hashtags, varrer e apagar projetos, opções antes de começar, postagem conferida no canal |
 >
 > **Controle remoto** (extra opcional `remoto`): decisões, estrutura e fases no [Remoto.md](Remoto.md).
 
@@ -1243,3 +1244,21 @@ As decisões (R1 a R19), a estrutura e o estado de cada fase estão no [Remoto.m
     passo "Elementos do vídeo"). Confere o canal pelo nome antes de agir; o nome fica só no `remoto.json` do PC.
 91. **Exportar a legenda do sermão** (`shorts/exportar.py`): o sermão inteiro, uma frase por linha com o tempo do vídeo
     original, pelo celular (tela do projeto) e pelo Studio do PC ("Exportar a legenda do sermão…", ao lado de "Dicionário…").
+
+### Rodada 2.1 (2026-11-21): Shorts sem aprovação e o controle remoto mais completo
+
+92. **Os Shorts saem desmarcados e o processamento não para mais para aprovar os cortes** (`shorts/selecao.py`,
+    `AprovarCortes.ativa` = False). Nenhum Short sai pronto da IA: a pessoa sempre ajusta início, fim e legenda no Studio
+    Shorts, então a pausa era redundante. Agora a análise sugere os cortes (os melhores primeiro; `reserva` = além do
+    limite ou abaixo da nota mínima), todos com `incluir=False`, e a renderização no fim do processamento não tem o que
+    renderizar: marcar e "Renderizar" é no Studio (PC ou celular). A opção "Pausar para aprovar os cortes" saiu do cartão
+    Revisão do PC e das opções do celular; o campo `pausar_aprovar_cortes` fica só para ler configs antigas, e a etapa
+    `aprovar_cortes` continua registrada para um projeto antigo que parou nela poder ser aprovado.
+93. **Controle remoto** (detalhes no [Remoto.md](Remoto.md), "Depois da v2.0.0"): vídeo relacionado pelo botão
+    "Adicionar" de "Elementos do vídeo"; postagem conferida no canal depois de um erro no fim e antes de retomar um
+    rascunho; agendados que passaram da hora viram "já postado" no disco (com a janela do PC fechada); título, descrição e
+    hashtags editáveis no celular (renomeia o arquivo); datas em dd/mm/aaaa; aba **Cronograma** (calendário do canal do
+    mês passado em diante, com o sermão de cada Short e o que o Spurgeon agendou na hora); resumo de postados/agendados e
+    "varrido" na lista de projetos; **varrer** e **apagar** projeto (com confirmação); projeto do canal criado na hora,
+    com as **opções antes de "Começar"**; a lista do canal fica guardada até "Atualizar". Nome do canal só no
+    `remoto.json` do PC.

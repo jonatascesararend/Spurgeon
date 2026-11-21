@@ -429,6 +429,73 @@ salvas.
   arquivo baixado segue o das pastas de projeto (sublinhados no lugar dos espaços); (c) o começo e o fim do vídeo não
   são pedidos (o processamento usa o vídeo inteiro, como o padrão da janela).
 
+**Depois da v2.0.0:**
+
+* **Vídeo relacionado na janela de envio:** o cartão "Vídeo relacionado" de "Elementos do vídeo" abre pelo botão
+  "Adicionar" (`ytcp-shorts-content-links-picker #shorts-content-links-add-button`); clicar no título do cartão não faz
+  nada, e a espera pelo seletor estourava os 30 s. Conferido num rascunho de verdade (o cartão mostra o sermão).
+* **Título, descrição e hashtags no celular:** cada caixa da tela do Short tem "✎ Editar" (`POST …/shorts/<id>/textos`,
+  `edicao.mudar_textos`). Título novo refaz o `slug` e renomeia o Short já renderizado e o `.txt`, como o salvar do PC
+  (`sincronizar_arquivos`); com um processamento rodando só o `cortes_shorts.json` muda (o PC acerta os arquivos depois).
+* **Cronograma do canal** (aba "📅 Cronograma" da tela inicial; `canal/cronograma.py`, `remoto/cronograma.py`,
+  `GET /api/canal/cronograma[?auto=1]`, `POST …/atualizar`): calendário do mês passado em diante com quantos Shorts (S) e
+  vídeos longos (V) cada dia tem (cor forte = programado, clara = publicado); tocar no dia mostra as horas; embaixo, os
+  próximos agendados. A leitura abre as listas "Vídeos" e "Shorts" do Studio e lê o JSON que a página carrega
+  (`list_creator_videos`: `scheduledPublishingDetails` traz a hora, que a tabela não mostra), seguindo as páginas até o
+  dia 1º do mês passado (~17 s). Só entra o que está programado ou saiu público (não listados e privados ficam de fora).
+  A última leitura fica no `cronograma.json` ao lado do `remoto.json`; abrir a aba com a leitura velha (30 min) ou depois
+  de uma postagem lê de novo, em segundo plano. A janela abre FORA DA TELA (`abrir_studio(fora_da_tela=True)`): o
+  Chrome `headless` abre o Studio deslogado (o Google não aceita a sessão guardada nele).
+* **O sermão de cada Short no cronograma:** o JSON da lista traz o vídeo relacionado de cada Short
+  (`videoLinkageShortsAttribution.links[].targetExternalVideoId`). O título sai de qualquer vídeo lido (até os não
+  listados e os que não entram no calendário); o de sermões mais antigos que as páginas lidas vem do oEmbed do YouTube
+  pelo próprio navegador da automação (até 30 por leitura). Na tela: "🔗 Sermão: …" (link) ou "Sem vídeo relacionado".
+  O `cronograma.json` tem `versao` (2): um arquivo de formato antigo é ignorado e o canal é lido de novo.
+* **O que o Spurgeon agendou entra no calendário na hora** (`cronograma.itens_dos_projetos` +
+  `juntar_com_os_projetos`, a cada pedido da aba): os Shorts com `agendado_para` ou `postado` nos projetos (postados
+  pelo celular ou marcados no Studio do PC), com o id do YouTube e o sermão que o `postagens.json` gravou. O canal
+  manda: um Short dos projetos só aparece se a leitura do canal não o tem pelo id, pelo título ou (programado) por um
+  Short do canal no mesmo minuto (o título pode ter mudado no YouTube). Na tela: "Marcado no Spurgeon (ainda não
+  conferido no YouTube)". Postar não marca mais a leitura como velha (não abre o navegador à toa).
+* **Liberar espaço: varrer e apagar o projeto** (`remoto/limpeza.py`; `GET /api/projetos/<p>/espaco`,
+  `POST …/varrer` e `POST …/apagar`, os dois com `{"confirmar": "<nome da pasta>"}`; na tela do projeto, "🧹 Espaço no
+  PC", com folha de confirmação, e apagar pede duas vezes). Varrer apaga os `.mp4` de `shorts_gerados/` (todas as
+  subpastas), o vídeo longo pronto, os intermediários de `_work/` (como `limpar_intermediarios`) e o vídeo original;
+  ficam os `.json`, os `.txt`, as `.srt` e o `estado.json`, e grava `_work/varrido.json`. Apagar tira a pasta inteira e
+  o original. O original (pode estar em `Downloads/`) só sai se for vídeo e se nenhum OUTRO projeto usa o mesmo
+  arquivo. Recusa com processamento, postagem deste projeto ou criação da IA em andamento; apagar recusa também com a
+  janela do PC no projeto. Varrer toma a trava do celular (o PC salva antes). O app solta a trava ANTES de apagar (a
+  renovação, `sessao.tomar`, recriaria `_work/`), e `apagar_projeto` tira de novo uma pasta que voltou só com a trava.
+* **Projeto do canal em dois tempos** (`novo.NovosProjetos.criar` / `.comecar`; `POST /api/canal/novo` devolve só
+  `{"projeto"}`; `POST /api/projetos/<p>/comecar`): escolher o vídeo cria o projeto NA HORA, sem baixar (o `estado.json`
+  aponta para onde o vídeo vai ficar, tamanho 0 e sem hash; `novo.video_baixado` diz se já veio; a origem guarda também
+  a duração). Na tela do projeto, enquanto nenhuma etapa saiu de "pendente", vêm as **opções** (`remoto/configuracao.py`,
+  `GET/POST /api/projetos/<p>/opcoes`): o que gerar, trecho do vídeo, áudio, imagem, Shorts, revisões e processamento,
+  descritas pelo servidor (tipo, limites, ajuda) e validadas por `OpcoesProcessamento` (o mesmo do PC); cada mudança é
+  gravada na hora. Introdução, vinheta e marca d'água só ligam se o arquivo já foi escolhido no PC. "▶ Começar" baixa
+  (se preciso), grava a entrada de verdade, confere o ambiente com as opções DO PROJETO e põe na fila. Depois de
+  começar, as opções ficam só para ver ("⚙ Opções usadas").
+* **A lista de vídeos do canal fica guardada** (`rotas/canal.py`, `canal_videos.json` ao lado do `remoto.json`,
+  `Contexto.arquivo_da_lista`): a tela "Novo projeto" abre na hora com a última lista e diz quando foi lida; só
+  "↻ Atualizar a lista do canal" (ou a primeira vez, sem lista) abre o Studio. Se atualizar falhar, a lista guardada
+  continua na tela. Testes: o `NovosProjetos` padrão lê a configuração do app (as pastas DE VERDADE); nos testes passe
+  `carregar=` com pastas em `tmp_path`. O `conftest.py` reprova o teste que criar ou apagar algo em `Projetos/` ou
+  `Downloads/` (só compara os nomes; não apaga nada).
+* **Nunca rode outra automação no perfil do navegador com o servidor podendo postar:** a trava `_NAVEGADOR` é só do
+  processo; um script de fora usando o mesmo perfil atrapalhou uma postagem real (o Short foi programado, mas a
+  conferência final falhou e o registro ficou como rascunho). Depois de programar, a página pode dizer "Pendente" por um
+  tempo: a conferência agora espera (até 1 min).
+* **Postagem conferida no canal** (`postagem._postar_de_verdade`, `conferir_no_canal`, `canal/cronograma.procurar_short`):
+  depois de um erro com o arquivo já enviado, e antes de retomar um "rascunho", a automação lê a 1ª página da lista de
+  Shorts (o mesmo JSON do cronograma; pelo id, ou pelo título se o id não ficou guardado). Se o canal já mostra o Short
+  programado ou público, isso vale como sucesso, com a hora que o CANAL diz (`programado_para` do resultado manda no
+  `agendado_para`), e nada é enviado de novo. Uma falha ao conferir vale como "não sei" (fica o erro original).
+* **Agendados que já saíram viram "já postado" no disco** (`dados.vencer_agendados_de_todos`, a cada olhada do vigia,
+  15 s): antes só a janela do PC fazia isso, e só com o projeto aberto; com ela fechada o Short ficava "agendado" para
+  sempre na lista do Studio e do celular. Com um processamento rodando o `.mp4` não é movido (o PC o leva depois).
+* **Datas em dia/mês/ano:** o dia da postagem é um campo de texto `dd/mm/aaaa` (barras automáticas, 📅 abre o calendário
+  do celular), porque o `<input type="date">` segue o idioma do celular e pode mostrar mês/dia/ano.
+
 ## 7. Armadilhas conhecidas
 
 * **O controle remoto é opcional.** A interface importa só `remoto/sessao.py` e `remoto/fila.py` (sem dependência do

@@ -23,6 +23,7 @@ from spurgeon.shorts.edicao import (
     legenda_corrigida,
     legenda_em_blocos,
     legenda_preservada,
+    ler_hashtags,
     mover_limite,
     passa_do_limite,
 )
@@ -192,4 +193,56 @@ def marcar(pastas: PastasProjeto, id_do_corte: int, incluir: bool) -> Corte:
     corte, _ = _carregar(pastas, id_do_corte)
     corte.incluir = incluir
     _gravar(pastas, corte, "incluir")
+    return corte
+
+
+#: o limite do título no YouTube (o Studio do YouTube não aceita mais que isso)
+LIMITE_DO_TITULO = 100
+
+
+def mudar_textos(
+    pastas: PastasProjeto,
+    id_do_corte: int,
+    *,
+    titulo: str | None = None,
+    descricao: str | None = None,
+    hashtags: str | list[str] | None = None,
+    mexer_em_arquivos: bool = True,
+) -> Corte:
+    """Título, descrição e hashtags do Short, como o Studio do PC grava: título novo refaz o nome
+    do arquivo (`slug`), e os Shorts já renderizados são renomeados e ganham o `.txt` de agora
+    (`sincronizar_arquivos`). Com um processamento rodando (`mexer_em_arquivos=False`) só o
+    `cortes_shorts.json` muda: o trabalhador regrava o registro dos renderizados, e o PC acerta os
+    arquivos no próximo salvar (CLAUDE.md, "Studio durante a renderização")."""
+    from spurgeon.render.shorts import sincronizar_arquivos
+    from spurgeon.shorts.selecao import nome_de_arquivo
+
+    cortes = carregar_cortes(pastas)
+    corte = next((c for c in cortes if c.id == id_do_corte), None)
+    if corte is None:
+        raise CorteNaoEncontrado(id_do_corte)
+    campos: list[str] = []
+    if titulo is not None:
+        titulo = " ".join(titulo.split())
+        if not titulo:
+            raise LimiteInvalido("O título não pode ficar vazio.")
+        if len(titulo) > LIMITE_DO_TITULO:
+            raise LimiteInvalido(f"O título passa de {LIMITE_DO_TITULO} caracteres.")
+        if titulo != corte.titulo:
+            usados = {c.slug for c in cortes if c.id != corte.id and c.slug}
+            corte.titulo, corte.slug = titulo, nome_de_arquivo(titulo, usados)
+            campos += ["titulo", "slug"]
+    if descricao is not None and descricao.strip() != corte.descricao:
+        corte.descricao = descricao.strip()
+        campos.append("descricao")
+    if hashtags is not None:
+        lidas = ler_hashtags(hashtags if isinstance(hashtags, str) else " ".join(hashtags))
+        if lidas != corte.hashtags:
+            corte.hashtags = lidas
+            campos.append("hashtags")
+    if not campos:
+        return corte
+    _gravar(pastas, corte, *campos)
+    if mexer_em_arquivos:
+        sincronizar_arquivos(pastas, carregar_cortes(pastas))
     return corte

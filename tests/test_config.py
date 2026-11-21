@@ -18,7 +18,7 @@ def test_padroes_seguem_o_projeto():
     assert o.uso_cpu_percentual == 75
     assert o.whisper_modelo == "large-v3-turbo"
     assert (o.shorts_duracao_min_s, o.shorts_duracao_max_s) == (30.0, 180.0)
-    assert o.pausar_revisar_transcricao and o.pausar_aprovar_cortes
+    assert o.pausar_revisar_transcricao and not o.pausar_aprovar_cortes  # não para mais
     assert o.qualidade == "maxima"
     assert o.preset_qualidade().preset == "veryslow"
     assert o.preset_qualidade().crf == 16

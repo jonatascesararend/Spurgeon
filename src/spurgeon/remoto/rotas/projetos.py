@@ -15,7 +15,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from spurgeon.core.estado import StatusEtapa, carregar_estado
-from spurgeon.remoto import dados
+from spurgeon.remoto import configuracao, dados, limpeza, novo, sessao
 from spurgeon.remoto.contexto import Contexto
 from spurgeon.remoto.fila import AJUSTES_DA_RENDERIZACAO, FilaOcupada
 
@@ -36,6 +36,12 @@ def rotas(ctx: Contexto) -> list[Route]:
         resposta["a_renderizar"] = len(dados.a_renderizar(pastas))
         resposta["tem_video_original"] = dados.video_original(pastas) is not None
         resposta["tem_transcricao"] = pastas.transcricao.is_file()
+        resposta["baixado"] = novo.video_baixado(pastas)
+        resposta["do_canal"] = bool(novo.ler_origem(pastas).get("video_id"))
+        resposta["nao_comecou"] = configuracao.nao_comecou(pastas)
+        tarefa = ctx.novos.atual
+        deste = tarefa is not None and tarefa.projeto == pastas.raiz.name
+        resposta["tarefa"] = tarefa.para_json() if deste else None
         return JSONResponse(resposta)
 
     def andamento(request: Request) -> JSONResponse:
@@ -136,7 +142,95 @@ def rotas(ctx: Contexto) -> list[Route]:
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"},
         )  # fmt: skip
 
+    # --- opções do projeto e "Começar" (`remoto/configuracao.py`, `remoto/novo.py`) -------------
+    def opcoes(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(configuracao.configuracao(_pastas(request)))
+        except configuracao.OpcaoInvalida as erro:
+            raise HTTPException(409, str(erro)) from erro
+
+    async def mudar_opcoes(request: Request) -> JSONResponse:
+        pastas = _pastas(request)
+        try:
+            corpo = json.loads(await request.body() or b"{}")
+        except ValueError as erro:
+            raise HTTPException(400, "Pedido inválido.") from erro
+        if not isinstance(corpo, dict):
+            raise HTTPException(400, "Pedido inválido.")
+        try:
+            return JSONResponse(configuracao.mudar(pastas, corpo))
+        except configuracao.OpcaoInvalida as erro:
+            raise HTTPException(422, str(erro)) from erro
+
+    def comecar(request: Request) -> JSONResponse:
+        """Baixa o vídeo do canal (se ainda não veio) e começa o processamento com as opções."""
+        pastas = _pastas(request)
+        try:
+            tarefa = ctx.novos.comecar(pastas)
+        except novo.NovoInvalido as erro:
+            raise HTTPException(409, str(erro)) from erro
+        return JSONResponse(tarefa.para_json())
+
+    # --- liberar espaço (`remoto/limpeza.py`) ----------------------------------------------------
+    def _impedimento(pastas, *, apagando: bool) -> str:
+        if motivo := ctx.fila.ocupada():
+            return f"{motivo} Espere terminar para liberar espaço."
+        envio = ctx.postagens.atual
+        if ctx.postagens.ocupada() and envio is not None and envio.projeto == pastas.raiz.name:
+            return "O PC está postando um Short deste projeto. Espere terminar."
+        if ctx.criacoes.ocupada():
+            return "A IA está criando um Short no PC. Espere terminar."
+        if apagando and sessao.janela_com_o_projeto(pastas):
+            return "Este projeto está aberto na janela do PC. Feche-o lá e tente de novo."
+        return ""
+
+    def espaco(request: Request) -> JSONResponse:
+        pastas = _pastas(request)
+        resposta = limpeza.espaco_do_projeto(pastas, ctx.pasta_projetos)
+        resposta["impedimento_varrer"] = _impedimento(pastas, apagando=False)
+        resposta["impedimento_apagar"] = _impedimento(pastas, apagando=True)
+        return JSONResponse(resposta)
+
+    async def _confirmado(request: Request, pastas) -> None:
+        try:
+            corpo = json.loads(await request.body() or b"{}")
+        except ValueError as erro:
+            raise HTTPException(400, "Pedido inválido.") from erro
+        if not isinstance(corpo, dict) or corpo.get("confirmar") != pastas.raiz.name:
+            raise HTTPException(400, "Confirme com o nome do projeto.")
+
+    async def varrer(request: Request) -> JSONResponse:
+        pastas = _pastas(request)
+        await _confirmado(request, pastas)
+        if motivo := _impedimento(pastas, apagando=False):
+            raise HTTPException(409, motivo)
+
+        def fazer():
+            id_da_sessao = sessao.tomar(pastas)  # a janela do PC salva e trava o Studio antes
+            try:
+                sessao.esperar_o_pc(pastas, id_da_sessao)
+                return limpeza.varrer(pastas, ctx.pasta_projetos)
+            finally:
+                sessao.soltar(pastas)
+
+        resultado = await run_in_threadpool(fazer)
+        return JSONResponse(resultado.para_json())
+
+    async def apagar(request: Request) -> JSONResponse:
+        pastas = _pastas(request)
+        await _confirmado(request, pastas)
+        if motivo := _impedimento(pastas, apagando=True):
+            raise HTTPException(409, motivo)
+        resultado = await run_in_threadpool(limpeza.apagar_projeto, pastas, ctx.pasta_projetos)
+        return JSONResponse(resultado.para_json())
+
     return [
+        Route("/api/projetos/{projeto}/opcoes", opcoes),
+        Route("/api/projetos/{projeto}/opcoes", mudar_opcoes, methods=["POST"]),
+        Route("/api/projetos/{projeto}/comecar", comecar, methods=["POST"]),
+        Route("/api/projetos/{projeto}/espaco", espaco),
+        Route("/api/projetos/{projeto}/varrer", varrer, methods=["POST"]),
+        Route("/api/projetos/{projeto}/apagar", apagar, methods=["POST"]),
         Route("/api/projetos/{projeto}/legenda.txt", legenda_do_sermao),
         Route("/api/projetos/{projeto}/processar", processar, methods=["POST"]),
         Route("/api/projetos/{projeto}/aprovar", aprovar, methods=["POST"]),

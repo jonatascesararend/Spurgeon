@@ -50,7 +50,9 @@ def montar_cortes(
     """Os melhores `limite` cortes (e algumas reservas), em ordem de nota.
 
     Só entram candidatos avaliados pela IA. Um corte que se sobrepõe a outro já escolhido em
-    mais de 20% é descartado. Reservas ficam desmarcadas na tela de aprovação.
+    mais de 20% é descartado. TODOS vêm desmarcados: nenhum Short sai pronto da IA, e a pessoa
+    marca e ajusta no Studio Shorts (renderizar é pedido de lá). `reserva` diz só que o corte ficou
+    além do limite ou abaixo da nota mínima.
 
     Com `niveis` (as medidas de 50 ms e o limiar de silêncio), o início e o fim de cada corte
     são ajustados ao silêncio mais perto da fala; sem eles, vale um respiro fixo.
@@ -90,7 +92,7 @@ def montar_cortes(
                 detalhe=detalhe,
                 alerta_contexto=av.alerta_contexto,
                 motivo=av.motivo,
-                incluir=not reserva,
+                incluir=False,  # a pessoa marca no Studio Shorts
                 reserva=reserva,
             )
         )

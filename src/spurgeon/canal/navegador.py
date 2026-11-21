@@ -70,16 +70,21 @@ def conferir_canal(pagina, nome_esperado: str) -> str:
 
 
 @contextmanager
-def abrir_studio(*, visivel: bool = True, canal: str | None = None) -> Iterator[Studio]:
+def abrir_studio(
+    *, visivel: bool = True, canal: str | None = None, fora_da_tela: bool = False
+) -> Iterator[Studio]:
     """O Studio aberto no perfil da automação e no canal certo (fecha ao sair). `canal` None = o da
-    configuração do PC."""
+    configuração do PC. `fora_da_tela`: a janela abre de verdade, mas longe do monitor (para só
+    ler: o Chrome sem janela, `headless`, abre o Studio deslogado, porque o Google não aceita a
+    sessão guardada nele)."""
     esperado = nome_do_canal() if canal is None else canal
     from playwright.sync_api import sync_playwright
 
+    argumentos = ["--window-position=-32000,-32000"] if fora_da_tela else []
     with _NAVEGADOR, sync_playwright() as p:
         contexto = p.chromium.launch_persistent_context(
             str(pasta_do_perfil()), channel="chrome", headless=not visivel,
-            viewport={"width": 1400, "height": 950}, locale="pt-BR",
+            viewport={"width": 1400, "height": 950}, locale="pt-BR", args=argumentos,
         )  # fmt: skip
         try:
             pagina = contexto.pages[0] if contexto.pages else contexto.new_page()

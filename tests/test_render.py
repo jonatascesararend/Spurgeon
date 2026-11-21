@@ -824,32 +824,29 @@ def test_as_etapas_de_render_vem_depois_de_toda_a_analise_e_revisao():
 
 
 @pytest.mark.ffmpeg
-def test_o_pipeline_para_na_aprovacao_dos_cortes_e_renderiza_so_o_que_ficou_marcado(ctx_shorts):
-    from spurgeon.core.estado import StatusEtapa
+def test_o_pipeline_nao_para_para_aprovar_e_renderiza_so_o_que_esta_marcado(ctx_shorts):
     from spurgeon.core.pipeline import Pipeline, ResultadoPipeline
     from spurgeon.shorts.etapas import AprovarCortes
 
     ctx_shorts.opcoes.gerar_video_longo = False
-    ctx_shorts.opcoes.pausar_aprovar_cortes = True
+    ctx_shorts.opcoes.pausar_aprovar_cortes = True  # a opção antiga não faz mais parar
     gravar_cortes(
         ctx_shorts.pastas.cortes_shorts,
         [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro", incluir=False)],
     )
     pipeline = Pipeline([AprovarCortes(), RenderizarShorts()])
-    assert pipeline.executar(ctx_shorts) == ResultadoPipeline.AGUARDANDO_REVISAO
-    assert not ctx_shorts.pastas.shorts.exists()
-
-    # a pessoa marca o segundo corte na janela de aprovação e salva
-    cortes = [corte(1, 0.0, 2.5), corte(2, 0.5, 3.0, slug="outro", incluir=True)]
-    gravar_cortes(ctx_shorts.pastas.cortes_shorts, cortes)
-    pipeline.aprovar_revisao(ctx_shorts, "aprovar_cortes")
     assert pipeline.executar(ctx_shorts) == ResultadoPipeline.CONCLUIDO
-    assert sorted(p.name for p in ctx_shorts.pastas.shorts.glob("*.mp4")) == [
-        "short_01_corte_1.mp4",
-        "short_02_outro.mp4",
-    ]
-    status = {e.id: e.status for e in ctx_shorts.estado.etapas}
-    assert status["aprovar_cortes"] == StatusEtapa.CONCLUIDA
+    assert [p.name for p in ctx_shorts.pastas.shorts.glob("*.mp4")] == ["short_01_corte_1.mp4"]
+
+
+@pytest.mark.ffmpeg
+def test_sem_nenhum_short_marcado_o_render_dos_shorts_so_avisa(ctx_shorts):
+    from spurgeon.core.pipeline import Pipeline, ResultadoPipeline
+
+    ctx_shorts.opcoes.gerar_video_longo = False
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 2.5, incluir=False)])
+    assert Pipeline([RenderizarShorts()]).executar(ctx_shorts) == ResultadoPipeline.CONCLUIDO
+    assert not list(ctx_shorts.pastas.shorts.glob("*.mp4"))
 
 
 # --- sincronia da imagem e do som depois dos cortes -------------------------------------------

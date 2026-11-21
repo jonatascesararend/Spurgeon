@@ -85,6 +85,7 @@ def _iniciar(args: argparse.Namespace) -> int:
     from spurgeon.remoto.avisos import Avisos
     from spurgeon.remoto.config import INTERVALO_DO_VIGIA_S, carregar_config_remoto
     from spurgeon.remoto.contexto import Contexto
+    from spurgeon.remoto.dados import vencer_agendados_de_todos
     from spurgeon.remoto.fila import trabalhadores_rodando
     from spurgeon.remoto.livre import Criacoes
     from spurgeon.remoto.novo import NovosProjetos
@@ -97,12 +98,23 @@ def _iniciar(args: argparse.Namespace) -> int:
     if not config.usuarios:
         _dizer("Nenhuma conta autorizada: rode `spurgeon remoto configurar` (Tailscale ligado).")
     pasta_projetos = carregar_config().pastas.projetos
-    ctx = Contexto(config, pasta_projetos, Avisos(), __version__)
+    from spurgeon.remoto.config import caminho_config_remoto
+    from spurgeon.remoto.rotas.canal import NOME_DA_LISTA
+
+    ctx = Contexto(
+        config, pasta_projetos, Avisos(), __version__,
+        arquivo_da_lista=caminho_config_remoto().parent / NOME_DA_LISTA,
+    )  # fmt: skip
     ctx.criacoes = Criacoes(ao_terminar=lambda c: avisar_da_criacao(ctx, c))
     ctx.novos = NovosProjetos(
         iniciar_processamento=lambda pastas: ctx.fila.iniciar(pastas),
         ocupada=ctx.fila.ocupada,
         ao_terminar=lambda t: avisar_do_projeto_novo(ctx, t),
+    )
+    from spurgeon.remoto.cronograma import NOME_DO_ARQUIVO, Cronograma
+
+    ctx.cronograma = Cronograma(
+        caminho_config_remoto().parent / NOME_DO_ARQUIVO, pasta_projetos=pasta_projetos
     )
     ctx.postagens = Postagens(
         ao_terminar=lambda e: avisar_da_postagem(ctx, e),
@@ -111,6 +123,9 @@ def _iniciar(args: argparse.Namespace) -> int:
     vigia = Vigia(
         pasta_projetos, ctx.avisos.enviar, intervalo_s=INTERVALO_DO_VIGIA_S,
         pode_avisar=lambda: ctx.config.avisos_ligados and not ctx.config.dormindo,
+        a_cada_olhada=lambda: vencer_agendados_de_todos(
+            pasta_projetos, pode_mover=lambda: not trabalhadores_rodando()
+        ),
     )  # fmt: skip
     _dizer(
         f"Controle remoto: {config.endereco or 'sem endereço do Tailscale'} (log: {caminho_do_log})"

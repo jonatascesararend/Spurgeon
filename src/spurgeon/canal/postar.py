@@ -169,17 +169,30 @@ def relacionar_nos_elementos(pg, busca: str) -> str:
     indicou que o vídeo relacionado fica ali): abre o "Vídeo relacionado", escolhe o sermão e
     confere. Devolve o título, ou "" se o passo não tem o campo (aí vale a página de edição)."""
     janela = pg.locator("ytcp-uploads-dialog")
-    gatilho = janela.locator("#linked-video-editor-link")
-    if not gatilho.count():
-        gatilho = janela.get_by_text("Vídeo relacionado", exact=False)
-    if not gatilho.count() or not gatilho.first.is_visible():
+    gatilho = _botao_do_relacionado(janela)
+    if gatilho is None:
         return ""
-    gatilho.first.scroll_into_view_if_needed()
-    gatilho.first.click()
+    gatilho.scroll_into_view_if_needed()
+    gatilho.click()
     titulo = _escolher_no_seletor(pg, busca)
     if titulo not in janela.inner_text():
         raise FalhaNaPostagem("O Studio não mostrou o sermão como vídeo relacionado.")
     return titulo
+
+
+def _botao_do_relacionado(janela):
+    """O que abre o seletor do "Vídeo relacionado" no passo "Elementos do vídeo": o botão
+    "Adicionar" do cartão (clicar no título do cartão não faz nada, e a espera pelo seletor
+    estourava o tempo). Sem o cartão, None (aí vale a página de edição)."""
+    candidatos = [
+        janela.locator("ytcp-shorts-content-links-picker #shorts-content-links-add-button"),
+        janela.locator("ytcp-shorts-content-links-picker").get_by_role("button"),
+        janela.locator("#linked-video-editor-link"),
+    ]
+    for candidato in candidatos:
+        if candidato.count() and candidato.first.is_visible():
+            return candidato.first
+    return None
 
 
 def vincular_relacionado(
@@ -306,6 +319,12 @@ def postar(
         passo = "conferir a visibilidade"
         visibilidade = visibilidade_na_edicao(studio, video_id)
         esperada = "programado" if pedido.quando is not None else "públic"
+        for _ in range(12):  # logo depois de programar a página pode dizer "Pendente" por um tempo
+            if esperada in visibilidade.casefold() or "pendente" not in visibilidade.casefold():
+                break
+            pg.wait_for_timeout(5000)
+            pg.reload(wait_until="domcontentloaded")
+            visibilidade = visibilidade_na_edicao(studio, video_id)
         if esperada not in visibilidade.casefold():
             raise FalhaNaPostagem(f"O Short ficou “{visibilidade}”, não {esperada}.")
         return ResultadoDaPostagem(

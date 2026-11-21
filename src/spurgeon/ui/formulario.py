@@ -155,7 +155,6 @@ class ValoresFormulario:
     marca_nos_shorts: bool = True
     # Pontos de revisão
     revisar_transcricao: bool = True
-    aprovar_cortes: bool = True
     # Avançado
     pausa_residual: str = "1,0"
     shorts_min: str = "30"
@@ -216,7 +215,6 @@ class ValoresFormulario:
             marca_no_video_longo=o.marca_no_video_longo,
             marca_nos_shorts=o.marca_nos_shorts,
             revisar_transcricao=o.pausar_revisar_transcricao,
-            aprovar_cortes=o.pausar_aprovar_cortes,
             pausa_residual=_texto_decimal(o.pausa_residual_s),
             shorts_min=_texto(o.shorts_duracao_min_s),
             shorts_max=_texto(o.shorts_duracao_max_s),
@@ -254,7 +252,6 @@ class Habilitacoes:
     tratamento_nos_shorts: bool
     legendas_dinamicas: bool
     revisar_transcricao: bool
-    aprovar_cortes: bool
     campos_shorts: bool
     marca_dagua: bool
     marca_campos: bool
@@ -301,7 +298,6 @@ def calcular_habilitacoes(
         tratamento_nos_shorts=not so_vinhetas and shorts,
         legendas_dinamicas=shorts,
         revisar_transcricao=not so_vinhetas,
-        aprovar_cortes=shorts,
         campos_shorts=shorts,
         marca_dagua=not so_vinhetas,
         marca_campos=v.marca_dagua and not so_vinhetas,
@@ -347,7 +343,6 @@ def para_opcoes(
         "marca_no_video_longo": v.marca_no_video_longo,
         "marca_nos_shorts": v.marca_nos_shorts,
         "pausar_revisar_transcricao": v.revisar_transcricao and not so_vinhetas,
-        "pausar_aprovar_cortes": v.aprovar_cortes,
         "ollama_modelo": v.ollama_modelo.strip() or "qwen3:8b",
         "manter_intermediarios": v.manter_intermediarios,
         "impedir_bloqueio": v.impedir_bloqueio,

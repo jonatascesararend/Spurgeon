@@ -144,7 +144,26 @@ def rotas(ctx: Contexto) -> list[Route]:
             _mudar, request, corpo, lambda p, c, d: edicao.marcar(p, c, bool(d["incluir"]))
         )
 
+    async def textos(request: Request) -> JSONResponse:
+        """Título, descrição e hashtags (cada um só se vier no pedido)."""
+        corpo = await _corpo(request)
+
+        def fazer(p, c, d):
+            def texto(nome):
+                return None if d.get(nome) is None else str(d[nome])
+
+            hashtags = d.get("hashtags")
+            if hashtags is not None and not isinstance(hashtags, (str, list)):
+                raise TypeError("hashtags")
+            return edicao.mudar_textos(
+                p, c, titulo=texto("titulo"), descricao=texto("descricao"), hashtags=hashtags,
+                mexer_em_arquivos=not ctx.fila.ocupada(),
+            )  # fmt: skip
+
+        return await run_in_threadpool(_mudar, request, corpo, fazer)
+
     return [
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/textos", textos, methods=["POST"]),
         Route("/api/projetos/{projeto}/sessao", tomar, methods=["POST"]),
         Route("/api/projetos/{projeto}/sessao/soltar", soltar, methods=["POST"]),
         Route("/api/projetos/{projeto}/shorts/{corte:int}/edicao", para_editar),

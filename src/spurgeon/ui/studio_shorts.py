@@ -647,15 +647,15 @@ class EditorDeCortes(ctk.CTkFrame):
     def _atualizar_texto_introducao(self) -> None:
         principais = sum(1 for c in self._cortes if not c.reserva)
         reservas = len(self._cortes) - principais
-        marcados = f"{principais} cortes sugeridos já vêm marcados"
+        sugeridos = f"{principais} cortes sugeridos"
         if reservas:
-            marcados += f", mais {reservas} reservas desmarcadas"
+            sugeridos += f", mais {reservas} reservas"
         self._rotulo_intro.configure(
             text=self._introducao
             or (
-                f"{marcados}. A nota (0 a 100) soma o que a IA achou com o que se mede no texto: "
-                "veja o detalhe ao lado. Desmarque o que não quiser e, se precisar, ajuste o "
-                "início e o fim de um corte e corrija a legenda."
+                f"{sugeridos}. A nota (0 a 100) soma o que a IA achou com o que se mede no texto: "
+                "veja o detalhe ao lado. Marque os que quiser, ajuste o início e o fim, corrija a "
+                "legenda e renderize."
             )
         )
 

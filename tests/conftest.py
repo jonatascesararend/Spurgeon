@@ -55,6 +55,35 @@ def vocabulario_do_usuario_protegido():
         )
 
 
+def _nomes_em(pasta: Path) -> set[str]:
+    try:
+        return {p.name for p in pasta.iterdir()}
+    except OSError:
+        return set()
+
+
+@pytest.fixture(autouse=True)
+def pastas_de_verdade_protegidas():
+    """Nenhum teste cria nem apaga nada nas pastas de verdade de projetos e de vídeos baixados.
+
+    Um teste do controle remoto que usou o `NovosProjetos` padrão (que lê a configuração do
+    aplicativo) criou um projeto em `Projetos/`. Aqui só se compara a lista de nomes antes e
+    depois e o teste falha com os nomes; nada é apagado (a pessoa pode estar criando ou apagando
+    um projeto pelo celular enquanto os testes rodam).
+    """
+    pastas = Pastas()
+    antes = {pasta: _nomes_em(pasta) for pasta in (pastas.projetos, pastas.entrada)}
+    yield
+    for pasta, nomes in antes.items():
+        depois = _nomes_em(pasta)
+        if depois != nomes:
+            novos, sumiram = sorted(depois - nomes), sorted(nomes - depois)
+            pytest.fail(
+                f"o teste mexeu na pasta de verdade {pasta}: apareceram {novos}, sumiram "
+                f"{sumiram}. Aponte as pastas (ou o `carregar` do NovosProjetos) para `tmp_path`."
+            )
+
+
 def pytest_collection_modifyitems(items):
     try:
         localizar_binario("ffmpeg")

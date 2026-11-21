@@ -45,3 +45,41 @@ def test_o_canal_vem_da_configuracao_do_pc_e_nunca_do_codigo(monkeypatch):
     )
     assert navegador.nome_do_canal() == "Canal de teste"
     assert not hasattr(navegador, "NOME_DO_CANAL")
+
+
+class _LocalizadorFalso:
+    def __init__(self, visiveis: int, nome: str = ""):
+        self.visiveis, self.nome = visiveis, nome
+
+    def count(self) -> int:
+        return self.visiveis
+
+    def is_visible(self) -> bool:
+        return self.visiveis > 0
+
+    @property
+    def first(self):
+        return self
+
+    def get_by_role(self, _papel):
+        return _LocalizadorFalso(self.visiveis, f"{self.nome} > botão")
+
+
+class _JanelaDeEnvioFalsa:
+    def __init__(self, presentes: set[str]):
+        self.presentes = presentes
+
+    def locator(self, seletor: str):
+        return _LocalizadorFalso(int(seletor in self.presentes), seletor)
+
+
+def test_relacionado_abre_pelo_botao_adicionar_do_cartao():
+    """Na janela de envio o cartão "Vídeo relacionado" abre pelo botão "Adicionar" (clicar no
+    título do cartão não abria o seletor e a espera estourava o tempo)."""
+    from spurgeon.canal.postar import _botao_do_relacionado
+
+    cartao = "ytcp-shorts-content-links-picker"
+    botao = f"{cartao} #shorts-content-links-add-button"
+    assert _botao_do_relacionado(_JanelaDeEnvioFalsa({botao, cartao})).nome == botao
+    assert _botao_do_relacionado(_JanelaDeEnvioFalsa({cartao})).nome == f"{cartao} > botão"
+    assert _botao_do_relacionado(_JanelaDeEnvioFalsa(set())) is None  # plano B: página de edição

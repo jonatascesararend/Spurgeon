@@ -151,26 +151,78 @@ class Envio:
                 "rodando": self.rodando, "link": self.link, "erro": self.erro}  # fmt: skip
 
 
-def _postar_de_verdade(pastas, short, pedido: Pedido, rascunho: bool, andamento):
-    from spurgeon.canal.navegador import abrir_studio
-    from spurgeon.canal.postar import PedidoDePostagem, postar
+def resultado_do_canal(item):
+    """O que o canal mostra (`canal.cronograma.ItemDoCronograma`) como resultado da postagem."""
+    from spurgeon.canal.cronograma import PROGRAMADO
+    from spurgeon.canal.postar import ResultadoDaPostagem
 
+    programado = item.quando.strftime(FORMATO) if item.situacao == PROGRAMADO else ""
+    return ResultadoDaPostagem(item.id, f"https://youtube.com/shorts/{item.id}", "", programado)
+
+
+def conferir_no_canal(studio, corte, *, video_id: str = "", procurar=None):
+    """O Short já está programado ou publicado no canal? (o resultado, ou None). Uma falha ao
+    conferir vale como "não sei": None, e quem chama segue como antes."""
+    from spurgeon.canal.cronograma import procurar_short
+    from spurgeon.canal.postar import LIMITE_DO_TITULO
+
+    procurar = procurar or procurar_short
+    try:
+        item = procurar(studio, video_id=video_id, titulo=corte.titulo[:LIMITE_DO_TITULO])
+    except Exception:
+        log.warning("Não deu para conferir o Short %s no canal.", corte.id, exc_info=True)
+        return None
+    return resultado_do_canal(item) if item is not None else None
+
+
+def _postar_de_verdade(
+    pastas, short, pedido: Pedido, rascunho: bool, andamento,
+    *, abrir=None, postar_no_studio=None, procurar=None,
+):  # fmt: skip
+    """Posta pelo YouTube Studio e confere no canal quando é preciso: antes de retomar um
+    "rascunho" (a tentativa anterior pode ter programado assim mesmo) e depois de um erro com o
+    arquivo já enviado (o erro pode ter sido só na conferência do fim). Se o canal já mostra o
+    Short programado ou publicado, isso vale como sucesso, com a hora que o canal diz, e nada é
+    enviado de novo. `abrir`, `postar_no_studio` e `procurar` são para os testes."""
+    from spurgeon.canal.navegador import abrir_studio
+    from spurgeon.canal.postar import FalhaNaPostagem, PedidoDePostagem, postar
+
+    abrir, postar_no_studio = abrir or abrir_studio, postar_no_studio or postar
     corte = short.corte
-    with abrir_studio() as studio:
-        return postar(
-            studio,
-            PedidoDePostagem(
-                short.arquivo,
-                corte.titulo,
-                corte.descricao,
-                list(corte.hashtags),
-                pedido.relacionado,
-                pedido.quando,
-            ),
-            rascunho=rascunho,
-            fotos=pastas.work / "remoto" / "postagem",
-            andamento=andamento,
-        )
+    anterior = do_youtube(pastas, corte.id)
+    with abrir() as studio:
+        if rascunho:
+            andamento("Conferindo no canal se o Short já foi programado…")
+            id_anterior = anterior.id_remoto if anterior is not None else ""
+            feito = conferir_no_canal(studio, corte, video_id=id_anterior, procurar=procurar)
+            if feito is not None:
+                log.info("O Short %s já estava no canal: %s", corte.id, feito.link)
+                return feito
+        try:
+            return postar_no_studio(
+                studio,
+                PedidoDePostagem(
+                    short.arquivo,
+                    corte.titulo,
+                    corte.descricao,
+                    list(corte.hashtags),
+                    pedido.relacionado,
+                    pedido.quando,
+                ),
+                rascunho=rascunho,
+                fotos=pastas.work / "remoto" / "postagem",
+                andamento=andamento,
+            )
+        except FalhaNaPostagem as erro:
+            if not erro.enviado:
+                raise
+            andamento("Conferindo no canal como o Short ficou…")
+            feito = conferir_no_canal(studio, corte, video_id=erro.video_id, procurar=procurar)
+            if feito is None:
+                raise
+            log.warning("A postagem do Short %s deu erro no fim (%s), mas o canal o mostra: %s",
+                        corte.id, erro, feito.link)  # fmt: skip
+            return feito
 
 
 class Postagens:
@@ -221,12 +273,16 @@ class Postagens:
             feito = self._postar(pastas, short, pedido, rascunho,
                                  lambda t: setattr(envio, "texto", t))  # fmt: skip
             sessao.tomar(pastas)
-            registrar_sucesso(pastas, pedido.id_do_corte, feito, pedido.quando,
+            # a hora que vale é a do resultado (a conferência no canal pode trazer outra)
+            quando = (
+                datetime.strptime(feito.programado_para, FORMATO) if feito.programado_para else None
+            )
+            registrar_sucesso(pastas, pedido.id_do_corte, feito, quando,
                               mover_arquivos=not self._processando())  # fmt: skip
             envio.link = feito.link
             envio.texto = (
-                f"Programado no YouTube para {pedido.quando:%d/%m às %H:%M}."
-                if pedido.quando
+                f"Programado no YouTube para {quando:%d/%m às %H:%M}."
+                if quando
                 else "Publicado no YouTube."
             ) + (f" Vinculado a “{feito.relacionado}”." if feito.relacionado else "")
             log.info("Short %s postado pelo celular: %s", pedido.id_do_corte, feito.link)

@@ -156,7 +156,9 @@ class Finalizar(Etapa):
             return
         planejados = planejar_shorts(carregar_cortes(ctx.pastas.cortes_shorts))
         if not planejados:
-            avisos.append("Nenhum corte foi aprovado: nenhum Short foi gerado.")
+            avisos.append(
+                "Nenhum Short marcado ainda: escolha, ajuste e renderize no Studio Shorts."
+            )
             return
         total_s = total_bytes = 0.0
         registro = ler_registro(ctx.pastas.shorts_renderizados)

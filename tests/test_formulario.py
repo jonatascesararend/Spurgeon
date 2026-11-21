@@ -123,7 +123,7 @@ def test_habilitacoes_seguem_as_escolhas():
         introducao_existe=True, vinheta_existe=True,
     )  # fmt: skip
     assert not h.limiar_pausa and not h.introducao and not h.vinheta_final
-    assert h.legendas_dinamicas and h.aprovar_cortes and h.campos_shorts
+    assert h.legendas_dinamicas and h.campos_shorts
 
     h = calcular_habilitacoes(
         ValoresFormulario(gerar_video_longo=False, gerar_shorts=False),
@@ -220,7 +220,7 @@ def test_habilitacoes_por_modo():
     assert completo.pode_iniciar and not completo.legendas_dinamicas
     shorts = habilitacoes(modo="so_shorts")
     assert not shorts.gerar_video_longo and not shorts.limiar_pausa and not shorts.introducao
-    assert shorts.legendas_dinamicas and shorts.aprovar_cortes and shorts.pode_iniciar
+    assert shorts.legendas_dinamicas and shorts.pode_iniciar
     vinhetas = habilitacoes(modo="so_vinhetas")
     assert vinhetas.introducao and vinhetas.vinheta_final
     assert not (vinhetas.limpar_audio or vinhetas.marca_dagua or vinhetas.revisar_transcricao)

@@ -6,7 +6,9 @@ conferido contra a pasta de projetos (nada de caminho inventado: `achar_projeto`
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,27 @@ def nomes_das_etapas() -> dict[str, str]:
     return {e.id: e.nome for e in etapas_registradas()}
 
 
+def publicacao_dos_shorts(pastas: PastasProjeto) -> dict[str, Any]:
+    """O resumo da publicação dos Shorts do projeto: quantos já postados, quantos agendados (e o
+    próximo horário) e quantos marcados ainda esperam ser postados."""
+    postados = agendados = a_postar = 0
+    proximo = None
+    for corte in carregar_cortes(pastas):
+        if corte.postado:
+            postados += 1
+        elif quando := ler_horario(corte.agendado_para):
+            agendados += 1
+            proximo = quando if proximo is None or quando < proximo else proximo
+        elif corte.incluir:
+            a_postar += 1
+    return {
+        "postados": postados,
+        "agendados": agendados,
+        "a_postar": a_postar,
+        "proximo": proximo.strftime("%Y-%m-%dT%H:%M") if proximo else "",
+    }
+
+
 def resumo_do_projeto(projeto: ProjetoExistente) -> dict[str, Any]:
     return {
         "id": projeto.pasta.name,
@@ -57,7 +80,16 @@ def resumo_do_projeto(projeto: ProjetoExistente) -> dict[str, Any]:
         "situacao": projeto.situacao,
         "detalhes": projeto.detalhes,
         "modificado": projeto.modificado,
+        "publicacao": publicacao_dos_shorts(PastasProjeto(projeto.pasta)),
+        "varrido": _marca_de_varrido(PastasProjeto(projeto.pasta)),
     }
+
+
+def _marca_de_varrido(pastas: PastasProjeto) -> dict[str, Any] | None:
+    """Se o projeto foi varrido pelo celular (`remoto/limpeza.py`): quando e quanto liberou."""
+    from spurgeon.remoto.limpeza import ler_marca
+
+    return ler_marca(pastas)
 
 
 def projetos(pasta_projetos: Path) -> list[dict[str, Any]]:
@@ -250,3 +282,50 @@ def video_original(pastas: PastasProjeto) -> Path | None:
         return None
     caminho = Path(estado.entrada.caminho)
     return caminho if caminho.is_file() else None
+
+
+# --- agendados que já saíram -----------------------------------------------------------------
+
+
+def vencer_agendados(
+    pastas: PastasProjeto, agora: datetime | None = None, *, mover_arquivos: bool = True
+) -> list[int]:
+    """Os Shorts agendados cuja hora passou viram "já postado" (na data e na hora marcadas), como o
+    Studio do PC faz com o projeto aberto (`EditorDeCortes._conferir_agendamentos`); só que no
+    arquivo, para valer também com a janela fechada (a lista do Studio e a do celular leem o disco).
+    Grava só esses campos de cada corte. Com um processamento rodando (`mover_arquivos=False`) o
+    `.mp4` fica onde está (o PC o leva para `postados/` depois). Devolve os ids que mudaram."""
+    from spurgeon.render.shorts import aplicar_marcas_de_postado
+    from spurgeon.shorts.agendamento import aplicar_vencimento
+    from spurgeon.shorts.etapas import gravar_campos_do_corte
+
+    agora = agora or datetime.now()
+    cortes = carregar_cortes(pastas)
+    venceram = [c for c in cortes if c.agendado_para and aplicar_vencimento(c, agora)]
+    for corte in venceram:
+        gravar_campos_do_corte(
+            pastas.cortes_shorts, corte.id,
+            postado=True, postado_em=corte.postado_em, agendado_para="",
+        )  # fmt: skip
+    if venceram and mover_arquivos:
+        aplicar_marcas_de_postado(pastas, carregar_cortes(pastas))
+    return [c.id for c in venceram]
+
+
+def vencer_agendados_de_todos(
+    pasta_projetos: Path, agora: datetime | None = None, *, pode_mover: Callable[[], bool]
+) -> dict[str, list[int]]:
+    """`vencer_agendados` em todos os projetos que têm algum Short agendado."""
+    mudaram: dict[str, list[int]] = {}
+    if not pasta_projetos.is_dir():
+        return mudaram
+    for pasta in sorted(p for p in pasta_projetos.iterdir() if p.is_dir()):
+        pastas = PastasProjeto(pasta)
+        try:  # olhada barata antes de ler o JSON: roda a cada poucos segundos
+            if '"agendado_para": "2' not in pastas.cortes_shorts.read_text("utf-8"):
+                continue
+        except OSError:
+            continue
+        if ids := vencer_agendados(pastas, agora, mover_arquivos=pode_mover()):
+            mudaram[pasta.name] = ids
+    return mudaram

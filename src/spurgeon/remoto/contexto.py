@@ -9,6 +9,7 @@ from pathlib import Path
 
 from spurgeon.remoto.avisos import Avisos
 from spurgeon.remoto.config import ConfigRemoto, salvar_config_remoto
+from spurgeon.remoto.cronograma import Cronograma
 from spurgeon.remoto.fila import Fila
 from spurgeon.remoto.livre import Criacoes
 from spurgeon.remoto.novo import NovosProjetos
@@ -43,6 +44,11 @@ class Contexto:
     listar_canal: Callable[[], list] = field(default=None)  # type: ignore[assignment]
     #: o projeto novo a partir de um vídeo do canal (um por vez); None = o padrão, ligado à fila
     novos: NovosProjetos | None = None
+    #: o cronograma do canal (o `servir` guarda num arquivo; aqui, só na memória)
+    cronograma: Cronograma = field(default_factory=Cronograma)
+    #: onde a última lista de vídeos do canal fica guardada (None = só na memória; o `servir` põe
+    #: o arquivo ao lado do `remoto.json`)
+    arquivo_da_lista: Path | None = None
     _trava: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:

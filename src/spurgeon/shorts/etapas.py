@@ -388,7 +388,7 @@ class SelecionarShorts(Etapa):
         )
         if not principais:
             ctx.log.warning(
-                "Nenhum corte passou da nota mínima (%g). Veja as reservas na aprovação.",
+                "Nenhum corte passou da nota mínima (%g). Veja as reservas no Studio Shorts.",
                 ctx.opcoes.shorts_nota_minima,
             )
         cliente = criar_cliente_llm(ctx)
@@ -545,13 +545,17 @@ def _ler_cache_de_metadados(caminho: Path) -> dict[str, dict[str, Any]]:
 
 
 class AprovarCortes(Etapa):
+    """A antiga pausa para aprovar os cortes. Não roda mais: os Shorts saem todos desmarcados e a
+    pessoa marca e ajusta no Studio Shorts (nenhum sai pronto da IA). Fica registrada só para um
+    projeto antigo que parou nela poder ser aprovado e seguir."""
+
     id = "aprovar_cortes"
     nome = "Aprovação dos cortes dos Shorts"
     depende_de = ("selecionar_shorts",)
     peso = 0.0
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.processa_shorts and opcoes.pausar_aprovar_cortes
+        return False
 
     def executar(self, ctx: ContextoProjeto) -> ResultadoEtapa:
         ctx.log.info(

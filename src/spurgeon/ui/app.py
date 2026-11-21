@@ -1087,7 +1087,6 @@ class JanelaPrincipal(ctk.CTk):
             update={
                 "modo": "completo",  # os pontos de revisão são os preferidos agora, não os do
                 "pausar_revisar_transcricao": padroes.pausar_revisar_transcricao,  # último
-                "pausar_aprovar_cortes": padroes.pausar_aprovar_cortes,  # processamento
             }
         )
         self._abrindo_projeto = True
@@ -1501,7 +1500,7 @@ class JanelaPrincipal(ctk.CTk):
                 "(tem que ser o mesmo vídeo do projeto).",
             )
             return
-        ajustes = {"modo": "so_shorts", "aprovar_cortes": False, "revisar_transcricao": False}
+        ajustes = {"modo": "so_shorts", "revisar_transcricao": False}
         coletado = self._coletar(ajustes)
         if coletado is None:
             return

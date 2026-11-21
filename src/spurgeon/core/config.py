@@ -202,7 +202,8 @@ class OpcoesProcessamento(BaseModel):
 
     # Pontos de revisão humana
     pausar_revisar_transcricao: bool = True
-    pausar_aprovar_cortes: bool = True
+    #: não é mais usado (os Shorts saem desmarcados para o Studio); fica para ler configs antigas
+    pausar_aprovar_cortes: bool = False
 
     # Legendas do vídeo longo (.srt)
     srt_max_linhas: int = Field(2, ge=1, le=3)

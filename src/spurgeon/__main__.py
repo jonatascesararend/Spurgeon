@@ -109,7 +109,6 @@ def _processar(args: argparse.Namespace) -> int:
     if args.qualidade:
         valores.qualidade = args.qualidade
     valores.revisar_transcricao = False  # sem janela, ninguém para revisar
-    valores.aprovar_cortes = False
     valores.modo = args.modo
     if args.introducao:
         valores.introducao = True

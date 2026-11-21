@@ -52,10 +52,10 @@ AJUDAS_DOS_CARTOES = {
         "para abri-la. Tudo é opcional: se a gravação já está boa, deixe como está."
     ),
     "revisao": (
-        "Marque onde o processamento deve parar para você conferir o trabalho: depois da "
-        "transcrição, para corrigir o texto, e antes de renderizar os Shorts, para escolher os "
-        "cortes. É mais cuidadoso e um pouco mais demorado; desmarque para processar tudo de uma "
-        "vez."
+        "Marque se o processamento deve parar depois da transcrição, para você corrigir o texto. "
+        "Os Shorts não pedem parada: saem todos desmarcados e você escolhe, ajusta e renderiza no "
+        "Studio Shorts. É mais cuidadoso e um pouco mais demorado; desmarque para processar tudo "
+        "de uma vez."
     ),
     "processamento": (
         "Como o computador vai trabalhar: quanto do processador usar, qual modelo transcreve a "
@@ -139,7 +139,6 @@ class PainelOpcoes(ctk.CTkFrame):
                 "gerar_shorts",
                 "legendas_dinamicas",
                 "revisar_transcricao",
-                "aprovar_cortes",
                 "manter_intermediarios",
                 "impedir_bloqueio",
                 "fade_vinhetas",
@@ -568,8 +567,8 @@ class PainelOpcoes(ctk.CTkFrame):
             self._quadro_gerar_shorts,
             "Gerar Shorts automáticos (vertical 9:16)",
             "gerar_shorts",
-            ajuda="A IA procura os melhores trechos, escreve título e hashtags, e você aprova "
-            "antes de renderizar.",
+            ajuda="A IA procura os melhores trechos e escreve título e hashtags; eles vêm "
+            "desmarcados, e você escolhe e ajusta no Studio Shorts antes de renderizar.",
             balao="Liga a escolha automática de cortes. Depois de processar, a aba Studio Shorts "
             "lista os trechos sugeridos para você revisar, ajustar e renderizar.",
         )
@@ -616,14 +615,6 @@ class PainelOpcoes(ctk.CTkFrame):
             balao="O processamento para logo depois de transcrever, para você ler e corrigir o "
             "texto (nomes, versículos, termos teológicos) antes de gerar as legendas e os "
             "Shorts. Recomendado, principalmente nos primeiros sermões.",
-        )
-        self._check(
-            c,
-            "Pausar para aprovar os cortes dos Shorts antes de renderizar",
-            "aprovar_cortes",
-            balao="O processamento para antes de renderizar os Shorts, para você escolher quais "
-            "cortes quer e ajustar o começo e o fim. Desligado, os Shorts marcados pela IA são "
-            "renderizados direto.",
         )
         ctk.CTkLabel(c, text="").pack(pady=1)
 
@@ -690,17 +681,17 @@ class PainelOpcoes(ctk.CTkFrame):
             "Limite de segurança de Shorts",
             "limite_shorts",
             largura=64,
-            ajuda="O máximo de cortes que vêm marcados; os demais bons viram reservas desmarcadas.",
-            balao="Quantos Shorts, no máximo, já vêm marcados para renderizar. Os outros bons "
-            "ficam na lista como reservas, desmarcados.",
+            ajuda="O máximo de cortes sugeridos como principais; os demais bons viram reservas.",
+            balao="Quantos Shorts, no máximo, a IA sugere como principais. Os outros bons ficam "
+            "na lista como reservas. Todos vêm desmarcados: você escolhe no Studio Shorts.",
         )
         self._campo(
             a,
-            "Nota mínima para um corte vir marcado",
+            "Nota mínima para um corte não ser reserva",
             "nota_minima",
             largura=64,
             dica="0 a 100",
-            ajuda="Cortes abaixo desta nota aparecem na aprovação, mas desmarcados.",
+            ajuda="Cortes abaixo desta nota aparecem como reserva no Studio Shorts.",
             balao="A nota vai de 0 a 100. Suba este número para sugerir menos Shorts, só os "
             "melhores; desça para ter mais opções.",
         )
@@ -917,7 +908,6 @@ class PainelOpcoes(ctk.CTkFrame):
             "ollama_menu": h.campos_shorts,
             "ollama_atualizar": h.campos_shorts,
             "legendas_dinamicas": h.legendas_dinamicas,
-            "aprovar_cortes": h.aprovar_cortes,
             "shorts_min": h.campos_shorts,
             "shorts_max": h.campos_shorts,
             "limite_shorts": h.campos_shorts,

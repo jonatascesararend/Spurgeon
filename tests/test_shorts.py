@@ -8,7 +8,6 @@ import pytest
 
 from spurgeon.core.arquivos import escrever_json_atomico, ler_json
 from spurgeon.core.erros import ErroFerramenta
-from spurgeon.core.pipeline import ResultadoEtapa
 from spurgeon.shorts import etapas as etapas_mod
 from spurgeon.shorts.analise import (
     FOLGA_FIM_S,
@@ -294,8 +293,7 @@ def test_montar_cortes_respeita_o_limite_e_poe_o_resto_como_reserva():
     cortes = montar_cortes(cs, avs, limite=10, nota_minima=0, reservas=3)
     assert len(cortes) == 13
     assert sum(not c.reserva for c in cortes) == 10
-    assert all(c.incluir for c in cortes if not c.reserva)
-    assert all(not c.incluir for c in cortes if c.reserva)
+    assert not any(c.incluir for c in cortes)  # todos desmarcados: a pessoa marca no Studio
     notas = [c.nota for c in cortes]
     assert notas == sorted(notas, reverse=True)
 
@@ -562,11 +560,9 @@ def test_so_roda_com_shorts_ligados(contexto):
         assert not etapa.ativa(contexto.opcoes)
     contexto.opcoes.gerar_shorts = True
     assert all(
-        e.ativa(contexto.opcoes)
-        for e in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts(), AprovarCortes())
+        e.ativa(contexto.opcoes) for e in (AnalisarShorts(), AvaliarShorts(), SelecionarShorts())
     )
-    contexto.opcoes.pausar_aprovar_cortes = False
-    assert not AprovarCortes().ativa(contexto.opcoes)
+    assert not AprovarCortes().ativa(contexto.opcoes)  # os Shorts não param mais para aprovar
 
 
 def test_analisar_grava_frases_e_os_melhores_candidatos(ctx_shorts, ollama):
@@ -644,8 +640,11 @@ def test_selecionar_de_novo_reaproveita_os_titulos_ja_editados(ctx_shorts, ollam
     assert carregar_cortes(ctx_shorts.pastas.cortes_shorts)[0].titulo == "Meu título editado"
 
 
-def test_aprovar_cortes_pausa_para_revisao(ctx_shorts):
-    assert rodar(AprovarCortes(), ctx_shorts) == ResultadoEtapa.AGUARDANDO_REVISAO
+def test_aprovar_cortes_nao_roda_mais(ctx_shorts):
+    """Os Shorts saem desmarcados para o Studio; a pausa só existe para projetos antigos."""
+    assert not AprovarCortes().ativa(ctx_shorts.opcoes)
+    ctx_shorts.opcoes.pausar_aprovar_cortes = True  # nem com a opção antiga ligada
+    assert not AprovarCortes().ativa(ctx_shorts.opcoes)
 
 
 def test_corte_vai_e_volta_do_json():
@@ -663,7 +662,11 @@ def cortes_do_sermao(palavras: list[Palavra]) -> list[Corte]:
     frases = separar_frases(palavras)
     candidatos = escolher_sem_sobreposicao(gerar_candidatos(palavras, frases), 4)
     avs = {c.id: avaliacao(nota=6 + c.id % 4) for c in candidatos}
-    return montar_cortes(candidatos, avs, limite=3, nota_minima=0, reservas=1)
+    cortes = montar_cortes(candidatos, avs, limite=3, nota_minima=0, reservas=1)
+    # a seleção não marca nada; os testes do editor partem dos principais marcados
+    for c in cortes:
+        c.incluir = not c.reserva  # (como a pessoa faria no Studio Shorts)
+    return cortes
 
 
 def test_mover_o_inicio_uma_palavra_para_tras_inclui_a_palavra_anterior():
@@ -741,6 +744,8 @@ def test_faixas_da_nota_e_resumo_dos_cortes():
         "alta", "alta", "media", "media", "baixa", "baixa",
     ]  # fmt: skip
     cortes = cortes_do_sermao(sermao_falso())
+    for c in cortes:
+        c.incluir = True
     cortes[0].incluir = False
     for c in cortes[1:]:
         c.titulo = "Um título"
