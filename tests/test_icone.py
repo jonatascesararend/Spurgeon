@@ -1,4 +1,4 @@
-"""O ícone do programa (`recursos/studio_spurgeon.ico`) na janela, nas caixas e na barra."""
+"""O ícone do programa (`recursos/icone_studio_spurgeon.ico`) na janela, nas caixas e na barra."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ windows = pytest.mark.skipif(sys.platform != "win32", reason="o ícone da janela
 
 def test_o_icone_do_repositorio_existe_e_e_o_do_studio_spurgeon():
     arquivo = icone.caminho_do_icone()
-    assert arquivo is not None and arquivo.name == "studio_spurgeon.ico"
+    assert arquivo is not None and arquivo.name == "icone_studio_spurgeon.ico"
     assert arquivo.read_bytes()[:4] == b"\x00\x00\x01\x00"  # cabeçalho de um .ico de verdade
 
 
@@ -51,7 +51,7 @@ def test_aplicar_poe_o_ico_do_studio_spurgeon_na_janela():
     janela_falsa = Janela()
     assert icone.aplicar(janela_falsa) is (sys.platform == "win32")
     if sys.platform == "win32":
-        assert [Path(c).name for c in janela_falsa.chamadas] == ["studio_spurgeon.ico"]
+        assert [Path(c).name for c in janela_falsa.chamadas] == ["icone_studio_spurgeon.ico"]
 
 
 def test_aplicar_nao_quebra_se_o_tk_recusar_o_arquivo():
@@ -86,3 +86,19 @@ def test_instalar_nao_embrulha_duas_vezes():
     antes = ctk.CTkToplevel.__init__
     icone.instalar()
     assert ctk.CTkToplevel.__init__ is antes
+
+
+def test_o_desenho_do_icone_gera_um_ico_com_todos_os_tamanhos(tmp_path):
+    from PIL import Image
+
+    from spurgeon.ui import desenho_do_icone
+
+    saida = tmp_path / "icone.ico"
+    desenho_do_icone.gerar(saida)
+    with Image.open(saida) as ico:
+        assert ico.info["sizes"] == {(t, t) for t in desenho_do_icone.TAMANHOS}
+        ico.size = (256, 256)
+        grande = ico.convert("RGBA")
+    assert grande.getpixel((128, 20)) == desenho_do_icone.AZUL  # o fundo azul de sempre
+    assert grande.getpixel((95, 160)) == desenho_do_icone.BRANCO  # o púlpito
+    assert grande.getpixel((128, 170)) == desenho_do_icone.AZUL  # a cruz vazada no meio dele

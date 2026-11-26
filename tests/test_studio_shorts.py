@@ -21,6 +21,8 @@ from spurgeon.render.shorts import (
 )
 from spurgeon.shorts.edicao import indices_das_palavras
 from spurgeon.shorts.etapas import carregar_cortes, gravar_cortes
+from spurgeon.shorts.gemini import Configuracao as ConfiguracaoDoGemini
+from spurgeon.shorts.gemini import ErroDoGemini
 from spurgeon.transcricao.formato import Transcricao
 from spurgeon.ui import dialogos
 from spurgeon.ui.studio_shorts import EditorDeCortes, trecho_da_legenda
@@ -851,3 +853,97 @@ def test_o_aviso_do_titulo_aparece_ao_repetir_o_de_outro_short_marcado(editor):
     editor._cortes[1].incluir = True
     editor._var_titulo.set("Quando um rei ímpio governa o povo sofre")
     assert editor._aviso_do_titulo.cget("text") == ""
+
+
+@pytest.mark.gui
+def test_gostei_e_nao_gostei_gravam_na_hora_e_tocar_de_novo_tira(editor, pastas):
+    i = editor._ordem[0]
+    corte = editor._cortes[i]
+    botoes = editor._rotulos_da_linha[i]["opiniao"]
+    botoes["bom"].invoke()
+    assert corte.opiniao == "bom" and str(botoes["bom"].cget("fg_color")) != "transparent"
+    gravado = next(c for c in carregar_cortes(pastas.cortes_shorts) if c.id == corte.id)
+    assert gravado.opiniao == "bom"  # sem precisar do "Salvar"
+    botoes["ruim"].invoke()
+    assert corte.opiniao == "ruim" and botoes["bom"].cget("fg_color") == "transparent"
+    botoes["ruim"].invoke()
+    assert corte.opiniao == ""
+    assert next(c for c in carregar_cortes(pastas.cortes_shorts) if c.id == corte.id).opiniao == ""
+
+
+# --- ✨ a revisão do Gemini ---------------------------------------------------------------
+
+
+@pytest.fixture
+def studio_com_gemini(raiz, pastas, monkeypatch):
+    """O editor com as redes ligadas (sem elas o quadro do Gemini não aparece) e um Gemini falso."""
+    import json
+
+    import customtkinter as ctk
+
+    from spurgeon.shorts import gemini
+    from spurgeon.ui.postagem import ContextoDePublicacao
+
+    pedidos, resposta = [], {"bruto": json.dumps({
+        "veredito": "ajustar", "nota": 7, "comentario": "O título promete mais que o trecho.",
+        "corte_completo": True, "titulo_combina": False, "descricao_combina": True,
+        "titulo_sugerido": "Deus continua fiel quando falhamos", "descricao_sugerida": "",
+    })}  # fmt: skip
+
+    def responder(config, texto, **_):
+        pedidos.append(texto)
+        if isinstance(resposta["bruto"], Exception):
+            raise resposta["bruto"]
+        return resposta["bruto"], "gemini-flash-latest"
+
+    monkeypatch.setattr(gemini, "responder", responder)
+    chave = {"config": gemini.Configuracao("AIzaTeste")}
+    janela = ctk.CTkToplevel(raiz)
+    janela.withdraw()
+    tarefas = TarefasNaHora()
+    ed = EditorDeCortes(
+        janela, pastas, tarefas=tarefas,
+        publicacao=ContextoDePublicacao(plataformas=dict, tarefas=tarefas,
+                                        gemini=lambda: chave["config"]),
+    )  # fmt: skip
+    ed.pack(fill="both", expand=True)
+    ed.chave, ed.pedidos, ed.resposta, ed.pastas = chave, pedidos, resposta, pastas
+    yield ed
+    janela.destroy()
+
+
+@pytest.mark.gui
+def test_studio_revisa_o_short_aberto_grava_e_marca_na_lista(studio_com_gemini):
+    ed = studio_com_gemini
+    i = ed._ordem[0]
+    ed.selecionar(i)
+    corte = ed._cortes[i]
+    quadro = ed._quadro_gemini
+    assert "Ainda não revisado" in quadro.situacao.cget("text")
+    quadro.botao.invoke()
+    assert ed.pedidos and corte.revisao_gemini["veredito"] == "ajustar"
+    gravado = next(c for c in carregar_cortes(ed.pastas.cortes_shorts) if c.id == corte.id)
+    assert gravado.revisao_gemini["veredito"] == "ajustar"  # sem precisar do "Salvar"
+    assert "✨ Gemini: ajustar 7/10" in ed._rotulos_da_linha[i]["info"].cget("text")
+    assert "Bom, com ajustes" in quadro.selo.cget("text")
+    assert quadro.botao.cget("text") == "↻ Revisar de novo"
+    # a sugestão de título vai para o campo (vale ao salvar) e o botão diz que está em uso
+    quadro_titulo, _rotulo, usar = quadro.sugestoes["titulo"]
+    assert quadro_titulo.winfo_manager() and not quadro.sugestoes["descricao"][0].winfo_manager()
+    usar.invoke()
+    assert ed._var_titulo.get() == "Deus continua fiel quando falhamos" and ed.mudou
+    assert usar.cget("text") == "✔ Em uso"
+
+
+@pytest.mark.gui
+def test_studio_sem_chave_avisa_e_erro_aparece_no_quadro(studio_com_gemini, caixas):
+    ed = studio_com_gemini
+    ed.selecionar(ed._ordem[0])
+    ed.chave["config"] = None
+    assert not ed.revisar_com_gemini()
+    assert caixas and "Integrações" in caixas[-1][1] and ed.pedidos == []
+    ed.chave["config"] = ConfiguracaoDoGemini("AIzaTeste")
+    ed.resposta["bruto"] = ErroDoGemini("O Gemini está com alta demanda agora")
+    assert ed.revisar_com_gemini()
+    assert "alta demanda" in ed._quadro_gemini.situacao.cget("text")
+    assert ed._cortes[ed._ordem[0]].revisao_gemini == {}

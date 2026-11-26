@@ -45,13 +45,16 @@ class ItemDoCronograma:
     relacionado: str = ""
     #: CANAL (lido do YouTube Studio) ou SPURGEON (o que os projetos dizem, ainda não lido do canal)
     origem: str = "canal"
+    #: de onde é o Short do Spurgeon (a pasta do projeto e o corte), para mesclar com o do canal
+    projeto: str = ""
+    corte: int | None = None
 
     def para_json(self) -> dict[str, Any]:
         return {
             "id": self.id, "titulo": self.titulo, "tipo": self.tipo, "situacao": self.situacao,
             "quando": self.quando.strftime("%Y-%m-%dT%H:%M"), "duracao_s": self.duracao_s,
             "relacionado_id": self.relacionado_id, "relacionado": self.relacionado,
-            "origem": self.origem,
+            "origem": self.origem, "projeto": self.projeto, "corte": self.corte,
         }  # fmt: skip
 
     @classmethod
@@ -60,7 +63,8 @@ class ItemDoCronograma:
             str(dados["id"]), str(dados["titulo"]), str(dados["tipo"]), str(dados["situacao"]),
             datetime.strptime(dados["quando"], "%Y-%m-%dT%H:%M"), int(dados.get("duracao_s") or 0),
             str(dados.get("relacionado_id") or ""), str(dados.get("relacionado") or ""),
-            str(dados.get("origem") or CANAL),
+            str(dados.get("origem") or CANAL), str(dados.get("projeto") or ""),
+            int(dados["corte"]) if dados.get("corte") is not None else None,
         )  # fmt: skip
 
 

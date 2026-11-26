@@ -81,7 +81,7 @@ class PainelAprovacaoCortes(ctk.CTkToplevel):
         salvar.pack(side="right")
         dica(
             salvar,
-            "Grava os cortes como estão (marcados, ajustados e com a legenda corrigida) e fecha "
+            "Grava os cortes como estão (aprovados, ajustados e com a legenda corrigida) e fecha "
             "a janela (Ctrl+S).",
         )
         cancelar = ctk.CTkButton(

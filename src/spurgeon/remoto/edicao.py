@@ -1,4 +1,5 @@
-"""O que o celular muda num corte (Fase R2): legenda, início e fim, marcado ou não.
+"""O que o celular muda num corte (Fase R2): legenda, início e fim, marcado ou não, o corte das
+pausas.
 
 As mesmas regras do Studio Shorts (`shorts/edicao.py`): as pontas caem em fronteira de palavra com o
 respiro de costume, menos de 10 s não vale, a legenda corrigida acompanha as palavras que ficam
@@ -9,25 +10,33 @@ tem a trava do projeto (`remoto/sessao.py`).
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.remoto.dados import carregar_cortes
-from spurgeon.shorts.dados import Corte
+from spurgeon.render import trecho_de_audio
+from spurgeon.shorts import ajuste_fino, gemini, revisao_gemini
+from spurgeon.shorts.dados import OPINIOES, Corte
 from spurgeon.shorts.edicao import (
     DURACAO_MINIMA_S,
     LimiteInvalido,
     corte_com_indices,
     indices_incluidos,
     legenda_corrigida,
+    legenda_do_corte,
     legenda_em_blocos,
     legenda_preservada,
     ler_hashtags,
     mover_limite,
+    palavras_com_a_legenda,
+    palavras_do_corte,
     passa_do_limite,
 )
-from spurgeon.shorts.etapas import gravar_campos_do_corte
+from spurgeon.shorts.etapas import gravar_campos_do_corte, nome_do_sermao
+from spurgeon.shorts.pausas import LIMIAR_MAXIMO_S, LIMIAR_MINIMO_S
 from spurgeon.transcricao.formato import Palavra, Transcricao
 
 #: palavras de fora mostradas antes do início e depois do fim, para escolher a ponta nova (uns 5
@@ -193,6 +202,99 @@ def marcar(pastas: PastasProjeto, id_do_corte: int, incluir: bool) -> Corte:
     corte, _ = _carregar(pastas, id_do_corte)
     corte.incluir = incluir
     _gravar(pastas, corte, "incluir")
+    return corte
+
+
+def dar_opiniao(pastas: PastasProjeto, id_do_corte: int, opiniao: str) -> Corte:
+    """👍 (`bom`), 👎 (`ruim`) ou nenhuma (`""`): só um lembrete, como os botões do Studio."""
+    if opiniao and opiniao not in OPINIOES:
+        raise LimiteInvalido("A opinião tem que ser “bom”, “ruim” ou nenhuma.")
+    corte, _ = _carregar(pastas, id_do_corte)
+    corte.opiniao = opiniao
+    _gravar(pastas, corte, "opiniao")
+    return corte
+
+
+#: quanto de som antes e depois do Short o ajuste fino toca (para ouvir a primeira e a última)
+FOLGA_DO_AJUSTE_S = 1.0
+
+
+def para_o_ajuste_fino(pastas: PastasProjeto, id_do_corte: int) -> dict[str, Any]:
+    """As palavras do Short como a legenda as mostra agora (com o tempo de cada uma, em segundos do
+    vídeo original) e o trecho do som que o celular toca (`som_de`… `som_ate`)."""
+    corte, palavras = _carregar(pastas, id_do_corte)
+    return {
+        "palavras": [
+            {"texto": p.texto, "inicio": round(p.inicio, 3), "fim": round(p.fim, 3)}
+            for p in palavras_com_a_legenda(palavras, corte)
+        ],
+        "inicio": corte.inicio,
+        "fim": corte.fim,
+        "saltos": corte.saltos,
+        "som_de": round(max(0.0, corte.inicio - FOLGA_DO_AJUSTE_S), 3),
+        "som_ate": round(corte.fim + FOLGA_DO_AJUSTE_S, 3),
+        "ajustado": ajuste_fino.tem_ajuste(corte),
+    }
+
+
+def salvar_ajuste_fino(pastas: PastasProjeto, id_do_corte: int, itens: Any) -> Corte:
+    """Grava as palavras acertadas no celular (texto e tempos) como o ajuste fino do Short."""
+    corte, palavras = _carregar(pastas, id_do_corte)
+    try:
+        ajuste_fino.aplicar(
+            corte, palavras_do_corte(palavras, corte), ajuste_fino.ler_palavras(itens)
+        )
+    except ajuste_fino.AjusteInvalido as erro:
+        raise LimiteInvalido(str(erro)) from erro
+    _gravar(pastas, corte, "ajuste_fino", "legenda")
+    return corte
+
+
+def desfazer_ajuste_fino(pastas: PastasProjeto, id_do_corte: int) -> Corte:
+    corte, _ = _carregar(pastas, id_do_corte)
+    ajuste_fino.desfazer(corte)
+    _gravar(pastas, corte, "ajuste_fino")
+    return corte
+
+
+def som_do_ajuste_fino(pastas: PastasProjeto, id_do_corte: int, *, rodar=None) -> Path:
+    """O `.m4a` do trecho do sermão que o ajuste fino toca (guardado enquanto o corte não muda)."""
+    corte, _ = _carregar(pastas, id_do_corte)
+    fonte = trecho_de_audio.fonte_do_som(pastas)
+    de = max(0.0, corte.inicio - FOLGA_DO_AJUSTE_S)
+    ate = corte.fim + FOLGA_DO_AJUSTE_S
+    pasta = pastas.work / "remoto"
+    destino = pasta / f"ajuste_{id_do_corte}_{round(de * 1000)}_{round(ate * 1000)}.m4a"
+    if not destino.is_file():
+        for velho in pasta.glob(f"ajuste_{id_do_corte}_*.m4a"):
+            velho.unlink(missing_ok=True)
+        trecho_de_audio.wav_do_trecho(fonte, de, ate, destino, formato="m4a", rodar=rodar)
+    return destino
+
+
+def revisar_com_gemini(
+    pastas: PastasProjeto, id_do_corte: int, config: gemini.Configuracao
+) -> Corte:
+    """Pede o parecer do Gemini sobre o Short (a legenda de agora) e o grava no corte."""
+    corte, palavras = _carregar(pastas, id_do_corte)
+    texto = legenda_do_corte(palavras, corte) or corte.texto
+    revisao = revisao_gemini.revisar(config, corte, texto, sermao=nome_do_sermao(pastas.raiz))
+    corte.revisao_gemini = revisao.para_dict()
+    _gravar(pastas, corte, "revisao_gemini")
+    return corte
+
+
+def mudar_pausas(pastas: PastasProjeto, id_do_corte: int, pausa_s: float) -> Corte:
+    """O corte das pausas deste Short, como a caixa "Cortar as pausas deste Short" do Studio:
+    0 desliga; senão as pausas a partir de `pausa_s` (de 0,1 a 10 s, uma casa decimal) ficam só com
+    o respiro (`residual_da_pausa`)."""
+    if not math.isfinite(pausa_s) or pausa_s < 0:
+        raise LimiteInvalido("O tamanho da pausa tem que ser um número de 0,1 a 10 segundos.")
+    corte, _ = _carregar(pastas, id_do_corte)
+    nova = 0.0 if pausa_s == 0 else round(min(max(pausa_s, LIMIAR_MINIMO_S), LIMIAR_MAXIMO_S), 1)
+    if abs(nova - corte.pausa_s) > 1e-9:
+        corte.pausa_s = nova
+        _gravar(pastas, corte, "pausa_s")
     return corte
 
 

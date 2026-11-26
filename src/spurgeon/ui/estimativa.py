@@ -114,9 +114,12 @@ def estimar_tempo_total(duracao_s: float, opcoes, *, hdr: bool) -> tuple[float, 
             int(opcoes.introducao) + int(opcoes.vinheta_final)
         )
         return total, total
-    por_segundo = _EXTRAIR_E_MEDIR + _PAUSAS_E_LEGENDAS
+    por_segundo = _EXTRAIR_E_MEDIR
     por_segundo += _LIMPAR_AUDIO if opcoes.limpar_audio else 0.0
     por_segundo += _NORMALIZAR if opcoes.normalizar_volume else 0.0
+    if opcoes.so_audio:  # extrai, limpa e normaliza (se pedido) e grava o arquivo
+        return duracao_s * (por_segundo + _NORMALIZAR), 0.0
+    por_segundo += _PAUSAS_E_LEGENDAS
     por_segundo += _WHISPER.get(opcoes.whisper_modelo, 0.74)
     if opcoes.processa_shorts:
         modelo = opcoes.ollama_modelo.lower()

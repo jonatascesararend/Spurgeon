@@ -43,6 +43,16 @@ def rotas(ctx: Contexto) -> list[Route]:
         # responde antes de sair: o celular precisa saber que o pedido chegou
         return JSONResponse({"encerrando": True}, background=BackgroundTask(ctx.encerrar))
 
+    def reiniciar(_request: Request) -> JSONResponse:
+        """Fecha e abre o servidor de novo (o código novo vale; o celular reconecta sozinho).
+        Recusado no meio de um trabalho, que seria interrompido."""
+        from spurgeon.remoto.liga_desliga import motivo_para_nao_reiniciar
+
+        if motivo := motivo_para_nao_reiniciar(ctx):
+            raise HTTPException(409, motivo)
+        ctx.reiniciar = True
+        return JSONResponse({"reiniciando": True}, background=BackgroundTask(ctx.encerrar))
+
     def chave(_request: Request) -> PlainTextResponse:
         return PlainTextResponse(ctx.avisos.chave_publica())
 
@@ -88,6 +98,7 @@ def rotas(ctx: Contexto) -> list[Route]:
         Route("/api/sistema/dormir", dormir, methods=["POST"]),
         Route("/api/sistema/acordar", acordar, methods=["POST"]),
         Route("/api/sistema/encerrar", encerrar, methods=["POST"]),
+        Route("/api/sistema/reiniciar", reiniciar, methods=["POST"]),
         Route("/api/avisos/chave", chave),
         Route("/api/avisos/inscrever", inscrever, methods=["POST"]),
         Route("/api/avisos/ligar", ligar_avisos, methods=["POST"]),

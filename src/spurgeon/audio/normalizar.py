@@ -64,6 +64,7 @@ class NormalizarAudio(Etapa):
     depende_de = ("extrair_audio", "limpar_audio")
     opcoes_relevantes = ("limpar_audio", "lufs_video_longo")
     peso = 2.0
+    no_modo_audio = True
 
     def ativa(self, opcoes) -> bool:
         return opcoes.normalizar_volume

@@ -39,6 +39,7 @@ from spurgeon.shorts.agendamento import (
     ler_horario,
     rotulo_do_horario,
 )
+from spurgeon.shorts.gemini import Configuracao as ConfiguracaoDoGemini
 from spurgeon.ui import dialogos
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.dicas import dica
@@ -67,6 +68,10 @@ class ContextoDePublicacao:
     plataformas: Callable[[], dict[str, Plataforma]]
     tarefas: Tarefas
     registrar: Callable[[str], None] = lambda _texto: None  # o registro de atividade da aba
+    #: a chave do Gemini guardada (None = sem chave: a revisão pelo Gemini fica desligada)
+    gemini: Callable[[], ConfiguracaoDoGemini | None] = lambda: None
+    #: um pedido novo entrou na fila dos Shorts: o despachante olha agora (sem esperar o passo)
+    acordar_fila: Callable[[], None] = lambda: None
 
 
 # --- passos assistidos (TikTok) -------------------------------------------------------------------
@@ -111,6 +116,8 @@ class LinhaDeAgendamento(ctk.CTkFrame):
         *,
         ao_mudar: Callable[[str], None],
         ao_postar: Callable[[], None],
+        ao_programar: Callable[[], None] | None = None,
+        ao_tirar_da_fila: Callable[[], None] | None = None,
         relogio: Relogio = agora_local,
     ):
         super().__init__(master, fg_color="transparent")
@@ -171,6 +178,36 @@ class LinhaDeAgendamento(ctk.CTkFrame):
             font=ctk.CTkFont(size=12), text="",
         )  # fmt: skip
         self.resumo.grid(row=1, column=0, columnspan=7, sticky="ew", pady=(2, 0))
+        # a fila do PC: programar no YouTube pelo YouTube Studio (renderiza antes, se precisar)
+        self.linha_da_fila = ctk.CTkFrame(self, fg_color="transparent")
+        self.linha_da_fila.grid(row=2, column=0, columnspan=7, sticky="ew", pady=(6, 0))
+        self.linha_da_fila.columnconfigure(1, weight=1)
+        self.botao_youtube = ctk.CTkButton(
+            self.linha_da_fila, text="📤 Programar no YouTube", width=190,
+            command=ao_programar or (lambda: None),
+        )  # fmt: skip
+        self.botao_youtube.grid(row=0, column=0, sticky="w")
+        dica(
+            self.botao_youtube,
+            "Programa este Short no YouTube no dia e na hora ao lado, pelo YouTube Studio do "
+            "canal (uma janela do Chrome faz tudo sozinha). Se ele ainda não foi renderizado (ou "
+            "está renderizando), entra na fila: o Spurgeon renderiza antes e programa depois, um "
+            "Short por vez, sem atrapalhar o resto. Já programado, troca o horário lá.",
+        )
+        self.situacao_da_fila = ctk.CTkLabel(
+            self.linha_da_fila, text="", anchor="w", justify="left", wraplength=360,
+            text_color=_COR_SUAVE, font=ctk.CTkFont(size=12),
+        )  # fmt: skip
+        self.situacao_da_fila.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        self.botao_tirar = ctk.CTkButton(
+            self.linha_da_fila, text="Tirar da fila", width=100, fg_color="transparent",
+            border_width=1, text_color=("gray20", "gray85"),
+            command=ao_tirar_da_fila or (lambda: None),
+        )  # fmt: skip
+        self.botao_tirar.grid(row=0, column=2, padx=(8, 0))
+        self.botao_tirar.grid_remove()
+        if ao_programar is None:
+            self.linha_da_fila.grid_remove()
         self._var_data.trace_add("write", lambda *_a: self._ao_editar())
         self._var_hora.trace_add("write", lambda *_a: self._ao_editar())
 
@@ -188,6 +225,19 @@ class LinhaDeAgendamento(ctk.CTkFrame):
             self.repintar()
         finally:
             self._carregando = False
+
+    def mostrar_fila(self, texto: str, *, pode_tirar: bool, ocupado: bool, rotulo: str) -> None:
+        """Como o Short está na fila do PC (texto vazio = fora dela) e o rótulo do botão."""
+        pedido = (texto, pode_tirar, ocupado, rotulo)
+        if pedido == getattr(self, "_fila_mostrada", None):
+            return  # o Studio chama a cada poucos segundos: só redesenha o que mudou
+        self._fila_mostrada = pedido
+        self.situacao_da_fila.configure(text=texto)
+        self.botao_youtube.configure(text=rotulo, state="disabled" if ocupado else "normal")
+        if pode_tirar:
+            self.botao_tirar.grid()
+        else:
+            self.botao_tirar.grid_remove()
 
     def repintar(self) -> None:
         """Refaz o "em 2 dias e 3 h" (chamado de tempos em tempos)."""
@@ -212,7 +262,7 @@ class LinhaDeAgendamento(ctk.CTkFrame):
         estado = "normal" if habilitado else "disabled"
         for widget in (
             self.check, self.campo_data, self.botao_data, self.campo_hora, self.botao_hora,
-            self.botao_postar,
+            self.botao_postar, self.botao_youtube, self.botao_tirar,
         ):  # fmt: skip
             widget.configure(state=estado)
 

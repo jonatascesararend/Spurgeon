@@ -31,7 +31,7 @@ from tkinter import BooleanVar, StringVar, TclError, filedialog
 import customtkinter as ctk
 
 from spurgeon.core.config import OpcoesProcessamento, Pastas
-from spurgeon.core.erros import Cancelado
+from spurgeon.core.erros import Cancelado, ErroSpurgeon
 from spurgeon.core.ffmpeg import InfoMidia
 from spurgeon.core.projeto import PastasProjeto
 from spurgeon.publicacao.agenda import resumo_das_redes
@@ -51,6 +51,9 @@ from spurgeon.render.shorts import (
     sincronizar_arquivos,
     situacao_do_short,
 )
+from spurgeon.render.trecho_de_audio import SemSom, fonte_do_som
+from spurgeon.shorts import ajuste_fino, revisao_gemini
+from spurgeon.shorts import fila as fila_dos_shorts
 from spurgeon.shorts.agendamento import (
     aplicar_vencimento,
     guardar_horario,
@@ -60,6 +63,9 @@ from spurgeon.shorts.agendamento import (
 )
 from spurgeon.shorts.analise import palavras_da_janela, separar_frases
 from spurgeon.shorts.dados import (
+    OPINIAO_BOA,
+    OPINIAO_RUIM,
+    OPINIOES,
     ORIGEM_AUTOMATICA,
     ORIGEM_MANUAL,
     ROTULOS_ORIGEM,
@@ -93,6 +99,7 @@ from spurgeon.shorts.edicao import (
     linhas_da_tabela,
     mover_limite,
     mover_por_frase,
+    palavras_com_a_legenda,
     palavras_do_corte,
     passa_do_limite,
     resumir,
@@ -124,6 +131,7 @@ from spurgeon.transcricao.verificador import (
 )
 from spurgeon.ui import dialogos
 from spurgeon.ui.ajuda import dica_do_seletor
+from spurgeon.ui.ajuste_fino import JanelaDoAjusteFino
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.dicas import dica
 from spurgeon.ui.dicionario import DicionarioPersonalizado
@@ -137,6 +145,7 @@ from spurgeon.ui.postagem import (
     LinhaDeAgendamento,
     preparar_assistido,
 )
+from spurgeon.ui.revisao_do_gemini import QuadroDoGemini, selo_do_gemini, sugestao_de
 from spurgeon.ui.rolagem import QuadroRolavel
 from spurgeon.ui.tabela_de_frases import (
     COR_FORA,
@@ -172,13 +181,17 @@ _LEGENDA_MINIMA, _LEGENDA_MAXIMA = 0.3, 0.9
 _PAUSA_MINIMA_S, _PAUSA_MAXIMA_S = LIMIAR_MINIMO_S, LIMIAR_MAXIMO_S
 _LIMITE_DO_HISTORICO = 200  # quantos passos de desfazer cada corte guarda
 #: o que o desfazer e o refazer guardam de cada corte (a estrutura e a legenda, não os metadados)
-_CAMPOS_DO_HISTORICO = ("inicio", "fim", "texto", "saltos", "legenda", "editado", "pausa_s")
+_CAMPOS_DO_HISTORICO = (
+    "inicio", "fim", "texto", "saltos", "legenda", "editado", "pausa_s", "ajuste_fino",
+)  # fmt: skip
 _MANTER_A_IA_S = "3m"  # o Ollama solta o modelo da memória depois deste tempo parado
 _ROTULO_DO_CAMPO = {"titulo": "o título", "descricao": "a descrição", "hashtags": "as hashtags"}
 
 _PASTA = f"shorts_gerados/{PASTA_DOS_POSTADOS}"  # onde ficam os Shorts já postados
 _PASTA_AGENDADOS = f"shorts_gerados/{PASTA_DOS_AGENDADOS}"  # e os que têm horário marcado
 _CONFERIR_AGENDAMENTO_MS = 30_000  # de quanto em quanto tempo se vê se alguma hora passou
+_OLHAR_A_FILA_MS = 3_000  # de quanto em quanto tempo as marcas da fila do PC são relidas
+_ESPERA_PARA_REAGENDAR_MS = 1_500  # depois de parar de digitar o horário, pergunta se reagenda
 #: durante um processamento os arquivos ficam onde estão (o trabalhador guarda o registro deles na
 #: memória e o regrava a cada Short pronto): a mudança de pasta espera o fim
 _TEXTO_ADIADO = "O arquivo vai para {pasta} quando o processamento terminar."
@@ -194,6 +207,8 @@ FILTROS = (FILTRO_TODOS, FILTRO_POSTADOS, FILTRO_AGENDADOS, FILTRO_SEM_POSTAR)
 _POSTADO, _AGENDADO = "postado", "agendado"
 _COR_SELO_POSTADO = "#2e8b57"
 _COR_SELO_AGENDADO = "#2b6cb0"
+#: os botões 👍 / 👎 da linha: a cor quando ligados (desligados ficam transparentes)
+_COR_DA_OPINIAO = {OPINIAO_BOA: "#2e8b57", OPINIAO_RUIM: "#a84444"}
 _ROTULO_SITUACAO = {
     SITUACAO_PRONTO: "✔ renderizado",
     SITUACAO_ALTERADO: "⟳ alterado: renderizar de novo",
@@ -357,6 +372,13 @@ class OrigemDaPrevia:
     opcoes: OpcoesProcessamento
 
 
+_CAMPOS_DE_PUBLICACAO = ("agendado_para", "postado", "postado_em")
+
+
+def _campos_de_publicacao(corte: Corte) -> tuple:
+    return tuple(getattr(corte, n) for n in _CAMPOS_DE_PUBLICACAO)
+
+
 class EditorDeCortes(ctk.CTkFrame):
     def __init__(
         self,
@@ -385,6 +407,16 @@ class EditorDeCortes(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self._pastas = pastas
         self._processando = processando
+        self._processando_pelo_app = processando  # o que a janela disse (`definir_processamento`)
+        self._render_de_fora = False  # a fila ou o celular renderizando este projeto
+        #: a marca da fila de cada Short ("renderizando agora", "na fila de programação"…)
+        self._marcas_da_fila: dict[int, fila_dos_shorts.MarcaDaFila] = {}
+        self._render_visto: fila_dos_shorts.RenderEmAndamento | None = None
+        self._fila_pendente: str | None = None  # o `after` que olha a fila de novo
+        self._reagendamento_pendente: str | None = None  # o `after` que pergunta se reagenda
+        #: o agendamento e o "já postado" de cada corte como o disco estava na última olhada: só
+        #: o que mudar no disco depois disso (a fila, o celular) passa para a tela
+        self._publicacao_no_disco: dict[int, tuple] = {}
         self._arquivos_adiados = False  # algo ficou sem mudar de pasta por causa do processamento
         self._manter_visivel: int | None = None  # o corte que a lista mostra mesmo fora do filtro
         self._tarefas = tarefas
@@ -398,6 +430,8 @@ class EditorDeCortes(ctk.CTkFrame):
         #: o arquivo passa a se chamar como o título novo (e não como o que a IA sugeriu)
         self._titulo_do_nome: dict[int, str] = {}
         self._refazendo: tuple[int, str] | None = None  # (id do corte, campo) que a IA está criando
+        self._revisando_gemini: int | None = None  # o id do corte que o Gemini está lendo
+        self._erro_do_gemini: tuple[int, str] | None = None  # (id do corte, o que deu errado)
         self._inicio_da_ia = 0.0
         self._pastas_do_app = pastas_do_app
         self._introducao = introducao
@@ -473,6 +507,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._deteccoes = self._mapa_de_frases = self._tempos_das_palavras = None
         self._indices_dos_cortes = {}
         self._marcas = [BooleanVar(value=c.incluir) for c in self._cortes]
+        self._publicacao_no_disco = {c.id: _campos_de_publicacao(c) for c in self._cortes}
         self._titulo_do_nome = {c.id: c.titulo for c in self._cortes}
         self._atual = None
         self._mudou = False
@@ -489,6 +524,7 @@ class EditorDeCortes(ctk.CTkFrame):
         else:
             self._limpar_detalhe()
         self._conferir_agendamentos()  # e daqui em diante, de tempos em tempos
+        self._olhar_a_fila()  # idem (a cada poucos segundos)
 
     def descartar_alteracoes(self) -> None:
         """Joga fora o que não foi salvo: relê os cortes do arquivo (a tela continua no mesmo corte,
@@ -577,22 +613,22 @@ class EditorDeCortes(ctk.CTkFrame):
         barra = ctk.CTkFrame(corpo, fg_color="transparent")
         barra.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 6))
         marcar = ctk.CTkButton(
-            barra, text="Marcar todos", width=110, command=lambda: self.marcar_todos(True)
+            barra, text="Aprovar todos", width=110, command=lambda: self.marcar_todos(True)
         )
         marcar.pack(side="left")
         dica(
             marcar,
-            "Marca todos os Shorts que a lista mostra para serem renderizados (com um filtro "
+            "Aprova todos os Shorts que a lista mostra para serem renderizados (com um filtro "
             "ligado, só os que ele mostra).",
         )
         desmarcar = ctk.CTkButton(
-            barra, text="Desmarcar todos", width=120, command=lambda: self.marcar_todos(False)
+            barra, text="Desaprovar todos", width=130, command=lambda: self.marcar_todos(False)
         )
         desmarcar.pack(side="left", padx=6)
         dica(
             desmarcar,
-            "Desmarca todos os Shorts que a lista mostra: nenhum deles será renderizado até você "
-            "marcar de novo (com um filtro ligado, só os que ele mostra).",
+            "Tira a aprovação de todos os Shorts que a lista mostra: nenhum deles será renderizado "
+            "até você aprovar de novo (com um filtro ligado, só os que ele mostra).",
         )
         ctk.CTkLabel(barra, text="Ordenar por:", text_color=_COR_SUAVE).pack(
             side="left", padx=(18, 6)
@@ -654,7 +690,7 @@ class EditorDeCortes(ctk.CTkFrame):
             text=self._introducao
             or (
                 f"{sugeridos}. A nota (0 a 100) soma o que a IA achou com o que se mede no texto: "
-                "veja o detalhe ao lado. Marque os que quiser, ajuste o início e o fim, corrija a "
+                "veja o detalhe ao lado. Aprove os que quiser, ajuste o início e o fim, corrija a "
                 "legenda e renderize."
             )
         )
@@ -712,10 +748,20 @@ class EditorDeCortes(ctk.CTkFrame):
             d, anchor="w", justify="left", wraplength=420, text_color=_COR_ALERTA, text=""
         )
         self._rotulo_alerta.grid(row=3, column=0, sticky="ew", padx=8, pady=(6, 0))
+        bloco_motivo = ctk.CTkFrame(d, fg_color="transparent")  # o "IA: …" e a revisão do Gemini
+        bloco_motivo.grid(row=4, column=0, sticky="ew", padx=8)
+        bloco_motivo.columnconfigure(0, weight=1)
         self._rotulo_motivo = RotuloQueSome(
-            d, anchor="w", justify="left", wraplength=420, text_color=_COR_SUAVE, text=""
+            bloco_motivo, anchor="w", justify="left", wraplength=420, text_color=_COR_SUAVE,
+            text="",
+        )  # fmt: skip
+        self._rotulo_motivo.grid(row=0, column=0, sticky="ew", pady=(2, 8))
+        self._quadro_gemini = QuadroDoGemini(
+            bloco_motivo, ao_revisar=self.revisar_com_gemini, ao_usar=self.usar_sugestao_do_gemini
         )
-        self._rotulo_motivo.grid(row=4, column=0, sticky="ew", padx=8, pady=(2, 8))
+        self._quadro_gemini.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        if self._publicacao is None or self._tarefas is None:
+            self._quadro_gemini.grid_remove()  # a janela de aprovação não fala com o Gemini
 
         self._var_titulo = StringVar()
         self._var_hashtags = StringVar()
@@ -762,6 +808,8 @@ class EditorDeCortes(ctk.CTkFrame):
             quadro_titulo,
             ao_mudar=self._ao_agendar,
             ao_postar=self._abrir_postagem,
+            ao_programar=self.programar_no_youtube if self._publicacao is not None else None,
+            ao_tirar_da_fila=self.tirar_da_fila,
             relogio=self._relogio,
         )
         self._linha_agendamento.grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -880,6 +928,16 @@ class EditorDeCortes(ctk.CTkFrame):
             command=self.abrir_dicionario,
         )
         botao_dicionario.pack(side="left")
+        self._botao_ajuste_fino = ctk.CTkButton(
+            botoes, text="🎯 Ajuste fino…", width=120, command=self.abrir_ajuste_fino
+        )
+        self._botao_ajuste_fino.pack(side="left", padx=(10, 0))
+        dica(
+            self._botao_ajuste_fino,
+            "Acerta a legenda palavra por palavra, ouvindo o trecho: o início e o fim de cada "
+            "palavra (quando a legenda fica adiantada ou atrasada), a que a transcrição comeu e a "
+            "que sobrou.",
+        )
         self._botao_exportar_legenda = ctk.CTkButton(
             botoes, text="Exportar a legenda do sermão…", width=200,
             fg_color=("gray70", "gray30"), command=self._exportar_legenda,
@@ -1300,6 +1358,8 @@ class EditorDeCortes(ctk.CTkFrame):
                 fg_color=_COR_NOTA[faixa_da_nota(corte.nota)],
             )
             self._pintar_selo(rotulos["selo"], corte)
+            self._pintar_fila(rotulos["fila"], corte)
+            self._pintar_opiniao(rotulos["opiniao"], corte)
             for nome in ("info", "titulo", "legenda"):
                 self._configurar(rotulos[nome], text=textos[nome])
 
@@ -1316,12 +1376,28 @@ class EditorDeCortes(ctk.CTkFrame):
         if not rotulo.winfo_manager():
             rotulo.grid()
 
+    def _pintar_fila(self, rotulo: ctk.CTkLabel, corte: Corte) -> None:
+        """A marca da fila na linha ("⚙ renderizando agora"…); some fora da fila."""
+        marca = self._marcas_da_fila.get(corte.id)
+        if marca is None:
+            if rotulo.winfo_manager():
+                rotulo.grid_remove()
+            return
+        self._configurar(
+            rotulo, text=marca.rotulo, fg_color=fila_dos_shorts.COR_DA_SITUACAO[marca.situacao]
+        )
+        if not rotulo.winfo_manager():
+            rotulo.grid()
+
     def _textos_da_linha(self, corte: Corte) -> dict[str, str]:
         sufixo = " · reserva" if corte.reserva else ""
         sufixo += " · editado" if corte.editado else ""
         sufixo += " · ✎ legenda" if corte.legenda else ""
+        sufixo += " · 🎯 ajuste fino" if ajuste_fino.tem_ajuste(corte) else ""
         sufixo += " · ⚠ contexto" if corte.alerta_contexto else ""
         sufixo += f" · ⚠ mais de {DURACAO_MAXIMA_S:g} s" if passa_do_limite(corte) else ""
+        gemini = selo_do_gemini(corte)
+        sufixo += f" · {gemini}" if gemini else ""
         situacao = _ROTULO_SITUACAO[self.situacao(corte)]
         trecho = trecho_da_legenda(self._palavras, corte)
         return {
@@ -1345,7 +1421,7 @@ class EditorDeCortes(ctk.CTkFrame):
             linha, text="", width=24, variable=self._marcas[i], command=lambda: self._ao_marcar(i)
         )
         caixa_de_marcar.grid(row=0, column=0, rowspan=5, padx=(8, 0), pady=6)
-        dica(caixa_de_marcar, "Marcado = este Short será renderizado; desmarcado fica de fora.")
+        dica(caixa_de_marcar, "Aprovado = este Short será renderizado; sem aprovação fica de fora.")
         nota = ctk.CTkLabel(
             linha,
             text=formatar_nota(corte.nota),
@@ -1364,6 +1440,17 @@ class EditorDeCortes(ctk.CTkFrame):
             font=ctk.CTkFont(size=11, weight="bold"),
         )  # fmt: skip
         chip.grid(row=0, column=2, sticky="w", pady=(6, 0))
+        marca_da_fila = ctk.CTkLabel(
+            linha, text="", text_color="white", corner_radius=6, height=20,
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )  # fmt: skip
+        marca_da_fila.grid(row=0, column=2, sticky="e", pady=(6, 0), padx=(8, 0))
+        self._pintar_fila(marca_da_fila, corte)
+        dica(
+            marca_da_fila,
+            "Este Short está na fila do PC: renderizando, esperando a renderização, sendo "
+            "programado no YouTube ou esperando a vez de ir ao YouTube.",
+        )
         selo = ctk.CTkLabel(
             linha, text="", text_color="white", corner_radius=6, height=20,
             font=ctk.CTkFont(size=11, weight="bold"),
@@ -1402,13 +1489,58 @@ class EditorDeCortes(ctk.CTkFrame):
             text=textos["legenda"],
         )
         legenda.grid(row=4, column=2, sticky="ew", pady=(0, 6))
-        for widget in (linha, nota, chip, selo, info, titulo, legenda):
+        opinioes = ctk.CTkFrame(linha, fg_color="transparent")
+        opinioes.grid(row=0, column=3, rowspan=2, sticky="ne", padx=(4, 8), pady=(6, 0))
+        botoes_da_opiniao = {}
+        for coluna, (opiniao, simbolo, explicacao) in enumerate((
+            (OPINIAO_BOA, "👍", "Gostei: este Short ficou bom (só um lembrete para você)."),
+            (OPINIAO_RUIM, "👎", "Não gostei: este Short ficou ruim (só um lembrete para você)."),
+        )):  # fmt: skip
+            botao = ctk.CTkButton(
+                opinioes, text=simbolo, width=30, height=24, border_width=1,
+                command=lambda i=i, o=opiniao: self.dar_opiniao(i, o),
+            )  # fmt: skip
+            botao.grid(row=0, column=coluna, padx=(0 if coluna == 0 else 4, 0))
+            dica(botao, explicacao + " Clique de novo para tirar.")
+            botoes_da_opiniao[opiniao] = botao
+        self._pintar_opiniao(botoes_da_opiniao, corte)
+        for widget in (linha, nota, chip, selo, info, titulo, legenda, marca_da_fila):
             widget.bind("<Button-1>", lambda _e, i=i: self.selecionar(i))
         self._rotulos_da_linha[i] = {
             "nota": nota, "chip": chip, "selo": selo, "info": info, "titulo": titulo,
-            "legenda": legenda,
+            "legenda": legenda, "opiniao": botoes_da_opiniao, "fila": marca_da_fila,
         }  # fmt: skip
         return linha
+
+    def _pintar_opiniao(self, botoes: dict, corte: Corte) -> None:
+        for opiniao, botao in botoes.items():
+            ligado = corte.opiniao == opiniao
+            self._configurar(
+                botao,
+                fg_color=_COR_DA_OPINIAO[opiniao] if ligado else "transparent",
+                border_color=_COR_DA_OPINIAO[opiniao] if ligado else ("gray70", "gray35"),
+                hover_color=_COR_DA_OPINIAO[opiniao],
+            )
+
+    def dar_opiniao(self, i: int, opiniao: str) -> None:
+        """👍 / 👎 do Short `i` (de novo no mesmo, tira). Grava só isso, na hora, como o "já
+        postado"; um corte que ainda não está no arquivo leva a opinião no próximo "Salvar"."""
+        if opiniao not in OPINIOES or self._tela_desatualizada:
+            return
+        corte = self._cortes[i]
+        corte.opiniao = "" if corte.opiniao == opiniao else opiniao
+        try:
+            gravado = gravar_campos_do_corte(
+                self._pastas.cortes_shorts, corte.id, opiniao=corte.opiniao
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            gravado = False
+        if not gravado:
+            self._houve_mudanca()
+        rotulos = self._rotulos_da_linha.get(i)
+        if rotulos is not None:
+            with contextlib.suppress(TclError):
+                self._pintar_opiniao(rotulos["opiniao"], corte)
 
     def _ao_marcar(self, i: int) -> None:
         self._cortes[i].incluir = self._marcas[i].get()
@@ -1449,7 +1581,7 @@ class EditorDeCortes(ctk.CTkFrame):
 
     def _atualizar_resumo(self) -> None:
         r = resumir(self._cortes)
-        texto = f"{r.marcados} de {r.total} marcados · {formatar_total(r.duracao_s)} de vídeo"
+        texto = f"{r.marcados} de {r.total} aprovados · {formatar_total(r.duracao_s)} de vídeo"
         pendentes = sum(
             1 for c in self._cortes if c.incluir and self.situacao(c) != SITUACAO_PRONTO
         )
@@ -1501,6 +1633,7 @@ class EditorDeCortes(ctk.CTkFrame):
             self._rotulo_nota.configure(text="Nenhum corte calculado ainda.")
             for rotulo in (self._rotulo_categoria, self._rotulo_alerta, self._rotulo_motivo):
                 rotulo.configure(text="")
+            self._mostrar_gemini()
         finally:
             self._carregando = False
 
@@ -1534,7 +1667,7 @@ class EditorDeCortes(ctk.CTkFrame):
         )
         self._rotulo_categoria.configure(
             text=f"{rotulo_da_origem(corte)}"
-            f"{' · reserva: só entra se você marcar' if corte.reserva else ''}",
+            f"{' · reserva: só entra se você aprovar' if corte.reserva else ''}",
             text_color=_COR_MANUAL if corte.origem == ORIGEM_MANUAL else _COR_SUAVE,
         )
         for chave, (barra, valor) in self._partes.items():
@@ -1563,6 +1696,7 @@ class EditorDeCortes(ctk.CTkFrame):
         for situacao in self._situacao_da_ia.values():
             situacao.configure(text="")
         self._atualizar_botoes_da_ia()
+        self._mostrar_gemini()
         self._mostrar_previa(corte)
 
     def _mostrar_postado(self, corte: Corte, falhas: list[str] | None = None) -> None:
@@ -1669,6 +1803,41 @@ class EditorDeCortes(ctk.CTkFrame):
 
     def _mostrar_agendamento(self, corte: Corte) -> None:
         self._linha_agendamento.carregar(corte.agendado_para, self._resumo_do_agendamento(corte))
+        self._mostrar_fila(corte)
+
+    def _mostrar_fila(self, corte: Corte) -> None:
+        """Sob o agendamento: o botão do YouTube e como o Short está na fila do PC."""
+        if self._publicacao is None:
+            return
+        marca = self._marcas_da_fila.get(corte.id)
+        marcado = self._horario_no_youtube(corte)
+        if marca is not None:
+            texto = marca.rotulo + (f" · {marca.detalhe}" if marca.detalhe else "")
+        elif marcado is not None:
+            texto = f"Programado no YouTube para {marcado:%d/%m às %H:%M}."
+        else:
+            texto = ""
+        if marcado is not None:
+            rotulo = "🕒 Reagendar no YouTube"
+        elif self.situacao(corte) != SITUACAO_PRONTO:
+            rotulo = "⚙ Renderizar e programar"
+        else:
+            rotulo = "📤 Programar no YouTube"
+        ocupado = marca is not None and marca.situacao == fila_dos_shorts.PROGRAMANDO
+        with contextlib.suppress(TclError):
+            self._linha_agendamento.mostrar_fila(
+                texto, pode_tirar=bool(marca and marca.item and not marca.item.fase),
+                ocupado=ocupado, rotulo=rotulo,
+            )  # fmt: skip
+
+    def _horario_no_youtube(self, corte: Corte) -> datetime | None:
+        """Para quando o Short está programado no YouTube (pelo Spurgeon), ou None."""
+        from spurgeon.remoto.despachante import horario_no_youtube
+
+        try:
+            return horario_no_youtube(self._pastas, corte.id)
+        except (OSError, ValueError):
+            return None
 
     def atualizar_redes(self) -> None:
         """O registro das redes mudou (a fila do Spurgeon publicou, por exemplo): refaz o resumo."""
@@ -1701,10 +1870,229 @@ class EditorDeCortes(ctk.CTkFrame):
             )  # só o texto: o que a pessoa está digitando nos campos não é reescrito
 
     def _ao_agendar(self, texto: str) -> None:
-        """A pessoa marcou, mudou ou tirou o horário agendado do corte aberto."""
+        """A pessoa marcou, mudou ou tirou o horário agendado do corte aberto. Se o Short já está
+        programado no YouTube, pergunta (logo depois que ela para de digitar) se troca lá também."""
         if self._atual is None or self._carregando or self._tela_desatualizada:
             return
-        self._gravar_agendamento(self._cortes[self._atual], texto)
+        corte = self._cortes[self._atual]
+        self._gravar_agendamento(corte, texto)
+        if self._publicacao is None or self._horario_no_youtube(corte) is None:
+            return
+        if self._reagendamento_pendente is not None:
+            with contextlib.suppress(TclError):
+                self.after_cancel(self._reagendamento_pendente)
+        self._reagendamento_pendente = self.after(
+            _ESPERA_PARA_REAGENDAR_MS, lambda id_=corte.id: self._perguntar_se_reagenda(id_)
+        )
+
+    def _perguntar_se_reagenda(self, id_do_corte: int) -> None:
+        """O horário de um Short programado no YouTube mudou aqui: reagendar lá também? Sem
+        reagendar, vale o do YouTube (o horário daqui volta a ser o dele)."""
+        self._reagendamento_pendente = None
+        corte = next((c for c in self._cortes if c.id == id_do_corte), None)
+        marcado = self._horario_no_youtube(corte) if corte is not None else None
+        if corte is None or marcado is None:
+            return
+        novo = ler_horario(corte.agendado_para)
+        novo = novo.replace(tzinfo=None) if novo is not None else None
+        if novo == marcado:
+            return
+        janela = self.winfo_toplevel()
+        if novo is None:
+            dialogos.aviso(
+                janela, "Programado no YouTube",
+                f"“{corte.titulo}” continua programado no YouTube para {marcado:%d/%m às %H:%M}. "
+                "Para tirar a programação de lá, use o YouTube Studio; aqui ele volta a mostrar o "
+                "horário do YouTube.",
+            )  # fmt: skip
+        elif dialogos.confirmar(
+            janela, "Reagendar no YouTube?",
+            f"“{corte.titulo}” está programado no YouTube para {marcado:%d/%m/%Y às %H:%M}.\n\n"
+            f"Reagendar o Short para o novo horário, {novo:%d/%m/%Y às %H:%M}? O Spurgeon abre o "
+            "YouTube Studio e troca o horário de postagem lá (pela fila, quando chegar a vez; só "
+            "até 5 minutos antes dele sair).",
+            sim="Reagendar", nao="Manter o do YouTube",
+        ) and self._pedir_reagendamento(corte, marcado, novo):  # fmt: skip
+            return
+        self._gravar_agendamento(corte, marcado.strftime(fila_dos_shorts.FORMATO))
+        if self._atual is not None and self._cortes[self._atual] is corte:
+            self._mostrar_agendamento(corte)
+
+    def _pedir_reagendamento(self, corte: Corte, marcado: datetime, novo: datetime) -> bool:
+        try:
+            fila_dos_shorts.pedir_reagendamento(
+                self._pastas, corte.id, marcado, novo, agora=self._relogio().replace(tzinfo=None)
+            )
+        except (fila_dos_shorts.PedidoInvalido, OSError) as erro:
+            dialogos.aviso(self.winfo_toplevel(), "Reagendar no YouTube", str(erro))
+            return False
+        self._depois_de_pedir_a_fila(f"“{corte.titulo}”: reagendar no YouTube para "
+                                     f"{novo:%d/%m às %H:%M} (na fila)")  # fmt: skip
+        return True
+
+    def _depois_de_pedir_a_fila(self, registro: str) -> None:
+        if self._publicacao is not None:
+            self._publicacao.registrar(registro)
+            self._publicacao.acordar_fila()
+        self.ver_a_fila_agora()
+
+    # --- a fila do PC: programar no YouTube ----------------------------------------------------
+    def programar_no_youtube(self) -> bool:
+        """Põe o Short aberto na fila do YouTube, no horário do "Agendado para" (sem horário,
+        publica agora). Ainda sem renderizar (ou mudado depois do render), a fila renderiza antes.
+        Já programado no YouTube: troca o horário lá. Devolve True se entrou na fila."""
+        if self._atual is None or self._publicacao is None:
+            return False
+        from spurgeon.remoto.postagem import do_youtube, sermao_do_projeto
+
+        janela = self.winfo_toplevel()
+        corte = self._cortes[self._atual]
+        quando = self._linha_agendamento.horario()
+        quando = quando.replace(tzinfo=None) if quando is not None else None
+        marcado = self._horario_no_youtube(corte)
+        if marcado is not None:
+            if quando is None or quando == marcado:
+                dialogos.aviso(
+                    janela, "Programado no YouTube",
+                    f"Este Short já está programado no YouTube para {marcado:%d/%m às %H:%M}. "
+                    "Para trocar, escreva o novo dia e a nova hora em “Agendado para”.",
+                )  # fmt: skip
+                return False
+            self._perguntar_se_reagenda(corte.id)
+            return True
+        anterior = do_youtube(self._pastas, corte.id)
+        if anterior is not None and anterior.estado == ENVIADO:
+            dialogos.aviso(janela, "Programar no YouTube", "Este Short já saiu no YouTube.")
+            return False
+        marca = self._marcas_da_fila.get(corte.id)
+        if marca is not None and marca.situacao == fila_dos_shorts.PROGRAMANDO:
+            dialogos.aviso(janela, "Programar no YouTube", "Ele está sendo programado agora.")
+            return False
+        if not corte.incluir:  # programar é aprovar: a fila só renderiza os aprovados
+            corte.incluir = True
+            self._marcas[self._atual].set(True)
+            self._houve_mudanca()
+        self._guardar_detalhe()
+        if self._mudou and not self.salvar():
+            return False
+        pronto = self.situacao(corte) == SITUACAO_PRONTO
+        sermao = sermao_do_projeto(self._pastas)
+        texto = (
+            f"Programar “{corte.titulo}” no YouTube para {quando:%d/%m/%Y às %H:%M}"
+            if quando is not None else f"Publicar “{corte.titulo}” no YouTube agora"
+        ) + f", vinculado ao sermão “{sermao}”?"  # fmt: skip
+        if not pronto:
+            texto += (
+                "\n\nEle ainda não está renderizado (ou mudou depois do render): o Spurgeon o "
+                "renderiza antes, pela fila, e só depois programa."
+            )
+        texto += (
+            "\n\nTudo passa pela fila do PC: primeiro as renderizações, depois o YouTube (uma "
+            "janela do Chrome abre o YouTube Studio e faz tudo sozinha), um Short por vez."
+        )
+        if quando is None:
+            texto += "\n\nPara programar um horário, marque antes o “Agendado para”."
+        sim = "Programar" if quando is not None else "Publicar"
+        if not dialogos.confirmar(janela, "Programar no YouTube", texto, sim=sim, nao="Voltar"):
+            return False
+        try:
+            fila_dos_shorts.pedir_postagem(
+                self._pastas, corte.id, quando, sermao, agora=self._relogio().replace(tzinfo=None)
+            )
+        except (fila_dos_shorts.PedidoInvalido, OSError) as erro:
+            dialogos.aviso(janela, "Programar no YouTube", str(erro))
+            return False
+        self._depois_de_pedir_a_fila(f"“{corte.titulo}” entrou na fila do YouTube")
+        return True
+
+    def tirar_da_fila(self) -> None:
+        if self._atual is None:
+            return
+        corte = self._cortes[self._atual]
+        try:
+            fila_dos_shorts.tirar_da_fila(self._pastas, corte.id)
+        except (fila_dos_shorts.PedidoInvalido, OSError) as erro:
+            dialogos.aviso(self.winfo_toplevel(), "Fila do PC", str(erro))
+        self.ver_a_fila_agora()
+
+    def ver_a_fila_agora(self) -> None:
+        """A fila mudou (um pedido, um item que terminou): olha agora, sem esperar."""
+        self._olhar_a_fila()
+
+    def _olhar_a_fila(self) -> None:
+        """A cada poucos segundos: as marcas da fila de cada Short, a renderização que a fila (ou
+        o celular) faz neste projeto e o que eles mudaram no disco (o agendamento)."""
+        if self._fila_pendente is not None:
+            with contextlib.suppress(TclError):
+                self.after_cancel(self._fila_pendente)
+            self._fila_pendente = None
+        try:
+            render = fila_dos_shorts.render_em_andamento(self._pastas)
+            if render != self._render_visto:
+                if self._render_visto is not None and (
+                    render is None or render.feitos != self._render_visto.feitos
+                ):
+                    self.recarregar_registro(reordenar=False)  # um Short ficou pronto
+                self._render_visto = render
+            prontos = {c.id for c in self._cortes if self.situacao(c) == SITUACAO_PRONTO}
+            marcas = fila_dos_shorts.marcas_do_projeto(
+                self._pastas, prontos.__contains__, [c.id for c in self._cortes]
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            marcas, render = self._marcas_da_fila, self._render_visto
+        fora = render is not None and not self._processando_pelo_app
+        if fora != self._render_de_fora:
+            self._render_de_fora = fora
+            self._acertar_processamento()
+        if marcas != self._marcas_da_fila:
+            saiu = set(self._marcas_da_fila) - set(marcas)
+            mudaram = {i for i in set(marcas) | set(self._marcas_da_fila)
+                        if marcas.get(i) != self._marcas_da_fila.get(i)}  # fmt: skip
+            self._marcas_da_fila = marcas
+            if saiu:  # um item terminou: a fila pode ter programado (o agendamento mudou)
+                self._sincronizar_publicacao_do_disco()
+                self.recarregar_registro(reordenar=False)
+            for i, corte in enumerate(self._cortes):
+                if corte.id in mudaram:
+                    self._atualizar_linha(i)
+            if self._atual is not None and self._cortes:
+                atual = self._cortes[self._atual]
+                if atual.id in saiu:
+                    self._mostrar_agendamento(atual)
+                    self._mostrar_postado(atual)
+        if self._atual is not None and self._cortes:  # o botão muda quando o Short fica pronto
+            self._mostrar_fila(self._cortes[self._atual])
+        with contextlib.suppress(TclError):
+            self._fila_pendente = self.after(_OLHAR_A_FILA_MS, self._olhar_a_fila)
+
+    def _sincronizar_publicacao_do_disco(self) -> list[int]:
+        """O agendamento e o "já postado" que outro mudou no disco (a fila, o celular, o
+        cronograma acertando com o YouTube) passam para a tela. Só o que mudou no disco desde a
+        última olhada: o que está só na tela (ainda não salvo) fica. Devolve os índices."""
+        try:
+            no_disco = {c.id: c for c in carregar_cortes(self._pastas.cortes_shorts)}
+        except (OSError, ValueError, TypeError, KeyError):
+            return []
+        mudaram = []
+        for i, corte in enumerate(self._cortes):
+            lido = no_disco.get(corte.id)
+            if lido is None:
+                continue
+            agora_no_disco = _campos_de_publicacao(lido)
+            visto = self._publicacao_no_disco.get(corte.id)
+            self._publicacao_no_disco[corte.id] = agora_no_disco
+            if visto is None or agora_no_disco == visto:
+                continue  # ninguém mexeu no disco: vale o que está na tela
+            if agora_no_disco != _campos_de_publicacao(corte):
+                for nome, valor in zip(_CAMPOS_DE_PUBLICACAO, agora_no_disco, strict=True):
+                    setattr(corte, nome, valor)
+                mudaram.append(i)
+        for i in mudaram:
+            self._atualizar_linha(i)
+        if mudaram and self._atual in mudaram:
+            self._mostrar_agendamento(self._cortes[self._atual])
+            self._mostrar_postado(self._cortes[self._atual])
+        return mudaram
 
     def _abrir_postagem(self) -> None:
         """Abre a janela que envia este Short às redes (agora ou no horário marcado)."""
@@ -1777,6 +2165,7 @@ class EditorDeCortes(ctk.CTkFrame):
             with contextlib.suppress(TclError):
                 self.after_cancel(self._agendamento_pendente)
             self._agendamento_pendente = None
+        self._sincronizar_publicacao_do_disco()
         agora = self._relogio()
         venceram = [c for c in self._cortes if c.agendado_para and aplicar_vencimento(c, agora)]
         for corte in venceram:
@@ -1896,7 +2285,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._configurar(
             self._rotulo_limite,
             text=(
-                f"⚠ {AVISO_ACIMA_DO_LIMITE} Encurte o corte (ou desmarque-o) antes de "
+                f"⚠ {AVISO_ACIMA_DO_LIMITE} Encurte o corte (ou tire a aprovação) antes de "
                 f"renderizar; o limite é {DURACAO_MAXIMA_S:g} s."
                 if acima
                 else ""
@@ -2491,6 +2880,67 @@ class EditorDeCortes(ctk.CTkFrame):
         )
         return self._dicionario
 
+    # --- ajuste fino da legenda --------------------------------------------------------------
+    def abrir_ajuste_fino(self) -> JanelaDoAjusteFino | None:
+        """Abre a janela do ajuste fino para o Short aberto (com o texto da caixa já levado a ele).
+        O que a pessoa salva lá entra no corte e vale ao salvar o Studio, como a legenda."""
+        if self._atual is None or self._tela_desatualizada:
+            return None
+        janela = self.winfo_toplevel()
+        aberta = getattr(self, "_janela_do_ajuste", None)
+        if aberta is not None and aberta.winfo_exists():
+            aberta.lift()
+            return aberta
+        self._guardar_detalhe()
+        corte = self._cortes[self._atual]
+        palavras = palavras_com_a_legenda(self._palavras, corte)
+        if not palavras:
+            dialogos.aviso(janela, "Ajuste fino", "Este Short não tem palavras da transcrição.")
+            return None
+        try:
+            fonte, aviso = fonte_do_som(self._pastas), ""
+        except SemSom as erro:
+            fonte, aviso = None, str(erro)
+        id_ = corte.id
+        self._janela_do_ajuste = JanelaDoAjusteFino(
+            janela,
+            corte=corte,
+            palavras=palavras,
+            fonte=fonte,
+            aviso_do_som=aviso,
+            ao_salvar=lambda itens: self._aplicar_ajuste_fino(id_, itens),
+            ao_desfazer=(lambda: self._aplicar_ajuste_fino(id_, None))
+            if ajuste_fino.tem_ajuste(corte)
+            else None,
+        )
+        return self._janela_do_ajuste
+
+    def _aplicar_ajuste_fino(self, id_: int, itens) -> None:
+        """`itens` é a lista acertada na janela; `None` desfaz o ajuste do Short."""
+        indice = next((i for i, c in enumerate(self._cortes) if c.id == id_), None)
+        if indice is None:
+            return
+        corte = self._cortes[indice]
+        self._registrar_no_historico(corte)
+        if itens is None:
+            ajuste_fino.desfazer(corte)
+        else:
+            try:
+                ajuste_fino.aplicar(corte, palavras_do_corte(self._palavras, corte), itens)
+            except ajuste_fino.AjusteInvalido as erro:
+                dialogos.aviso(self.winfo_toplevel(), "Ajuste fino", str(erro))
+                return
+        if self._atual == indice:
+            self._carregando = True
+            try:
+                self._mostrar_legenda(corte)
+                self._preencher_janela(corte)
+            finally:
+                self._carregando = False
+            self._mostrar_previa(corte)
+        self._atualizar_linha(indice)
+        self._houve_mudanca()
+
     def _ao_corrigir_portugues(self) -> None:
         self._ao_editar_legenda()
         self.after_idle(self._reorganizar_legenda)  # corrigir pode mudar onde a linha quebra
@@ -2511,7 +2961,10 @@ class EditorDeCortes(ctk.CTkFrame):
             o.tratamento_nos_curtos.model_dump(),
             [list(salto) for salto in corte.saltos],
             corte.pausa_s,
+            corte.ajuste_fino,
         ]
+        if o.trilha_externa is not None:  # só entra quando existe: as prévias de antes valem
+            dados.append(str(o.trilha_externa))
         return hashlib.sha1(json.dumps(dados, sort_keys=True, default=str).encode()).hexdigest()[
             :12
         ]
@@ -2752,6 +3205,7 @@ class EditorDeCortes(ctk.CTkFrame):
                 pasta_fontes=fontes,
                 ao_progresso=definir_progresso,
                 cancelar=cancelar,
+                audio_externo=o.trilha_externa,
             ),
             pronta,
             falhou,
@@ -2790,13 +3244,17 @@ class EditorDeCortes(ctk.CTkFrame):
 
     def destroy(self) -> None:
         self._cancelar_previa.set()
-        for nome in ("_sincronizacao", "_acompanhar_a_tabela", "_agendamento_pendente"):
+        for nome in (
+            "_sincronizacao", "_acompanhar_a_tabela", "_agendamento_pendente", "_fila_pendente",
+            "_reagendamento_pendente",
+        ):  # fmt: skip
             pendente = getattr(self, nome)
             if pendente is not None:
                 with contextlib.suppress(TclError):
                     self.after_cancel(pendente)
                 setattr(self, nome, None)
         self._refazendo = None  # a IA que ainda pensa não tem mais onde entregar o resultado
+        self._revisando_gemini = None
         janela = self.winfo_toplevel()
         for evento, identificador in self._atalhos_do_historico:
             with contextlib.suppress(TclError):
@@ -2941,6 +3399,103 @@ class EditorDeCortes(ctk.CTkFrame):
             f"Não foi possível refazer {_ROTULO_DO_CAMPO[campo]}: {erro}",
         )
 
+    # --- a revisão do Gemini ---------------------------------------------------------------------
+    def _mostrar_gemini(self) -> None:
+        corte = self._cortes[self._atual] if self._atual is not None and self._cortes else None
+        erro = ""
+        if corte is not None and self._erro_do_gemini and self._erro_do_gemini[0] == corte.id:
+            erro = self._erro_do_gemini[1]
+        with contextlib.suppress(TclError):
+            self._quadro_gemini.mostrar(
+                corte,
+                revisando=corte is not None and self._revisando_gemini == corte.id,
+                ocupado=self._revisando_gemini is not None,
+                erro=erro,
+            )
+
+    def revisar_com_gemini(self) -> bool:
+        """Pede ao Gemini o parecer do Short aberto (a legenda, o título e a descrição que estão
+        na tela agora). Roda em segundo plano; o parecer é gravado no corte assim que chega (como o
+        👍/👎) e a lista ganha o selo "✨ Gemini". Um Short por vez. False se não pôde começar."""
+        if (
+            self._atual is None
+            or self._revisando_gemini is not None
+            or self._tarefas is None
+            or self._publicacao is None
+        ):
+            return False
+        janela = self.winfo_toplevel()
+        config = self._publicacao.gemini()
+        if config is None:
+            dialogos.aviso(
+                janela,
+                "Revisar com o Gemini",
+                "Para o Gemini revisar os Shorts, cole a chave da API na aba Integrações (no "
+                "cartão “Revisão dos Shorts pelo Google Gemini”) e clique em Salvar e testar.",
+            )
+            return False
+        self._guardar_detalhe()
+        corte = Corte.de_dict(self._cortes[self._atual].para_dict())  # a thread usa uma cópia
+        texto = " ".join(legenda_do_corte(self._palavras, corte).split()) or corte.texto
+        sermao = nome_do_sermao(self._pastas.raiz)
+        id_ = corte.id
+        self._revisando_gemini = id_
+        self._erro_do_gemini = None
+        self._mostrar_gemini()
+        self._tarefas.rodar(
+            lambda: revisao_gemini.revisar(config, corte, texto, sermao=sermao),
+            lambda revisao: self._gemini_pronto(id_, revisao),
+            lambda erro: self._gemini_falhou(id_, erro),
+            chave=f"gemini_{id_}",
+        )
+        return True
+
+    def _gemini_pronto(self, id_: int, revisao: revisao_gemini.RevisaoDoGemini) -> None:
+        if not self.winfo_exists():
+            return
+        self._revisando_gemini = None
+        indice = next((i for i, c in enumerate(self._cortes) if c.id == id_), None)
+        if indice is not None:
+            self._cortes[indice].revisao_gemini = revisao.para_dict()
+            try:
+                gravado = revisao_gemini.gravar(self._pastas.cortes_shorts, id_, revisao)
+            except (OSError, ValueError, TypeError, KeyError):
+                gravado = False
+            if not gravado:  # o corte ainda não está no arquivo: vai junto no próximo "Salvar"
+                self._houve_mudanca()
+            self._atualizar_linha(indice)
+        self._mostrar_gemini()
+
+    def _gemini_falhou(self, id_: int, erro: Exception) -> None:
+        if not self.winfo_exists():
+            return
+        self._revisando_gemini = None
+        if isinstance(erro, ErroSpurgeon | revisao_gemini.TextoCurto):
+            self._erro_do_gemini = (id_, str(erro))
+        else:
+            self._erro_do_gemini = (id_, f"Erro inesperado na revisão: {erro}")
+        self._mostrar_gemini()
+
+    def usar_sugestao_do_gemini(self, campo: str) -> None:
+        """Leva para o campo o título ou a descrição que o Gemini sugeriu (vale ao salvar)."""
+        if self._atual is None or self._tela_desatualizada:
+            return
+        corte = self._cortes[self._atual]
+        revisao = revisao_gemini.da_revisao(corte)
+        sugestao = sugestao_de(revisao, campo) if revisao else ""
+        if not sugestao:
+            return
+        if campo == "titulo":
+            corte.slug = ""  # o nome do arquivo acompanha o título novo (refeito ao salvar)
+            self._var_titulo.set(sugestao)
+        else:
+            self._campo_descricao.delete("1.0", "end")
+            self._campo_descricao.insert("1.0", sugestao)
+        self._guardar_detalhe()
+        self._atualizar_linha(self._atual)
+        self._houve_mudanca()
+        self._mostrar_gemini()
+
     # --- estado e gravação --------------------------------------------------------------------
     def _marcar_mudanca(self) -> None:
         if self._atual is not None and not self._carregando:
@@ -2983,14 +3538,14 @@ class EditorDeCortes(ctk.CTkFrame):
             dialogos.aviso(
                 janela,
                 f"Corte com mais de {DURACAO_MAXIMA_S:g} segundos",
-                f"{AVISO_ACIMA_DO_LIMITE}\n\n{lista}\n\nEncurte o corte ou desmarque-o.",
+                f"{AVISO_ACIMA_DO_LIMITE}\n\n{lista}\n\nEncurte o corte ou tire a aprovação dele.",
             )
             return False
         r = resumir(self._cortes)
         if r.marcados == 0 and not dialogos.confirmar(
             janela,
-            "Nenhum corte marcado",
-            "Sem cortes marcados, nenhum Short será gerado. Salvar assim mesmo?",
+            "Nenhum corte aprovado",
+            "Sem cortes aprovados, nenhum Short será gerado. Salvar assim mesmo?",
             sim="Salvar",
             nao="Voltar",
         ):
@@ -2999,8 +3554,8 @@ class EditorDeCortes(ctk.CTkFrame):
             dialogos.aviso(
                 janela,
                 "Corte sem título",
-                f"{r.sem_titulo} corte(s) marcado(s) estão sem título. Escreva um título ou "
-                "desmarque o corte.",
+                f"{r.sem_titulo} corte(s) aprovado(s) estão sem título. Escreva um título ou "
+                "tire a aprovação do corte.",
             )
             return False
         self._gravar_no_disco()
@@ -3014,6 +3569,7 @@ class EditorDeCortes(ctk.CTkFrame):
         self._gravar_no_disco()
 
     def _gravar_no_disco(self) -> None:
+        self._sincronizar_publicacao_do_disco()  # a fila pode ter programado: não desfaz
         usados: set[str] = set()
         for corte in self._cortes:
             if corte.titulo != self._titulo_do_nome.get(corte.id, corte.titulo):
@@ -3039,7 +3595,13 @@ class EditorDeCortes(ctk.CTkFrame):
     # arquivos. A marca vale na hora no `cortes_shorts.json`; o arquivo muda de lugar no fim.
     def definir_processamento(self, ativo: bool) -> None:
         """Diz ao editor se há um processamento rodando. Ao terminar, leva os arquivos para as
-        pastas e os nomes que o que foi salvo pede e relê o que foi renderizado."""
+        pastas e os nomes que o que foi salvo pede e relê o que foi renderizado. Uma renderização
+        de fora (a fila, o celular) vale também (`_olhar_a_fila`)."""
+        self._processando_pelo_app = ativo
+        self._acertar_processamento()
+
+    def _acertar_processamento(self) -> None:
+        ativo = self._processando_pelo_app or self._render_de_fora
         if ativo == self._processando:
             return
         self._processando = ativo

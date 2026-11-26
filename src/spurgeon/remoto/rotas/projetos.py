@@ -8,19 +8,27 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
+from spurgeon.core.erros import ErroFFmpeg
 from spurgeon.core.estado import StatusEtapa, carregar_estado
-from spurgeon.remoto import configuracao, dados, limpeza, novo, sessao
+from spurgeon.remoto import configuracao, dados, limpeza, novo, sessao, tratamento, trilha
 from spurgeon.remoto.contexto import Contexto
 from spurgeon.remoto.fila import AJUSTES_DA_RENDERIZACAO, FilaOcupada
+from spurgeon.shorts.edicao import passa_do_limite
+from spurgeon.shorts.fila import pedir_render
 
 
 def rotas(ctx: Contexto) -> list[Route]:
+    def _acordar() -> None:
+        if ctx.despachante is not None:
+            ctx.despachante.acordar()
+
     def _pastas(request: Request):
         try:
             return dados.achar_projeto(ctx.pasta_projetos, request.path_params["projeto"])
@@ -91,7 +99,7 @@ def rotas(ctx: Contexto) -> list[Route]:
         pastas = _pastas(request)
         faltam = dados.a_renderizar(pastas)
         if not faltam:
-            raise HTTPException(409, "Nenhum Short marcado precisa ser renderizado.")
+            raise HTTPException(409, "Nenhum Short aprovado precisa ser renderizado.")
         if dados.video_original(pastas) is None:
             raise HTTPException(
                 409,
@@ -100,9 +108,56 @@ def rotas(ctx: Contexto) -> list[Route]:
             )
         try:
             ctx.fila.iniciar(pastas, ajustes=AJUSTES_DA_RENDERIZACAO)
-        except FilaOcupada as erro:
-            raise HTTPException(409, str(erro)) from erro
+        except FilaOcupada:  # o PC está ocupado: os Shorts esperam a vez na fila
+            pedir_render(pastas, [s.corte.id for s in faltam])
+            _acordar()
+            return JSONResponse({"ok": True, "shorts": len(faltam), "na_fila": True,
+                                 "fila": ctx.fila.estado()})  # fmt: skip
         return JSONResponse({"ok": True, "shorts": len(faltam), "fila": ctx.fila.estado()})
+
+    async def renderizar_um_async(request: Request) -> JSONResponse:
+        """Renderiza só este Short (`{"refazer": true}`: de novo, mesmo se o pronto ainda vale),
+        sem mexer na aprovação dos outros."""
+        try:
+            corpo = await request.json()
+        except ValueError:
+            corpo = {}
+        if not isinstance(corpo, dict):
+            raise HTTPException(400, "Pedido inválido.")
+        pastas = _pastas(request)
+        return await run_in_threadpool(_renderizar_um, pastas, request.path_params["corte"], corpo)
+
+    def _renderizar_um(pastas, id_do_corte: int, corpo: dict) -> JSONResponse:
+        refazer = corpo.get("refazer", False)
+        if not isinstance(refazer, bool):
+            raise HTTPException(400, "Pedido inválido.")
+        achado = next((s for s in dados.shorts_no_disco(pastas) if s.corte.id == id_do_corte), None)
+        if achado is None:
+            raise HTTPException(404, "Este corte não existe no projeto.")
+        if achado.numero is None:
+            raise HTTPException(409, "Aprove este Short antes de renderizá-lo.")
+        if passa_do_limite(achado.corte):
+            raise HTTPException(409, "Este Short passa do limite de duração: encurte-o antes.")
+        if not refazer and achado.situacao == "pronto":
+            raise HTTPException(
+                409, "Este Short já está pronto. Para renderizá-lo de novo, use Refazer."
+            )
+        if dados.video_original(pastas) is None:
+            raise HTTPException(
+                409,
+                "O vídeo original deste projeto não está mais no PC: sem ele não dá para "
+                "renderizar. Ponha o vídeo de volta no lugar de antes.",
+            )
+        try:
+            ctx.fila.iniciar(
+                pastas, ajustes=AJUSTES_DA_RENDERIZACAO, so_os_shorts=[id_do_corte], refazer=refazer
+            )
+        except FilaOcupada:  # o PC está ocupado: o Short espera a vez na fila
+            pedir_render(pastas, [id_do_corte], refazer=refazer)
+            _acordar()
+            return JSONResponse({"ok": True, "shorts": 1, "na_fila": True,
+                                 "fila": ctx.fila.estado()})  # fmt: skip
+        return JSONResponse({"ok": True, "shorts": 1, "fila": ctx.fila.estado()})
 
     def processar(request: Request) -> JSONResponse:
         """Começa (ou continua de onde parou) o processamento do projeto, com as opções dele."""
@@ -142,6 +197,32 @@ def rotas(ctx: Contexto) -> list[Route]:
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"},
         )  # fmt: skip
 
+    # --- trilha de áudio de fora e o áudio pronto do "Só o áudio" (`remoto/trilha.py`) ----------
+    async def enviar_trilha(request: Request) -> JSONResponse:
+        """O arquivo vem inteiro no corpo; `?nome=` traz o nome original (para a extensão)."""
+        pastas = _pastas(request)
+        try:
+            return JSONResponse(
+                await trilha.receber_trilha(
+                    pastas, request.query_params.get("nome", ""), request.stream()
+                )
+            )
+        except configuracao.OpcaoInvalida as erro:
+            raise HTTPException(422, str(erro)) from erro
+
+    def audio_do_sermao(request: Request) -> FileResponse:
+        pastas = _pastas(request)
+        arquivo = dados.audio_pronto(pastas)
+        if arquivo is None:
+            raise HTTPException(404, "O áudio deste projeto ainda não foi gravado.")
+        lido = dados.ler_nome_e_data(pastas.raiz)
+        nome = f"{lido[0] if lido else pastas.raiz.name}{arquivo.suffix}"
+        tipo = "audio/mpeg" if arquivo.suffix == ".mp3" else "audio/wav"
+        return FileResponse(
+            arquivo, media_type=tipo,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"},
+        )  # fmt: skip
+
     # --- opções do projeto e "Começar" (`remoto/configuracao.py`, `remoto/novo.py`) -------------
     def opcoes(request: Request) -> JSONResponse:
         try:
@@ -170,6 +251,48 @@ def rotas(ctx: Contexto) -> list[Route]:
         except novo.NovoInvalido as erro:
             raise HTTPException(409, str(erro)) from erro
         return JSONResponse(tarefa.para_json())
+
+    def baixar(request: Request) -> JSONResponse:
+        """Só baixa o vídeo do canal (sem processar), para a prévia do tratamento de imagem."""
+        pastas = _pastas(request)
+        try:
+            tarefa = ctx.novos.comecar(pastas, processar=False)
+        except novo.NovoInvalido as erro:
+            raise HTTPException(409, str(erro)) from erro
+        return JSONResponse(tarefa.para_json())
+
+    def quadro_do_tratamento(request: Request) -> Response:
+        """Um quadro do vídeo em PNG: `?i=` escolhe qual; sem `original=1`, com os ajustes que
+        vêm na consulta (`brilho`, `contraste`… de −100 a 100)."""
+        pastas = _pastas(request)
+        consulta = request.query_params
+        try:
+            indice = int(consulta.get("i", "0"))
+            ajustes = (
+                None if consulta.get("original") == "1"
+                else tratamento.tratamento_do_pedido(dict(consulta))
+            )  # fmt: skip
+        except (ValueError, ValidationError) as erro:
+            raise HTTPException(400, "Ajuste inválido.") from erro
+        try:
+            png = tratamento.quadro_png(pastas, indice, ajustes)
+        except tratamento.SemVideo as erro:
+            raise HTTPException(409, str(erro)) from erro
+        except ErroFFmpeg as erro:
+            raise HTTPException(500, "Não deu para ler um quadro do vídeo.") from erro
+        return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    def sugerir_tratamento(request: Request) -> JSONResponse:
+        """A sugestão automática: mede o vídeo e grava o tratamento nas opções do projeto."""
+        pastas = _pastas(request)
+        try:
+            return JSONResponse(tratamento.sugerir(pastas))
+        except tratamento.SemVideo as erro:
+            raise HTTPException(409, str(erro)) from erro
+        except configuracao.OpcaoInvalida as erro:
+            raise HTTPException(422, str(erro)) from erro
+        except ErroFFmpeg as erro:
+            raise HTTPException(500, "Não deu para ler os quadros do vídeo.") from erro
 
     # --- liberar espaço (`remoto/limpeza.py`) ----------------------------------------------------
     def _impedimento(pastas, *, apagando: bool) -> str:
@@ -228,13 +351,23 @@ def rotas(ctx: Contexto) -> list[Route]:
         Route("/api/projetos/{projeto}/opcoes", opcoes),
         Route("/api/projetos/{projeto}/opcoes", mudar_opcoes, methods=["POST"]),
         Route("/api/projetos/{projeto}/comecar", comecar, methods=["POST"]),
+        Route("/api/projetos/{projeto}/baixar", baixar, methods=["POST"]),
+        Route("/api/projetos/{projeto}/tratamento/quadro", quadro_do_tratamento),
+        Route("/api/projetos/{projeto}/tratamento/sugerir", sugerir_tratamento, methods=["POST"]),
         Route("/api/projetos/{projeto}/espaco", espaco),
         Route("/api/projetos/{projeto}/varrer", varrer, methods=["POST"]),
         Route("/api/projetos/{projeto}/apagar", apagar, methods=["POST"]),
         Route("/api/projetos/{projeto}/legenda.txt", legenda_do_sermao),
+        Route("/api/projetos/{projeto}/trilha", enviar_trilha, methods=["POST"]),
+        Route("/api/projetos/{projeto}/audio", audio_do_sermao),
         Route("/api/projetos/{projeto}/processar", processar, methods=["POST"]),
         Route("/api/projetos/{projeto}/aprovar", aprovar, methods=["POST"]),
         Route("/api/projetos/{projeto}/renderizar", renderizar, methods=["POST"]),
+        Route(
+            "/api/projetos/{projeto}/shorts/{corte:int}/renderizar",
+            renderizar_um_async,
+            methods=["POST"],
+        ),
         Route("/api/projetos", lista),
         Route("/api/projetos/{projeto}", detalhe),
         Route("/api/projetos/{projeto}/andamento", andamento),

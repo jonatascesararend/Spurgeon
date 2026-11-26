@@ -62,8 +62,11 @@ from spurgeon.publicacao.cofre import Cofre
 from spurgeon.publicacao.fila import projetos_com_fila, rodar_fila
 from spurgeon.publicacao.modelo import ERRO
 from spurgeon.remoto import sessao as sessao_do_celular  # controle remoto
-from spurgeon.remoto.fila import trabalhadores_rodando
+from spurgeon.remoto.despachante import Despachante, Vez, arquivo_da_vez
+from spurgeon.remoto.fila import Fila, trabalhadores_rodando
 from spurgeon.render.shorts import assinatura_visual
+from spurgeon.shorts import fila as fila_dos_shorts
+from spurgeon.shorts import gemini
 from spurgeon.shorts.livre import ContextoDaIA
 from spurgeon.ui import dialogos, dicas, icone
 from spurgeon.ui.aba_studio import PAINEL_CORTES, PAINEL_LIVRE, AbaStudioShorts
@@ -200,6 +203,9 @@ class JanelaPrincipal(ctk.CTk):
         #: controle remoto (Remoto.md, R8): o celular está com o projeto aberto
         self._celular_com_o_projeto = False
         self._janela_anunciada_em = 0.0
+        #: anda a fila dos Shorts (renderizar e programar no YouTube): None até a abertura de
+        #: verdade (os testes não a ligam)
+        self._despachante: Despachante | None = None
 
         self.title("Studio Spurgeon")
         self._ajustar_tamanho()
@@ -214,6 +220,7 @@ class JanelaPrincipal(ctk.CTk):
             self.after(_ATUALIZACAO_MS, self._verificar_atualizacao)
         if verificar_atualizacao:  # a abertura de verdade também anda a fila de postagens
             self._fila_agendada = self.after(_FILA_PRIMEIRA_MS, self._rodar_a_fila)
+            self._ligar_a_fila_dos_shorts()
 
     # --- montagem -----------------------------------------------------------------------------
     def _ajustar_tamanho(self) -> None:
@@ -345,6 +352,8 @@ class JanelaPrincipal(ctk.CTk):
                 plataformas=lambda: self._plataformas,
                 tarefas=self.tarefas,
                 registrar=self._registrar_atividade,
+                gemini=lambda: gemini.configuracao(self.cofre),
+                acordar_fila=self._acordar_a_fila_dos_shorts,
             ),
         )
         self.integracoes = AbaIntegracoes(
@@ -603,7 +612,9 @@ class JanelaPrincipal(ctk.CTk):
         """Mostra quanto tempo o processamento deve levar com o que está marcado na tela."""
         valores = self._valores()
         self.entrada.modo_so_vinhetas(
-            valores.modo == "so_vinhetas", shorts=shorts_do_formulario(valores)
+            valores.modo == "so_vinhetas",
+            shorts=shorts_do_formulario(valores),
+            so_audio=valores.modo == "so_audio",
         )
         self.fonte.definir_janela(*self.entrada.aparar.janela())
         self.entrada.shorts.atualizar_previa()  # zoom, cor ou recorte podem ter mudado o Short
@@ -753,7 +764,7 @@ class JanelaPrincipal(ctk.CTk):
             ("Retomando o projeto" if criado.retomado else "Projeto criado")
             + f": {criado.pastas.raiz}"
         )
-        if config.padroes.modo == "completo":
+        if config.padroes.modo in ("completo", "so_audio"):  # o áudio sai na pasta do projeto
             abrir_pasta(criado.pastas.raiz)
         self._iniciar_execucao()
 
@@ -763,9 +774,14 @@ class JanelaPrincipal(ctk.CTk):
             da_tela = para_opcoes(self._valores(), self.config_app.padroes)
         except ErroFormulario:
             da_tela = executadas
-        # o começo e o fim são de cada vídeo: não viram preferência para o próximo
+        # o começo, o fim e a trilha de áudio de fora são de cada vídeo: não viram preferência
         return da_tela.model_copy(
-            update={"modo": "completo", "video_inicio_s": 0.0, "video_fim_s": 0.0}
+            update={
+                "modo": "completo",
+                "video_inicio_s": 0.0,
+                "video_fim_s": 0.0,
+                "audio_externo": "",
+            }
         )
 
     def _lembrar_preferencias(self, config: ConfigApp, projeto: Path | None = None) -> None:
@@ -847,8 +863,8 @@ class JanelaPrincipal(ctk.CTk):
             return ""
         if outros:
             return (
-                "O PC já está processando um projeto (pedido pelo celular). Espere terminar: "
-                "o andamento aparece no celular."
+                "O PC já está processando um projeto (pedido pelo celular ou pela fila dos "
+                "Shorts). Espere terminar: o andamento aparece no celular e no Studio Shorts."
             )
         return ""
 
@@ -1477,13 +1493,8 @@ class JanelaPrincipal(ctk.CTk):
         """Renderiza os Shorts marcados que ainda não existem (ou mudaram), sem o resto."""
         if self._pastas is None or not self.studio.liberada or self.studio.editor is None:
             return
-        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
-            dialogos.aviso(
-                self,
-                "Renderizar os Shorts",
-                "Já há uma renderização em andamento. Quando ela terminar, o que você mudou "
-                "nos Shorts nesse meio tempo pode ser renderizado.",
-            )
+        if self._pc_ocupado():
+            self._renderizar_pela_fila()
             return
         if not self.studio.salvar():
             return
@@ -1517,6 +1528,70 @@ class JanelaPrincipal(ctk.CTk):
         self._trocar_aba(ABA_PROCESSAMENTO)
         self._iniciar(ajustes)
 
+    def _pc_ocupado(self) -> bool:
+        """Há um processamento rodando no PC (desta janela, da fila dos Shorts ou do celular)."""
+        if self.execucao.estado in _ESTADOS_OCUPADOS or self.executor.ativo:
+            return True
+        try:
+            return bool(trabalhadores_rodando())
+        except Exception:  # sem como saber (permissão do Windows): não impede
+            return False
+
+    def _renderizar_pela_fila(self) -> None:
+        """O PC já está renderizando: os Shorts aprovados que faltam entram na fila e são
+        renderizados assim que a vez chegar (sem parar o que está rodando)."""
+        if self._pastas is None or self.studio.editor is None or not self.studio.salvar():
+            return
+        pendentes = self.studio.editor.pendentes()
+        if not pendentes:
+            self.studio.aviso_sem_pendentes()
+            return
+        try:
+            fila_dos_shorts.pedir_render(self._pastas, [c.id for c in pendentes])
+        except OSError as erro:
+            dialogos.erro(self, "Renderizar os Shorts", f"Não deu para pôr na fila: {erro}")
+            return
+        self._acordar_a_fila_dos_shorts()
+        self.studio.editor.ver_a_fila_agora()
+        n = len(pendentes)
+        quem = "O Short entrou" if n == 1 else f"Os {n} Shorts entraram"
+        como = "será renderizado" if n == 1 else "serão renderizados"
+        dialogos.aviso(
+            self,
+            "Renderizar os Shorts",
+            f"O PC já está renderizando. {quem} na fila e {como} assim que a renderização de "
+            "agora terminar (a lista mostra “na fila para renderizar”).",
+        )
+
+    # --- a fila dos Shorts (renderizar e programar no YouTube) --------------------------------
+    def _ligar_a_fila_dos_shorts(self) -> None:
+        self._despachante = Despachante(
+            lambda: self.config_app.pastas.projetos, fila=Fila(), vez=Vez(arquivo_da_vez()),
+            ao_terminar=lambda e: self._na_interface(lambda: self._fila_dos_shorts_andou(e)),
+        )  # fmt: skip
+        self._despachante.iniciar()
+
+    def _acordar_a_fila_dos_shorts(self) -> None:
+        if self._despachante is not None:
+            self._despachante.acordar()
+
+    def _fila_dos_shorts_andou(self, evento) -> None:
+        """Um Short da fila terminou (renderizado, programado no YouTube) ou parou com erro."""
+        linha = f"{evento.projeto}, “{evento.titulo}”: " + (
+            f"a fila parou: {evento.erro}" if evento.erro else evento.texto
+        )
+        self.integracoes.registrar(linha)
+        self.execucao.adicionar_log(
+            f"Fila dos Shorts: {linha}", logging.WARNING if evento.erro else logging.INFO
+        )
+        editor = self.studio.editor
+        if (
+            editor is not None
+            and self._pastas is not None
+            and self._pastas.raiz.name == (evento.projeto)
+        ):
+            editor.ver_a_fila_agora()
+
     def _texto_da_confirmacao(self, opcoes: OpcoesProcessamento, pendentes: list) -> str:
         n = len(pendentes)
         total = sum(c.duracao for c in pendentes)
@@ -1535,7 +1610,7 @@ class JanelaPrincipal(ctk.CTk):
         if opcoes.marca_nos_curtos:
             linhas.append("A marca d'água será colocada nos Shorts renderizados agora.")
         linhas.append(
-            "Os Shorts que já estão prontos e não mudaram não são refeitos; os desmarcados vão "
+            "Os Shorts que já estão prontos e não mudaram não são refeitos; os sem aprovação vão "
             "para a pasta “desmarcados” (nada é apagado)."
         )
         return "\n\n".join(linhas)
@@ -1675,6 +1750,19 @@ class JanelaPrincipal(ctk.CTk):
             ):
                 return
             self.executor.encerrar()
+        if self._despachante is not None:
+            ocupada = self._despachante.no_youtube is not None or self._despachante.fila.rodando
+            if ocupada and not dialogos.confirmar(
+                self,
+                "Sair do aplicativo?",
+                "A fila dos Shorts está trabalhando agora (renderizando ou no YouTube Studio). Ao "
+                "sair, o que ela fazia é retomado depois: pelo controle remoto, se estiver ligado, "
+                "ou na próxima vez que o programa abrir.",
+                sim="Sair",
+                nao="Continuar",
+            ):
+                return
+            self._despachante.parar()
         with contextlib.suppress(OSError):
             sessao_do_celular.fechar_janela()
         self.fonte.limpar()

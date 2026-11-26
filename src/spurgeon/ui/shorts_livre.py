@@ -387,7 +387,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         dica(
             self._botao_criar,
             "A IA avalia o trecho (categoria, nota e risco de contexto) e escreve o título, a "
-            "descrição e as hashtags. O Short entra na lista do Studio, marcado para renderizar. "
+            "descrição e as hashtags. O Short entra na lista do Studio, aprovado para renderizar. "
             "Leva cerca de 2 minutos na CPU.",
         )
         limpar = ctk.CTkButton(
@@ -956,7 +956,7 @@ class PainelShortsLivre(ctk.CTkFrame):
         self._terminou()
         self._situacao.configure(
             text=f"Short criado: “{corte.titulo}” (nota {corte.nota:.0f}). Ele já está na lista "
-            "de cortes, marcado para renderizar.",
+            "de cortes, aprovado para renderizar.",
             text_color=_COR_OK,
         )
         self.limpar_trecho()

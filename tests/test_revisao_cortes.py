@@ -88,7 +88,7 @@ def test_todos_os_cortes_principais_vem_marcados_e_as_reservas_desmarcadas(abert
     assert [m.get() for m in aberto.editor._marcas] == [c.incluir for c in cortes]
     assert any(c.reserva and not c.incluir for c in cortes)
     assert sum(m.get() for m in aberto.editor._marcas) == sum(not c.reserva for c in cortes)
-    assert f"{sum(not c.reserva for c in cortes)} de {len(cortes)} marcados" in (
+    assert f"{sum(not c.reserva for c in cortes)} de {len(cortes)} aprovados" in (
         aberto.editor._resumo.cget("text")
     )
 

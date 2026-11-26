@@ -8,7 +8,7 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from spurgeon.core.config import INFO_MODELOS_WHISPER, PRESETS_X264, Pastas
+from spurgeon.core.config import EXTENSOES_AUDIO, INFO_MODELOS_WHISPER, PRESETS_X264, Pastas
 from spurgeon.ui import dicas
 from spurgeon.ui.ajuda import CabecalhoDeEtapa, dica_do_seletor
 from spurgeon.ui.assincrono import Tarefas
@@ -17,6 +17,7 @@ from spurgeon.ui.formulario import (
     ROTULO_USO_75,
     ROTULO_USO_100,
     ROTULOS_FADE,
+    ROTULOS_FORMATO_AUDIO,
     ROTULOS_MODO,
     ValoresFormulario,
     aviso_qualidade,
@@ -44,7 +45,8 @@ AJUDAS_DOS_CARTOES = {
         "Escolha o que o programa vai produzir. “Tudo” processa um sermão novo; “Só Shorts” e "
         "“Só vinhetas” reaproveitam um projeto já feito. Em “Tudo”, marque o que quer: limpar o "
         "áudio, o vídeo completo sem silêncios com legendas, a introdução e a vinheta, e os "
-        "Shorts com legendas dinâmicas."
+        "Shorts com legendas dinâmicas. “Só áudio” só grava o som do sermão num arquivo. Em "
+        "Áudio dá para trocar o som do vídeo por outro (um áudio melhorado em outro programa)."
     ),
     "ajustes": (
         "Ajustes da imagem antes de renderizar: cortar o começo e o fim da gravação, aproximar a "
@@ -53,9 +55,9 @@ AJUDAS_DOS_CARTOES = {
     ),
     "revisao": (
         "Marque se o processamento deve parar depois da transcrição, para você corrigir o texto. "
-        "Os Shorts não pedem parada: saem todos desmarcados e você escolhe, ajusta e renderiza no "
-        "Studio Shorts. É mais cuidadoso e um pouco mais demorado; desmarque para processar tudo "
-        "de uma vez."
+        "Os Shorts não pedem parada: saem todos sem aprovação e você aprova, ajusta e renderiza "
+        "no Studio Shorts. É mais cuidadoso e um pouco mais demorado; desmarque para processar "
+        "tudo de uma vez."
     ),
     "processamento": (
         "Como o computador vai trabalhar: quanto do processador usar, qual modelo transcreve a "
@@ -81,6 +83,10 @@ BALOES_DO_MODO = {
         "Para um projeto que já tem o vídeo longo pronto: só emenda a introdução e a vinheta "
         "final, sem recodificar. É rápido."
     ),
+    "Só áudio": (
+        "Só tira o áudio do vídeo (limpo e normalizado, se marcado) e o grava num arquivo WAV ou "
+        "MP3 na pasta do projeto. Sem transcrição e sem vídeo: leva poucos minutos."
+    ),
 }
 
 #: o que o "O que gerar" mostra em cada modo (na ordem em que aparece)
@@ -88,6 +94,7 @@ _GRUPOS_POR_MODO = {
     "completo": ("audio", "longo", "vinhetas", "shorts"),
     "so_shorts": ("audio", "shorts"),
     "so_vinhetas": ("vinhetas",),
+    "so_audio": ("audio",),
 }
 
 
@@ -160,9 +167,14 @@ class PainelOpcoes(ctk.CTkFrame):
                 "introducao_arquivo",
                 "vinheta_arquivo",
                 "fade_vinhetas_s",
+                "audio_externo",
             )
         }
         self.ollama = ctk.StringVar()
+        self._formatos_audio = {rotulo: f for f, rotulo in ROTULOS_FORMATO_AUDIO.items()}
+        self.formato_audio = ctk.StringVar(
+            value=ROTULOS_FORMATO_AUDIO.get(valores.audio_formato, ROTULOS_FORMATO_AUDIO["wav"])
+        )
         self.fade_estilo = ctk.StringVar(value=ROTULOS_FADE[valores.fade_estilo])
 
         # Três páginas, uma de cada vez na tela: menos widgets para rolar e uma tela mais curta.
@@ -336,6 +348,62 @@ class PainelOpcoes(ctk.CTkFrame):
         self._registrar(padrao_btn, f"padrao_{nome_check}")
         self._nomes_de_arquivo[nome_arquivo] = (nome, padrao)
 
+    def _linha_da_trilha(self, pai) -> None:
+        """Outra trilha de áudio (um áudio melhorado por fora) no lugar do som do vídeo."""
+        ctk.CTkLabel(pai, text="Trilha de áudio", anchor="w").pack(anchor="w", padx=12, pady=(6, 0))
+        linha = ctk.CTkFrame(pai, fg_color="transparent")
+        linha.pack(anchor="w", padx=(12 + 28, 12), pady=(2, 2), fill="x")
+        escolher = ctk.CTkButton(
+            linha,
+            text="Usar outro áudio…",
+            width=130,
+            height=24,
+            fg_color=("gray70", "gray30"),
+            command=self._escolher_trilha,
+        )
+        escolher.pack(side="left")
+        self._balao(
+            escolher,
+            "Escolhe um arquivo de áudio (WAV, MP3, M4A, FLAC…) para usar no lugar do som do "
+            "vídeo: um áudio melhorado em outro programa, ou gravado direto da mesa de som.",
+        )
+        do_video = ctk.CTkButton(
+            linha,
+            text="Usar o do vídeo",
+            width=110,
+            height=24,
+            fg_color=("gray70", "gray30"),
+            command=lambda: self._definir_arquivo("audio_externo", ""),
+        )
+        do_video.pack(side="left", padx=6)
+        self._balao(do_video, "Volta a usar o som que veio gravado no próprio vídeo.")
+        self._nome_da_trilha = ctk.CTkLabel(linha, text="", anchor="w", text_color=_COR_DICA)
+        self._nome_da_trilha.pack(side="left", padx=4)
+        self._registrar(escolher, "escolher_trilha")
+        self._registrar(do_video, "trilha_do_video")
+        self._ajuda(
+            pai,
+            "O áudio escolhido substitui o do vídeo em tudo: transcrição, vídeo longo, Shorts e o "
+            "Só áudio. Ele precisa começar junto com o vídeo (o mesmo tempo do começo ao fim).",
+            28,
+        )
+
+    def _escolher_trilha(self) -> None:
+        atual = self.textos["audio_externo"].get().strip()
+        inicial = Path(atual).parent if atual else self._pastas.entrada
+        extensoes = " ".join(f"*{e}" for e in EXTENSOES_AUDIO)
+        caminho = filedialog.askopenfilename(
+            title="Escolha a trilha de áudio",
+            initialdir=str(inicial if inicial.exists() else Path.home()),
+            filetypes=[
+                ("Áudio", extensoes),
+                ("Vídeos (usa o som)", "*.mp4 *.mov *.mkv *.m4v"),
+                ("Todos", "*.*"),
+            ],
+        )
+        if caminho:
+            self._definir_arquivo("audio_externo", caminho)
+
     def _escolher_arquivo(self, nome_arquivo: str, titulo: str) -> None:
         atual = self.textos[nome_arquivo].get().strip()
         inicial = Path(atual).parent if atual else self._pastas.recursos
@@ -355,6 +423,15 @@ class PainelOpcoes(ctk.CTkFrame):
         for nome_arquivo, (rotulo, padrao) in self._nomes_de_arquivo.items():
             escolhido = self.textos[nome_arquivo].get().strip()
             rotulo.configure(text=f"{Path(escolhido).name}" if escolhido else f"{padrao} (padrão)")
+        trilha = self.textos["audio_externo"].get().strip()
+        if not trilha:
+            self._nome_da_trilha.configure(text="o som do próprio vídeo", text_color=_COR_DICA)
+        elif Path(trilha).is_file():
+            self._nome_da_trilha.configure(text=Path(trilha).name, text_color=_COR_DICA)
+        else:
+            self._nome_da_trilha.configure(
+                text=f"{Path(trilha).name} (não encontrado)", text_color=_COR_AVISO
+            )
 
     # --- modelos do Ollama --------------------------------------------------------------------
     def definir_modelos_ollama(self, instalados: Sequence[str]) -> None:
@@ -478,6 +555,32 @@ class PainelOpcoes(ctk.CTkFrame):
             balao="Recomendado: põe o volume num nível que toca bem no YouTube e no celular, sem "
             "estourar. Só muda o volume; o conteúdo do áudio é o mesmo.",
         )
+        self._linha_da_trilha(audio)
+        self._quadro_formato = ctk.CTkFrame(audio, fg_color="transparent")
+        linha_formato = ctk.CTkFrame(self._quadro_formato, fg_color="transparent")
+        linha_formato.pack(anchor="w", padx=12, pady=3, fill="x")
+        ctk.CTkLabel(linha_formato, text="Formato do arquivo", anchor="w").pack(side="left")
+        self._seletor_formato = ctk.CTkSegmentedButton(
+            linha_formato,
+            values=list(ROTULOS_FORMATO_AUDIO.values()),
+            variable=self.formato_audio,
+            command=lambda _v: self._mudou(),
+        )
+        self._seletor_formato.pack(side="left", padx=8)
+        dica_do_seletor(
+            self._seletor_formato,
+            {
+                ROTULOS_FORMATO_AUDIO["wav"]: "O áudio sem nenhuma perda de qualidade. Bom para "
+                "editar em outro programa; um sermão de 1 hora ocupa uns 350 MB.",
+                ROTULOS_FORMATO_AUDIO["mp3"]: "Comprimido, com qualidade alta para voz. Bom para "
+                "podcast, WhatsApp ou site; um sermão de 1 hora ocupa uns 80 MB.",
+            },
+        )
+        self._ajuda(
+            self._quadro_formato,
+            "O arquivo sai na pasta do projeto como audio_do_sermao.wav (ou .mp3). O começo e o "
+            "fim escolhidos em “Corte e enquadramento” valem aqui também.",
+        )
 
         longo = self._grupo(c, "Vídeo completo")
         self._check(
@@ -568,7 +671,7 @@ class PainelOpcoes(ctk.CTkFrame):
             "Gerar Shorts automáticos (vertical 9:16)",
             "gerar_shorts",
             ajuda="A IA procura os melhores trechos e escreve título e hashtags; eles vêm "
-            "desmarcados, e você escolhe e ajusta no Studio Shorts antes de renderizar.",
+            "sem aprovação, e você escolhe e ajusta no Studio Shorts antes de renderizar.",
             balao="Liga a escolha automática de cortes. Depois de processar, a aba Studio Shorts "
             "lista os trechos sugeridos para você revisar, ajustar e renderizar.",
         )
@@ -595,6 +698,10 @@ class PainelOpcoes(ctk.CTkFrame):
             quadro.pack_forget()
         for nome in _GRUPOS_POR_MODO[modo]:
             self._grupos[nome].pack(fill="x")
+        if modo == "so_audio":
+            self._quadro_formato.pack(fill="x")
+        else:
+            self._quadro_formato.pack_forget()
         if "shorts" in _GRUPOS_POR_MODO[modo]:
             if modo == "completo":  # no Só Shorts os Shorts são o produto: a caixa não faz sentido
                 self._quadro_gerar_shorts.pack(fill="x")
@@ -683,7 +790,7 @@ class PainelOpcoes(ctk.CTkFrame):
             largura=64,
             ajuda="O máximo de cortes sugeridos como principais; os demais bons viram reservas.",
             balao="Quantos Shorts, no máximo, a IA sugere como principais. Os outros bons ficam "
-            "na lista como reservas. Todos vêm desmarcados: você escolhe no Studio Shorts.",
+            "na lista como reservas. Todos vêm sem aprovação: você aprova no Studio Shorts.",
         )
         self._campo(
             a,
@@ -814,6 +921,7 @@ class PainelOpcoes(ctk.CTkFrame):
             **{nome: var.get() for nome, var in self.bools.items()},
             **{nome: var.get() for nome, var in self.textos.items()},
             fade_estilo=self._estilos_do_fade.get(self.fade_estilo.get(), "mesclar"),
+            audio_formato=self._formatos_audio.get(self.formato_audio.get(), "wav"),
             **self.marca.valores(),
             **self.tratamento.valores(),
         )
@@ -827,6 +935,9 @@ class PainelOpcoes(ctk.CTkFrame):
         for nome, var in self.textos.items():
             var.set(getattr(v, nome))
         self.fade_estilo.set(ROTULOS_FADE.get(v.fade_estilo, ROTULOS_FADE["mesclar"]))
+        self.formato_audio.set(
+            ROTULOS_FORMATO_AUDIO.get(v.audio_formato, ROTULOS_FORMATO_AUDIO["wav"])
+        )
         self.selecionar_whisper(v.whisper_modelo)
         self.selecionar_qualidade(v.qualidade)
         self.definir_modelos_ollama(self._ollama_instalados)
@@ -888,6 +999,7 @@ class PainelOpcoes(ctk.CTkFrame):
         self._seletor_modo.configure(state="normal" if livre else "disabled")
         self._mostrar_grupos(v.modo)
         self._seletor_fade.configure(state="normal" if livre and h.fade_estilo else "disabled")
+        self._seletor_formato.configure(state="normal" if livre and h.audio_formato else "disabled")
         self._dica_modo.configure(text=DICAS_MODO[v.modo])
         self.marca.aplicar_habilitacoes(h, livre=livre)
         self.tratamento.aplicar_habilitacoes(h, livre=livre)

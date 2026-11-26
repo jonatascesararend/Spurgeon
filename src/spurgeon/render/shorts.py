@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -51,6 +52,7 @@ from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario, rotulo_d
 from spurgeon.shorts.dados import Corte
 from spurgeon.shorts.edicao import palavras_com_a_legenda, passa_do_limite
 from spurgeon.shorts.etapas import carregar_cortes
+from spurgeon.shorts.fila import limpar_render, marcar_render
 from spurgeon.shorts.pausas import ha_o_que_cortar, remapear_palavras, trechos_mantidos
 from spurgeon.transcricao.formato import Palavra, Transcricao, segundos_para_rotulo
 
@@ -365,6 +367,10 @@ def assinatura_visual(opcoes) -> str:
     return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:10]
 
 
+def _resumo_do_ajuste_fino(corte: Corte) -> str:
+    return hashlib.sha1(json.dumps(corte.ajuste_fino, sort_keys=True).encode()).hexdigest()[:10]
+
+
 def detalhes_do_registro(corte: Corte, visual: str | None = None) -> dict[str, Any]:
     """O que o registro guarda além da assinatura, para a tela saber se o Short ainda vale."""
     detalhes: dict[str, Any] = {
@@ -375,6 +381,8 @@ def detalhes_do_registro(corte: Corte, visual: str | None = None) -> dict[str, A
         detalhes["saltos"] = [[round(de, 3), round(ate, 3)] for de, ate in corte.saltos]
     if corte.pausa_s:
         detalhes["pausa_s"] = round(corte.pausa_s, 2)
+    if corte.ajuste_fino:
+        detalhes["ajuste_fino"] = _resumo_do_ajuste_fino(corte)
     if visual is not None:
         detalhes["visual"] = visual
     return detalhes
@@ -399,6 +407,8 @@ def situacao_do_short(
     ):
         return SITUACAO_ALTERADO
     if com_legenda and "legenda" in entrada and entrada["legenda"] != atual["legenda"]:
+        return SITUACAO_ALTERADO
+    if com_legenda and entrada.get("ajuste_fino") != atual.get("ajuste_fino"):
         return SITUACAO_ALTERADO
     if visual is not None and "visual" in entrada and entrada["visual"] != visual:
         return SITUACAO_ALTERADO
@@ -447,6 +457,8 @@ def assinatura_do_short(
         dados["saltos"] = [[round(de, 3), round(ate, 3)] for de, ate in corte.saltos]
     if corte.pausa_s:
         dados["pausa_s"] = round(corte.pausa_s, 2)
+    if com_legenda and corte.ajuste_fino:  # os tempos das palavras acertados à mão
+        dados["ajuste_fino"] = _resumo_do_ajuste_fino(corte)
     if fonte_id:  # cortado do vídeo longo: se ele for refeito, o Short também é
         dados["fonte"] = fonte_id
     return hashlib.sha1(json.dumps(dados, sort_keys=True).encode()).hexdigest()[:16]
@@ -633,6 +645,48 @@ def organizar_pasta(
     escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
 
 
+#: o pedido de renderizar só alguns Shorts (o "Renderizar só este" / "Refazer" do celular), em
+#: `_work/`: a etapa lê e apaga no começo, então vale para uma renderização só
+ARQUIVO_DO_PEDIDO = "renderizar_so.json"
+#: um pedido mais velho que isto é resto de uma renderização que não chegou a esta etapa
+VALIDADE_DO_PEDIDO_S = 30 * 60
+
+
+@dataclass(frozen=True)
+class PedidoDeRender:
+    ids: frozenset[int]
+    refazer: bool = False  # renderiza de novo mesmo se o Short pronto ainda vale
+
+
+def pedir_render_de(pastas: PastasProjeto, ids: Sequence[int], *, refazer: bool = False) -> None:
+    """Na próxima renderização dos Shorts, só estes cortes (e, com `refazer`, do zero)."""
+    pastas.work.mkdir(parents=True, exist_ok=True)
+    escrever_json_atomico(
+        pastas.work / ARQUIVO_DO_PEDIDO,
+        {"ids": [int(i) for i in ids], "refazer": bool(refazer), "quando": time.time()},
+    )
+
+
+def esquecer_pedido_de_render(pastas: PastasProjeto) -> None:
+    (pastas.work / ARQUIVO_DO_PEDIDO).unlink(missing_ok=True)
+
+
+def consumir_pedido_de_render(pastas: PastasProjeto) -> PedidoDeRender | None:
+    """O pedido de renderizar só alguns Shorts, se há um recente; o arquivo é apagado."""
+    caminho = pastas.work / ARQUIVO_DO_PEDIDO
+    if not caminho.exists():
+        return None
+    try:
+        dados = ler_json(caminho)
+        ids = frozenset(int(i) for i in dados["ids"])
+        recente = time.time() - float(dados.get("quando", 0)) <= VALIDADE_DO_PEDIDO_S
+        pedido = PedidoDeRender(ids, bool(dados.get("refazer"))) if ids and recente else None
+    except (OSError, ValueError, TypeError, KeyError):
+        pedido = None
+    esquecer_pedido_de_render(pastas)
+    return pedido
+
+
 class RenderizarShorts(Etapa):
     id = "renderizar_shorts"
     nome = "Renderizando os Shorts"
@@ -695,11 +749,19 @@ class RenderizarShorts(Etapa):
         return [ctx.pastas.shorts / s.video for s in planejados]
 
     def executar(self, ctx: ContextoProjeto) -> None:
-        planejados = planejar_shorts(carregar_cortes(ctx.pastas.cortes_shorts))
+        pedido = consumir_pedido_de_render(ctx.pastas)
+        todos = planejar_shorts(carregar_cortes(ctx.pastas.cortes_shorts))
+        planejados = [s for s in todos if pedido is None or s.corte.id in pedido.ids]
+        if pedido is not None:
+            ctx.log.info(
+                "%s só %s (pedido pelo celular).",
+                "Refazendo" if pedido.refazer else "Renderizando",
+                ", ".join(f"o Short {s.numero}" for s in planejados) or "nenhum Short",
+            )
         if not planejados:
             ctx.log.info(
-                "Nenhum Short marcado: os cortes sugeridos ficam no Studio Shorts para você "
-                "marcar, ajustar e renderizar."
+                "Nenhum Short aprovado: os cortes sugeridos ficam no Studio Shorts para você "
+                "aprovar, ajustar e renderizar."
             )
             return
         longos = [s for s in planejados if passa_do_limite(s.corte)]
@@ -725,7 +787,7 @@ class RenderizarShorts(Etapa):
         fontes = self._preparar_fontes(ctx) if ctx.opcoes.legendas_dinamicas else None
         marca = marca_dos_shorts(ctx)
         registro = ler_registro(ctx.pastas.shorts_renderizados)
-        organizar_pasta(ctx, pasta, planejados, registro)
+        organizar_pasta(ctx, pasta, todos, registro)
         self._conferir_disco(ctx, planejados, registro, preset.crf)
         perfil = detectar_hardware(ctx.config.pastas.projetos)
         codec = f.argumentos_video(
@@ -742,6 +804,22 @@ class RenderizarShorts(Etapa):
         )
 
         visual = assinatura_visual(ctx.opcoes)
+        ids = [s.corte.id for s in planejados]
+        feitos: list[int] = []
+        # o "renderizando agora" e o "na fila" do Studio e do celular
+        marcar_render(ctx.pastas, ids)
+        try:
+            self._renderizar_todos(
+                ctx, planejados, pedido, ids, feitos, original, longo, info, fontes, marca,
+                registro, palavras, codec, pasta, visual,
+            )  # fmt: skip
+        finally:
+            limpar_render(ctx.pastas)
+
+    def _renderizar_todos(
+        self, ctx, planejados, pedido, ids, feitos, original, longo, info, fontes, marca,
+        registro, palavras, codec, pasta, visual,
+    ) -> None:  # fmt: skip
         total = len(planejados)
         for i, curto in enumerate(planejados):
             ctx.ponto_seguro()
@@ -761,12 +839,15 @@ class RenderizarShorts(Etapa):
             destino.parent.mkdir(parents=True, exist_ok=True)  # as subpastas podem não existir
             escrever_texto_atomico(pasta / curto.texto, texto_de_publicacao(curto.corte))
             pronto = registro.get(str(curto.corte.id))
-            if destino.exists() and pronto and pronto["assinatura"] == assinatura:
+            refazer = pedido is not None and pedido.refazer
+            if not refazer and destino.exists() and pronto and pronto["assinatura"] == assinatura:
                 ctx.log.info("Short %d de %d já está pronto: %s", i + 1, total, curto.video)
                 detalhes = detalhes_do_registro(curto.corte, visual)
                 if any(pronto.get(k) != v for k, v in detalhes.items()):  # registro antigo
                     pronto.update(detalhes)
                     escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
+                feitos.append(curto.corte.id)
+                marcar_render(ctx.pastas, ids, feitos=feitos)
                 ctx.progresso((i + 1) / total)
                 continue
             ctx.log.info(
@@ -780,6 +861,7 @@ class RenderizarShorts(Etapa):
             )
             if recusa:
                 ctx.log.info("Este Short sai do vídeo original, não do longo: %s.", recusa)
+            marcar_render(ctx.pastas, ids, atual=curto.corte.id, feitos=feitos)
             self._renderizar(
                 ctx, curto, fonte, palavras, codec, fontes, marca,
                 faixa=(i / total, (i + 1) / total),
@@ -791,6 +873,8 @@ class RenderizarShorts(Etapa):
                 **({"fonte": "longo"} if fonte.eh_o_longo else {}),
             }
             escrever_json_atomico(ctx.pastas.shorts_renderizados, registro)
+            feitos.append(curto.corte.id)
+            marcar_render(ctx.pastas, ids, feitos=feitos)
             ctx.progresso((i + 1) / total)
 
     # --- preparo ----------------------------------------------------------------------------

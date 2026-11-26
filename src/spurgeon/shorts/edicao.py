@@ -11,6 +11,7 @@ from typing import Literal
 from spurgeon.core.config import DURACAO_MAXIMA_SHORT_S
 from spurgeon.core.formatacao import formatar_tempo_preciso, ler_tempo  # noqa: F401 (reexporta)
 from spurgeon.render.legenda import blocos_de_linhas, palavras_do_short, texto_em_blocos
+from spurgeon.shorts.ajuste_fino import base_do_corte
 from spurgeon.shorts.analise import separar_frases
 from spurgeon.shorts.dados import Corte, Frase
 from spurgeon.shorts.selecao import respiro_nas_pontas
@@ -455,7 +456,7 @@ def legenda_em_blocos(palavras: Sequence[Palavra], corte: Corte, texto: str | No
     branco: a mesma divisão que a legenda queimada usa. `texto` é o que a pessoa digitou (para
     reorganizar depois de uma edição); sem ele vale a legenda do corte.
     """
-    dentro = palavras_do_corte(palavras, corte)
+    dentro = base_do_corte(palavras_do_corte(palavras, corte), corte)
     if texto is None:
         base = palavras_com_a_legenda(palavras, corte)
     else:
@@ -646,8 +647,9 @@ def _linha_de_palavras(
 
 
 def palavras_com_a_legenda(palavras: Sequence[Palavra], corte: Corte) -> list[Palavra]:
-    """As palavras do corte com a legenda corrigida aplicada, mantendo os tempos da fala."""
-    dentro = palavras_do_corte(palavras, corte)
+    """As palavras do corte com a legenda corrigida aplicada, mantendo os tempos da fala (os do
+    ajuste fino, onde a pessoa os acertou palavra por palavra)."""
+    dentro = base_do_corte(palavras_do_corte(palavras, corte), corte)
     if not corte.legenda or not dentro:
         return dentro
     return aplicar_edicao(dentro, corte.legenda)

@@ -135,11 +135,13 @@ class Tarefa:
     rodando: bool = True
     projeto: str = ""
     erro: str = ""
+    processar: bool = True  # False = só baixar o vídeo (para a prévia do tratamento de imagem)
     _pronta: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def para_json(self) -> dict[str, Any]:
         return {"video_id": self.video_id, "titulo": self.titulo, "texto": self.texto,
-                "rodando": self.rodando, "projeto": self.projeto, "erro": self.erro}  # fmt: skip
+                "rodando": self.rodando, "projeto": self.projeto, "erro": self.erro,
+                "processar": self.processar}  # fmt: skip
 
 
 def _baixar_de_verdade(video: dict[str, Any], pasta: Path, andamento) -> Path:
@@ -221,9 +223,12 @@ class NovosProjetos:
         log.info("Projeto criado pelo celular (sem baixar ainda): %s", pastas.raiz.name)
         return pastas
 
-    def comecar(self, pastas: PastasProjeto) -> Tarefa:
-        """Baixa o vídeo (se ainda não veio) e começa o processamento, numa thread."""
+    def comecar(self, pastas: PastasProjeto, *, processar: bool = True) -> Tarefa:
+        """Baixa o vídeo (se ainda não veio) e começa o processamento, numa thread. Com
+        `processar=False` só baixa (a prévia do tratamento de imagem precisa do vídeo)."""
         origem = ler_origem(pastas)
+        if not processar and video_baixado(pastas):
+            raise NovoInvalido("O vídeo deste projeto já está no PC.")
         if not video_baixado(pastas) and not origem.get("video_id"):
             raise NovoInvalido("O vídeo deste projeto não está no PC e não se sabe de onde baixar.")
         with self._trava:
@@ -233,7 +238,7 @@ class NovosProjetos:
             if motivo:
                 raise NovoInvalido(motivo)
             tarefa = Tarefa(str(origem.get("video_id") or ""), str(origem.get("titulo") or ""),
-                            projeto=pastas.raiz.name)  # fmt: skip
+                            projeto=pastas.raiz.name, processar=processar)  # fmt: skip
             self.atual = tarefa
         threading.Thread(target=self._rodar, args=(tarefa, pastas, origem), daemon=True).start()
         return tarefa
@@ -255,6 +260,10 @@ class NovosProjetos:
                 estado = carregar_estado(pastas.raiz) or estado  # as opções podem ter mudado
                 estado.entrada = EntradaVideo.de_arquivo(arquivo)
                 salvar_estado(pastas.raiz, estado)
+            if not tarefa.processar:
+                tarefa.texto = "Vídeo baixado: a prévia do tratamento de imagem já aparece."
+                log.info("Vídeo baixado pelo celular (sem processar): %s", pastas.raiz.name)
+                return
             andamento("Conferindo o ambiente…")
             self._conferir(config, arquivo, estado.opcoes)
             self._iniciar(pastas)

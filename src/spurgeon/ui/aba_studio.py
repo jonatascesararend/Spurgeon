@@ -30,7 +30,7 @@ PAINEL_CORTES = "Cortes"
 PAINEL_LIVRE = "Shorts livre"
 
 _INTRODUCAO = (
-    "Estes são os Shorts sugeridos para este sermão. Marque os que quer renderizar, ajuste o "
+    "Estes são os Shorts sugeridos para este sermão. Aprove os que quer renderizar, ajuste o "
     "início e o fim de cada um e corrija a legenda antes de renderizar. O que já foi renderizado "
     "e não mudou não é refeito."
 )
@@ -145,7 +145,7 @@ class AbaStudioShorts(ctk.CTkFrame):
         self._botao_renderizar.grid(row=0, column=3, padx=(8, 0))
         dica(
             self._botao_renderizar,
-            "Renderiza os Shorts marcados que ainda não existem ou que mudaram desde a última "
+            "Renderiza os Shorts aprovados que ainda não existem ou que mudaram desde a última "
             "renderização (os que já estão prontos não são refeitos).",
         )
         self._atualizar_botoes()
@@ -321,8 +321,8 @@ class AbaStudioShorts(ctk.CTkFrame):
         dialogos.aviso(
             self.winfo_toplevel(),
             "Nada para renderizar",
-            "Todos os Shorts marcados já estão renderizados e não mudaram desde então.\n\n"
-            "Marque outros cortes, ou mude o início, o fim ou a legenda de algum.",
+            "Todos os Shorts aprovados já estão renderizados e não mudaram desde então.\n\n"
+            "Aprove outros cortes, ou mude o início, o fim ou a legenda de algum.",
         )
 
     def _atualizar_botoes(self) -> None:
@@ -338,8 +338,11 @@ class AbaStudioShorts(ctk.CTkFrame):
         pendentes = editor.pendentes()
         n = len(pendentes)
         sufixo = "  ·  há alterações ainda não salvas" if editor.mudou else ""
-        if self._processando:  # uma renderização já está rodando: este botão volta quando acabar
-            self._botao_renderizar.configure(state="disabled", text="Renderizar")
+        if self._processando:  # uma renderização já está rodando: o botão põe os Shorts na fila
+            self._botao_renderizar.configure(
+                state="normal" if n else "disabled",
+                text=f"Pôr {n} na fila" if n else "Renderizar",
+            )
             self._estado.configure(
                 text=f"{self._aviso_do_processamento}  ·  {n} para renderizar depois{sufixo}"
             )

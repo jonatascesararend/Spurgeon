@@ -12,10 +12,12 @@ opções decidem o que já foi feito, e mudar refaria etapas sem a pessoa ver.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from spurgeon.core.aparencia import AJUSTES_DO_TRATAMENTO
 from spurgeon.core.config import OpcoesProcessamento
 from spurgeon.core.estado import StatusEtapa, carregar_estado, salvar_estado
 from spurgeon.core.projeto import PastasProjeto
@@ -38,14 +40,33 @@ def _numero(campo, rotulo, minimo, maximo, passo, unidade="", ajuda=""):
             "passo": passo, "unidade": unidade, "ajuda": ajuda}  # fmt: skip
 
 
+def _trilha(campo, rotulo, ajuda=""):
+    """A trilha de áudio de fora: o celular envia o arquivo (`remoto/trilha.py`) ou volta ao som
+    do vídeo; o valor mostrado é só o nome do arquivo (o caminho do PC não vai para o celular)."""
+    return {"campo": campo, "rotulo": rotulo, "tipo": "trilha", "ajuda": ajuda}
+
+
 def _tempo(campo, rotulo, ajuda=""):
     return {"campo": campo, "rotulo": rotulo, "tipo": "tempo", "ajuda": ajuda}
 
 
+def _ajuste(nome):
+    """Um ajuste do tratamento de imagem (−100 a +100), desenhado como régua no celular."""
+    rotulo, ajuda = AJUSTES_DO_TRATAMENTO[nome]
+    return {"campo": f"tratamento_{nome}", "rotulo": rotulo, "tipo": "ajuste", "min": -100,
+            "max": 100, "passo": 1, "ajuda": ajuda}  # fmt: skip
+
+
+#: o grupo que o celular desenha com a prévia do quadro (antes e depois) e a sugestão automática
+GRUPO_DO_TRATAMENTO = "Tratamento de imagem"
+
+
 GRUPOS: list[tuple[str, list[dict[str, Any]]]] = [
     ("O que gerar", [
-        _escolha("modo", "Processamento", [["completo", "Completo"], ["so_shorts", "Só Shorts"]],
-                 "“Só Shorts” não gera o vídeo longo."),
+        _escolha("modo", "Processamento", [["completo", "Completo"], ["so_shorts", "Só Shorts"],
+                                           ["so_audio", "Só o áudio"]],
+                 "“Só Shorts” não gera o vídeo longo. “Só o áudio” só tira o som do vídeo (limpo e "
+                 "normalizado, se marcado em Áudio) e o grava num arquivo para baixar."),
         _sim_nao("gerar_video_longo", "Vídeo longo (o sermão sem as pausas longas)"),
         _sim_nao("gerar_shorts", "Shorts"),
         _sim_nao("legendas_dinamicas", "Legenda nos Shorts"),
@@ -57,14 +78,23 @@ GRUPOS: list[tuple[str, list[dict[str, Any]]]] = [
     ("Áudio", [
         _sim_nao("limpar_audio", "Limpar o áudio (tira ruído)"),
         _sim_nao("normalizar_volume", "Normalizar o volume"),
+        _trilha("audio_externo", "Trilha de áudio",
+                "Um áudio melhorado por fora substitui o som do vídeo em tudo. Ele precisa começar "
+                "junto com o vídeo."),
+        _escolha("audio_formato", "Arquivo do “Só o áudio”", [["wav", "WAV (sem perdas)"],
+                                                              ["mp3", "MP3 (menor)"]]),
         _numero("limiar_pausa_s", "Cortar pausas maiores que", 0.5, 30, 0.5, "s"),
     ]),
     ("Imagem", [
         _numero("zoom_pct", "Zoom", 100, 300, 5, "%", "100% = sem zoom (o centro é o da janela)."),
-        _sim_nao("tratamento_ativo", "Tratamento de imagem (o ajuste salvo no PC)"),
         _sim_nao("marca_dagua", "Marca d'água"),
         _sim_nao("introducao", "Introdução"),
         _sim_nao("vinheta_final", "Vinheta no fim"),
+    ]),
+    (GRUPO_DO_TRATAMENTO, [
+        _sim_nao("tratamento_ativo", "Usar o tratamento de imagem"),
+        *(_ajuste(nome) for nome in AJUSTES_DO_TRATAMENTO),
+        _sim_nao("tratamento_nos_shorts", "Também nos Shorts"),
     ]),
     ("Shorts", [
         _numero("shorts_limite_seguranca", "No máximo", 1, 100, 1, "Shorts"),
@@ -100,6 +130,13 @@ def _motivo_desligado(campo: str, opcoes: OpcoesProcessamento) -> str:
     return ""
 
 
+def _valor_na_tela(campo: str, opcoes: OpcoesProcessamento) -> Any:
+    valor = getattr(opcoes, campo)
+    if campo == "audio_externo":  # só o nome: o caminho do PC fica no PC
+        return Path(valor).name if valor.strip() else ""
+    return valor
+
+
 def configuracao(pastas: PastasProjeto) -> dict[str, Any]:
     """A descrição da tela de opções, com os valores do projeto."""
     estado = carregar_estado(pastas.raiz)
@@ -108,14 +145,17 @@ def configuracao(pastas: PastasProjeto) -> dict[str, Any]:
     opcoes = estado.opcoes
     grupos = []
     for titulo, campos in GRUPOS:
-        grupos.append({"titulo": titulo, "campos": [
-            {**c, "valor": getattr(opcoes, c["campo"]),
+        grupos.append({"titulo": titulo, "tratamento": titulo == GRUPO_DO_TRATAMENTO, "campos": [
+            {**c, "valor": _valor_na_tela(c["campo"], opcoes),
              "desligado": _motivo_desligado(c["campo"], opcoes)}
             for c in campos
         ]})  # fmt: skip
     pode = nao_comecou(pastas)
+    from spurgeon.remoto.novo import video_baixado
+
     return {
         "grupos": grupos,
+        "video_no_pc": video_baixado(pastas),  # a prévia do tratamento precisa do vídeo
         "pode_mudar": pode,
         "motivo": "" if pode else "O processamento já começou: as opções valem como estão.",
     }
@@ -134,6 +174,9 @@ def mudar(pastas: PastasProjeto, mudancas: dict[str, Any]) -> dict[str, Any]:
     for campo, valor in mudancas.items():
         if valor is True and (motivo := _motivo_desligado(campo, estado.opcoes)):
             raise OpcaoInvalida(motivo)
+    if mudancas.get("audio_externo", "") != "":  # escolher um arquivo é pelo envio, não por caminho
+        raise OpcaoInvalida("Envie o arquivo de áudio pelo botão da trilha.")
+    trilha_antiga = estado.opcoes.audio_externo
     try:
         novas = OpcoesProcessamento.model_validate({**estado.opcoes.model_dump(), **mudancas})
     except ValidationError as erro:
@@ -150,4 +193,9 @@ def mudar(pastas: PastasProjeto, mudancas: dict[str, Any]) -> dict[str, Any]:
         raise OpcaoInvalida(f"Valor inválido em “{rotulo}”{faixa}.") from erro
     estado.opcoes = novas
     salvar_estado(pastas.raiz, estado)
+    if "audio_externo" in mudancas and trilha_antiga:
+        from spurgeon.remoto.trilha import apagar_trilhas, enviada_pelo_celular
+
+        if enviada_pelo_celular(pastas, trilha_antiga):  # a escolhida no PC nunca é apagada
+            apagar_trilhas(pastas)
     return configuracao(pastas)

@@ -33,6 +33,8 @@ from spurgeon.render.shorts import (
 )
 from spurgeon.shorts.agendamento import ler_horario, rotulo_do_horario, rotulo_do_postado
 from spurgeon.shorts.dados import Corte, cor_da_categoria, rotulo_da_categoria
+from spurgeon.shorts.pausas import residual_da_pausa
+from spurgeon.shorts.revisao_gemini import da_revisao, quando_legivel
 
 #: linhas do fim do `processamento.log` que o celular mostra
 LINHAS_DO_LOG = 40
@@ -153,6 +155,17 @@ def andamento(pastas: PastasProjeto) -> dict[str, Any]:
     }
 
 
+def audio_pronto(pastas: PastasProjeto) -> Path | None:
+    """O arquivo do modo "Só o áudio" (o do formato escolhido primeiro), se já existe."""
+    estado = carregar_estado(pastas.raiz)
+    if estado is not None:
+        escolhido = pastas.audio_exportado(estado.opcoes.audio_formato)
+        if escolhido.is_file():
+            return escolhido
+    prontos = pastas.audios_exportados()
+    return prontos[0] if prontos else None
+
+
 def detalhe_do_projeto(pastas: PastasProjeto) -> dict[str, Any]:
     identificado = ler_nome_e_data(pastas.raiz)
     nome, dia = identificado if identificado else (pastas.raiz.name, None)
@@ -162,6 +175,7 @@ def detalhe_do_projeto(pastas: PastasProjeto) -> dict[str, Any]:
         "data": dia.isoformat() if dia else "",
         "resultados": resumo_dos_resultados(pastas),
         "tem_video_longo": pastas.video_longo.is_file(),
+        "audio_pronto": audio.name if (audio := audio_pronto(pastas)) else "",
         "andamento": andamento(pastas),
     }
 
@@ -214,6 +228,18 @@ def _rotulo_do_agendado(texto: str) -> str:
     return rotulo_do_horario(quando) if quando else ""
 
 
+def _revisao_do_gemini(corte) -> dict[str, Any] | None:
+    revisao = da_revisao(corte)
+    if revisao is None:
+        return None
+    return {
+        **revisao.para_dict(),
+        "rotulo": revisao.rotulo,
+        "desatualizada": revisao.desatualizada(corte),
+        "quando_rotulo": quando_legivel(revisao.quando),
+    }
+
+
 def resumo_do_short(short: ShortNoDisco) -> dict[str, Any]:
     c = short.corte
     return {
@@ -231,7 +257,12 @@ def resumo_do_short(short: ShortNoDisco) -> dict[str, Any]:
         "inicio": round(c.inicio, 2),
         "fim": round(c.fim, 2),
         "duracao": round(c.duracao, 1),
+        "pausa_s": c.pausa_s,  # 0 = mantém as pausas; senão corta as a partir deste tamanho
+        "pausa_sobra_s": round(residual_da_pausa(c.pausa_s), 2) if c.pausa_s else 0.0,
         "incluir": c.incluir,
+        "opiniao": c.opiniao,  # 👍 "bom", 👎 "ruim" ou ""
+        "gemini": _revisao_do_gemini(c),  # o parecer do Gemini (None = não revisado)
+        "ajuste_fino": bool(c.ajuste_fino),  # a legenda foi acertada palavra por palavra
         "reserva": c.reserva,
         "origem": c.origem,
         "postado": c.postado,
@@ -248,11 +279,17 @@ def resumo_do_short(short: ShortNoDisco) -> dict[str, Any]:
 def shorts(pastas: PastasProjeto) -> list[dict[str, Any]]:
     """Os Shorts para o celular, cada um com o que já foi feito no YouTube (`postagens.json`)."""
     from spurgeon.publicacao.agenda import NOME_DO_ARQUIVO, RegistroDePostagens
+    from spurgeon.shorts.fila import marcas_do_projeto
 
     registro = RegistroDePostagens(pastas.work / NOME_DO_ARQUIVO)
+    no_disco = shorts_no_disco(pastas)
+    prontos = {s.corte.id for s in no_disco if s.situacao == "pronto"}
+    marcas = marcas_do_projeto(pastas, prontos.__contains__, [s.corte.id for s in no_disco])
     lista = []
-    for short in shorts_no_disco(pastas):
+    for short in no_disco:
         resumo = resumo_do_short(short)
+        marca = marcas.get(short.corte.id)
+        resumo["fila"] = marca.para_json() if marca is not None else None
         youtube = registro.do_corte(short.corte.id).get("youtube")
         resumo["youtube"] = (
             {"estado": youtube.estado, "url": youtube.url, "quando": youtube.quando}

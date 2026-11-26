@@ -41,7 +41,15 @@ def _aspas_ps(texto: str) -> str:
     return "'" + texto.replace("'", "''") + "'"
 
 
-def script_do_atalho(atalho: Path, alvo: Path, argumentos: str, pasta: Path) -> str:
+def script_do_atalho(
+    atalho: Path,
+    alvo: Path,
+    argumentos: str,
+    pasta: Path,
+    *,
+    icone: Path | None = None,
+    descricao: str = "Servidor do controle remoto do Studio Spurgeon",
+) -> str:
     return "; ".join(
         [
             "$s = New-Object -ComObject WScript.Shell",
@@ -50,7 +58,8 @@ def script_do_atalho(atalho: Path, alvo: Path, argumentos: str, pasta: Path) -> 
             f"$a.Arguments = {_aspas_ps(argumentos)}",
             f"$a.WorkingDirectory = {_aspas_ps(str(pasta))}",
             "$a.WindowStyle = 7",
-            "$a.Description = 'Servidor do controle remoto do Studio Spurgeon'",
+            f"$a.Description = {_aspas_ps(descricao)}",
+            *([f"$a.IconLocation = {_aspas_ps(str(icone) + ',0')}"] if icone else []),
             "$a.Save()",
         ]
     )

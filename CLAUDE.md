@@ -67,9 +67,14 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
 - Etapas que geram o vídeo final devem ter `entrega = True`; sem nenhuma, `_work/` é mantida. Ao
   concluir, só os arquivos pesados de `_work/` somem: os `.json` da análise ficam (permitem reabrir o
   projeto sem refazer a IA; nunca volte a apagá-los).
-- Modos (`OpcoesProcessamento.modo`): `completo`, `so_shorts`, `so_vinhetas`. Use `processa_video_longo`
+- Modos (`OpcoesProcessamento.modo`): `completo`, `so_shorts`, `so_vinhetas`, `so_audio`. Use `processa_video_longo`
   e `processa_shorts`, não `gerar_*`, para saber o que roda; etapas fora do modo ficam em
-  `estado.etapas_guardadas`. Só vinhetas = etapa `adicionar_vinhetas` (emenda sem recodificar).
+  `estado.etapas_guardadas`. Só vinhetas = etapa `adicionar_vinhetas` (emenda sem recodificar). Só áudio = as etapas
+  com `no_modo_audio` (extrair, limpar, normalizar, `exportar_audio`, finalizar): grava `audio_do_sermao.wav/.mp3`.
+- Trilha de áudio de fora (`opcoes.audio_externo`, `opcoes.trilha_externa`): SUBSTITUI o som do vídeo desde a extração
+  (`audio/extrair.fonte_do_audio`); quem toca som sem o `_work/` (prévia do Studio, ajuste fino, "ouvir" do celular)
+  usa a trilha antes do vídeo. É de cada vídeo (`_preferencias` a zera). O celular envia o arquivo
+  (`remoto/trilha.py`), nunca um caminho.
 - Shorts já renderizados: `_work/shorts_renderizados.json` (por id do corte, com assinatura). O corte,
   a legenda corrigida (`Corte.legenda`) e a marca d'água entram na assinatura; nada é apagado (os
   desmarcados vão para `shorts_gerados/desmarcados/`).
@@ -233,7 +238,7 @@ Testes da janela (`-m gui`) abrem o app escondido e precisam de ambiente gráfic
   página de Processamento (`_abrir_projeto(..., ir_para_o_studio=False)`); o botão "Abrir projeto…" vai ao Studio.
   `core/projeto.listar_projetos` só lista o que "Abrir projeto…" abriria. Mudou um recurso que o passo a passo
   explica? Ajuste o texto em `PASSOS`.
-- Ícone: `ui/icone.py`. `iconbitmap` com `recursos/studio_spurgeon.ico` na janela e em toda `CTkToplevel`
+- Ícone: `ui/icone.py`. `iconbitmap` com `recursos/icone_studio_spurgeon.ico` na janela e em toda `CTkToplevel`
   (`icone.instalar()`, chamado em `ui/__init__.py`); o CustomTkinter só põe o ícone dele depois de 200 ms se ninguém
   chamou `iconbitmap` (por isso é na criação). `definir_identidade_do_app` (AppUserModelID) vem antes da 1ª janela.
   `wm_iconbitmap()` não devolve o caminho no Windows: teste pela bandeira `_iconbitmap_method_called`.

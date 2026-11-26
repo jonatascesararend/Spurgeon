@@ -339,3 +339,120 @@ def postar(
         raise FalhaNaPostagem(
             f"A postagem parou no passo “{passo}”: {erro}", enviado=enviado, video_id=video_id
         ) from erro
+
+
+# --- trocar o horário de um Short já programado -----------------------------------------------
+def _primeiro_visivel(pg, seletores: list[str], *, espera_ms: int = 15_000):
+    """O primeiro destes seletores que aparece na tela (espera um pouco por eles)."""
+    for _ in range(max(1, espera_ms // 500)):
+        for seletor in seletores:
+            achado = pg.locator(seletor)
+            if achado.count() and achado.first.is_visible():
+                return achado.first
+        pg.wait_for_timeout(500)
+    return None
+
+
+def _escrever_data_e_hora(pg, quando: datetime, dentro: str) -> None:
+    """Escreve a data e a hora no "Programar" (da janela de envio ou da de visibilidade)."""
+    gatilho = _primeiro_visivel(pg, [f"{dentro} #datepicker-trigger", "#datepicker-trigger"])
+    if gatilho is None:
+        raise FalhaNaPostagem("O Studio não mostrou a data do “Programar”.")
+    gatilho.click()
+    data = pg.locator("ytcp-date-picker tp-yt-paper-input input").first
+    data.wait_for(timeout=15_000)
+    data.fill(data_do_studio(quando))
+    data.press("Enter")
+    pg.wait_for_timeout(800)
+    hora = _primeiro_visivel(
+        pg, [f"{dentro} #time-of-day-container input", "#time-of-day-container input"]
+    )
+    if hora is None:
+        raise FalhaNaPostagem("O Studio não mostrou a hora do “Programar”.")
+    hora.click()
+    hora.fill(f"{quando:%H:%M}")
+    hora.press("Enter")
+    pg.wait_for_timeout(800)
+
+
+def reprogramar(
+    studio: Studio,
+    video_id: str,
+    quando: datetime,
+    *,
+    fotos: Path | None = None,
+    andamento: Callable[[str], None] = lambda _t: None,
+    conferir: Callable[[Studio, str], datetime | None] | None = None,
+) -> datetime:
+    """Troca o horário de um Short programado, pela página de edição dele no Studio: abre a
+    visibilidade, escreve a data e a hora novas no "Programar", conclui e salva. Depois confere
+    na lista do canal (o JSON do próprio Studio) que a hora marcada é a nova; devolve a hora que
+    o canal mostra."""
+    pg = studio.pagina
+    passo = "abrir a página do Short"
+    try:
+        andamento("Abrindo o Short no YouTube Studio…")
+        pg.goto(f"{STUDIO}/video/{video_id}/edit", wait_until="domcontentloaded", timeout=60_000)
+        caixa = pg.locator("ytcp-video-metadata-visibility").first
+        caixa.wait_for(timeout=60_000)
+        if "programad" not in " ".join(caixa.inner_text().split()).casefold():
+            raise FalhaNaPostagem(
+                "No YouTube este Short não está mais programado (já saiu ou foi mudado à mão)."
+            )
+        passo = "abrir a visibilidade"
+        andamento("Trocando a data e a hora…")
+        caixa.click()
+        janela = "ytcp-video-visibility-select"
+        _primeiro_visivel(pg, [janela, "tp-yt-paper-dialog #second-container"])
+        expandir = _primeiro_visivel(
+            pg, [f"{janela} #second-container-expand-button", "#second-container-expand-button"],
+            espera_ms=3000,
+        )  # fmt: skip
+        aberto = _primeiro_visivel(pg, [f"{janela} #datepicker-trigger"], espera_ms=500)
+        if expandir is not None and aberto is None:  # o "Programar" ainda está fechado
+            expandir.click()
+            pg.wait_for_timeout(800)
+        _foto(pg, fotos, "reagendar_1_visibilidade")
+        passo = "data e hora"
+        _escrever_data_e_hora(pg, quando, janela)
+        _foto(pg, fotos, "reagendar_2_horario")
+        passo = "concluir"
+        pronto = _primeiro_visivel(
+            pg, [f"{janela} #save-button", "ytcp-video-visibility-select ytcp-button#save-button",
+                 "tp-yt-paper-dialog #save-button"],
+        )  # fmt: skip
+        if pronto is None:
+            raise FalhaNaPostagem("O Studio não mostrou o “Concluído” da visibilidade.")
+        pronto.click()
+        pg.wait_for_timeout(1500)
+        passo = "salvar"
+        andamento("Salvando no YouTube Studio…")
+        salvar = pg.locator("ytcp-button#save")
+        salvar.wait_for(timeout=30_000)
+        salvar.click()
+        pg.wait_for_timeout(4000)
+        _foto(pg, fotos, "reagendar_3_salvo")
+        passo = "conferir o horário"
+        andamento("Conferindo o horário novo no canal…")
+        conferir = conferir or _hora_no_canal
+        marcada = conferir(studio, video_id)
+        if marcada is None or marcada.replace(second=0, microsecond=0) != quando.replace(
+            second=0, microsecond=0, tzinfo=None
+        ):
+            visto = f"{marcada:%d/%m às %H:%M}" if marcada else "sem horário"
+            raise FalhaNaPostagem(f"Depois de salvar, o canal mostra o Short {visto}.")
+        return marcada
+    except FalhaNaPostagem:
+        _foto(pg, fotos, "reagendar_erro")
+        raise
+    except Exception as erro:
+        _foto(pg, fotos, "reagendar_erro")
+        raise FalhaNaPostagem(f"O reagendamento parou no passo “{passo}”: {erro}") from erro
+
+
+def _hora_no_canal(studio: Studio, video_id: str) -> datetime | None:
+    """A hora programada do Short, pela lista de Shorts do Studio (None se não está programado)."""
+    from spurgeon.canal.cronograma import PROGRAMADO, procurar_short
+
+    item = procurar_short(studio, video_id=video_id)
+    return item.quando if item is not None and item.situacao == PROGRAMADO else None

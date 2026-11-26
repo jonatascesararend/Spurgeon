@@ -21,6 +21,7 @@ def etapas_registradas() -> list[Etapa]:
 
         return etapas_demo()
     from spurgeon.audio.etapas import etapas_audio_base
+    from spurgeon.audio.exportar import ExportarAudio
     from spurgeon.audio.pausas import CalcularCortes, DetectarPausas
     from spurgeon.render.finalizar import Finalizar
     from spurgeon.render.shorts import RenderizarShorts
@@ -41,6 +42,7 @@ def etapas_registradas() -> list[Etapa]:
 
     return [
         *etapas_audio_base(),
+        ExportarAudio(),
         Transcrever(),
         RevisarTranscricao(),
         DetectarPausas(),

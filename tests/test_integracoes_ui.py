@@ -239,3 +239,40 @@ def test_registro_de_atividade_acrescenta_linhas(aba):
     texto = aba.atividade.get("1.0", "end")
     assert "YouTube: Short “Deus é fiel” agendado" in texto and texto.count("\n") >= 2
     assert str(aba.atividade.cget("state")) == "disabled"  # a pessoa não edita o registro
+
+
+def test_cartao_do_gemini_guarda_a_chave_sem_mostrar_e_testa(aba, cofre, monkeypatch):
+    from spurgeon.shorts import gemini
+
+    cartao = aba.gemini
+    assert "Desligada" in cartao.situacao.cget("text")
+    assert str(cartao.botao_apagar.cget("state")) == "disabled"
+    cartao.entrada_chave.insert(0, " AIzaTeste\n")
+    vistos = []
+    monkeypatch.setattr(gemini, "testar", lambda c: vistos.append(c) or "chave aceita")
+    cartao.testar()
+    bombear(aba, lambda: not cartao.testando)
+    assert vistos == [gemini.Configuracao("AIzaTeste", gemini.MODELO_PADRAO)]
+    assert "Tudo certo" in cartao.mensagem.cget("text")
+    assert cartao.entrada_chave.get() == ""  # o segredo não volta para a tela
+    assert "Ligada" in cartao.situacao.cget("text")
+    assert "AIzaTeste" not in cofre.caminho.read_text(encoding="utf-8")  # criptografada
+
+
+def test_cartao_do_gemini_mostra_o_erro_e_apagar_desliga(aba, cofre, monkeypatch):
+    from spurgeon.shorts import gemini
+
+    cofre.definir(gemini.CONTA, gemini.CAMPO_CHAVE, "AIzaRuim", segredo=True)
+    cartao = aba.gemini
+    cartao.atualizar()
+
+    def recusa(_config):
+        raise gemini.ErroDoGemini("A chave do Gemini não foi aceita")
+
+    monkeypatch.setattr(gemini, "testar", recusa)
+    cartao.testar()
+    bombear(aba, lambda: not cartao.testando)
+    assert "não foi aceita" in cartao.mensagem.cget("text")
+    monkeypatch.setattr(dialogos, "confirmar", lambda *a, **k: True)
+    cartao.apagar()
+    assert gemini.configuracao(cofre) is None and "Desligada" in cartao.situacao.cget("text")

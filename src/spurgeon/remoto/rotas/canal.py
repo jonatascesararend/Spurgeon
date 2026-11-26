@@ -99,6 +99,22 @@ def rotas(ctx: Contexto) -> list[Route]:
         ctx.cronograma.atualizar()
         return JSONResponse(ctx.cronograma.estado())
 
+    async def mesclar(request: Request) -> JSONResponse:
+        """Junta um Short do Spurgeon com o do canal (o mesmo vídeo, com outro nome): vale o
+        horário do YouTube."""
+        from spurgeon.remoto.cronograma import MesclaInvalida
+
+        try:
+            corpo = json.loads(await request.body() or b"{}")
+            projeto, corte, canal = str(corpo["projeto"]), int(corpo["corte"]), str(corpo["canal"])
+        except (ValueError, KeyError, TypeError) as erro:
+            raise HTTPException(400, "Pedido inválido.") from erro
+        try:
+            item = await run_in_threadpool(ctx.cronograma.mesclar, projeto, corte, canal)
+        except MesclaInvalida as erro:
+            raise HTTPException(409, str(erro)) from erro
+        return JSONResponse({"mesclado": item.para_json(), **ctx.cronograma.estado()})
+
     def tarefa(_request: Request) -> JSONResponse:
         atual = ctx.novos.atual
         return JSONResponse(atual.para_json() if atual else None)
@@ -109,4 +125,5 @@ def rotas(ctx: Contexto) -> list[Route]:
         Route("/api/canal/tarefa", tarefa),
         Route("/api/canal/cronograma", cronograma),
         Route("/api/canal/cronograma/atualizar", atualizar_cronograma, methods=["POST"]),
+        Route("/api/canal/cronograma/mesclar", mesclar, methods=["POST"]),
     ]

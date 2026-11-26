@@ -1,3 +1,3 @@
 """Studio Spurgeon: cortes e otimização de vídeos de sermões, aulas e Shorts."""
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"

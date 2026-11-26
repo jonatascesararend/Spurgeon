@@ -110,6 +110,10 @@ def _processar(args: argparse.Namespace) -> int:
         valores.qualidade = args.qualidade
     valores.revisar_transcricao = False  # sem janela, ninguém para revisar
     valores.modo = args.modo
+    if args.audio_externo:
+        valores.audio_externo = str(args.audio_externo)
+    if args.formato_audio:
+        valores.audio_formato = args.formato_audio
     if args.introducao:
         valores.introducao = True
     if args.vinheta_final:
@@ -357,10 +361,20 @@ def main(argv: list[str] | None = None) -> int:
     processar.add_argument("--limiar-pausa", help="tamanho mínimo da pausa a cortar, em s (10,0)")
     processar.add_argument(
         "--modo",
-        choices=("completo", "so_shorts", "so_vinhetas"),
+        choices=("completo", "so_shorts", "so_vinhetas", "so_audio"),
         default="completo",
-        help="completo (padrão); só os Shorts, aproveitando o projeto; ou só juntar a "
-        "introdução e a vinheta a um vídeo longo já pronto",
+        help="completo (padrão); só os Shorts, aproveitando o projeto; só juntar a "
+        "introdução e a vinheta a um vídeo longo já pronto; ou só tirar o áudio do vídeo",
+    )
+    processar.add_argument(
+        "--audio-externo",
+        type=Path,
+        help="outra trilha de áudio (ex.: melhorada por fora) no lugar do som do vídeo",
+    )
+    processar.add_argument(
+        "--formato-audio",
+        choices=("wav", "mp3"),
+        help="formato do arquivo no modo so_audio (padrão: wav)",
     )
     processar.add_argument("--introducao", action="store_true", help="junta a introdução")
     processar.add_argument(

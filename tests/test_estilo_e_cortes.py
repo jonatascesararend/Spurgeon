@@ -438,3 +438,22 @@ def test_estilo_nas_opcoes_vira_enquadramento_e_tratamento():
     assert o.tratamento.saturacao == 12
     assert not o.enquadramento_nos_curtos.ativo and o.tratamento_nos_curtos.neutro
     assert OpcoesProcessamento(tratamento_brilho=9).tratamento.neutro  # desligado
+
+
+@pytest.mark.ffmpeg
+def test_pedido_do_celular_renderiza_ou_refaz_so_um_short(ctx_shorts):
+    from spurgeon.render.shorts import pedir_render_de
+
+    gravar_cortes(ctx_shorts.pastas.cortes_shorts, [corte(1, 0.0, 1.2), corte(2, 1.3, 2.5)])
+    pedir_render_de(ctx_shorts.pastas, [2])
+    rodar(RenderizarShorts(), ctx_shorts)
+    primeiro = ctx_shorts.pastas.shorts / "short_01_corte_1.mp4"
+    segundo = ctx_shorts.pastas.shorts / "short_02_corte_2.mp4"
+    assert segundo.exists() and not primeiro.exists()  # só o pedido
+
+    rodar(RenderizarShorts(), ctx_shorts)  # sem pedido: o que falta, e o pronto fica
+    antes = {v: v.stat().st_mtime_ns for v in (primeiro, segundo)}
+    pedir_render_de(ctx_shorts.pastas, [1], refazer=True)
+    rodar(RenderizarShorts(), ctx_shorts)
+    assert primeiro.stat().st_mtime_ns != antes[primeiro]  # refeito, mesmo valendo
+    assert segundo.stat().st_mtime_ns == antes[segundo]  # o outro não foi tocado

@@ -8,7 +8,8 @@ acende cada palavra da legenda no seu tempo. A legenda é a mesma que seria quei
 
 De onde vem o som, nesta ordem (os arquivos pesados de `_work/` somem quando o projeto conclui):
 1. o áudio tratado do projeto (`audio_final`), se ainda existe;
-2. o vídeo original (`estado.entrada.caminho`), se ainda existe;
+2. a trilha de áudio de fora (`opcoes.audio_externo`), se o projeto usa uma e ela existe;
+   senão o vídeo original (`estado.entrada.caminho`), se ainda existe;
 3. o próprio Short já renderizado (o som dele já está na linha do tempo do Short). Se o corte
    mudou depois do render, o celular avisa que o som pode não bater com a legenda.
 
@@ -90,6 +91,8 @@ def fonte_do_original(pastas: PastasProjeto) -> FonteDoAudio | None:
         tratado = pastas.audio_final(estado.opcoes)
         if tratado.is_file():
             return FonteDoAudio(tratado, "original")
+        if estado.opcoes.trilha_externa is not None:  # o som de fora substitui o do vídeo
+            return FonteDoAudio(estado.opcoes.trilha_externa, "original")
         original = Path(estado.entrada.caminho)
         if original.is_file():
             return FonteDoAudio(original, "original")

@@ -90,8 +90,11 @@ simuladas: **ainda não foi provado com contas reais**; os testes que faltam est
 
 ### No dia a dia
 
-Três modos: **Tudo**, **Só Shorts** (aproveita o que o projeto já tem) e **Só vinhetas** (junta a
-introdução e a vinheta a um vídeo longo pronto, em minutos). **Abrir projeto…** reabre qualquer
+Quatro modos: **Tudo**, **Só Shorts** (aproveita o que o projeto já tem), **Só vinhetas** (junta a
+introdução e a vinheta a um vídeo longo pronto, em minutos) e **Só áudio** (grava o som do sermão em
+WAV ou MP3, limpo e normalizado se você quiser). Em **Áudio**, "Usar outro áudio…" troca o som do
+vídeo por outro arquivo (um áudio melhorado em outro programa, por exemplo) em tudo o que o
+programa gera. **Abrir projeto…** reabre qualquer
 projeto e continua de onde ele está, e ao abrir o programa mostra a **lista dos projetos que já
 existem** (o último que você usou vem marcado) para abrir um com dois cliques, na página de
 Processamento, ou começar um vídeo novo.

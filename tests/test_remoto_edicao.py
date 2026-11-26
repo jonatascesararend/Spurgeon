@@ -270,6 +270,34 @@ def test_pontas_e_marcar_pelo_servidor(cliente):
     assert cliente.post(f"{BASE}/shorts/999/marcar", json={"incluir": True}).status_code == 404
 
 
+def test_corte_das_pausas_como_no_studio(pastas):
+    assert edicao.mudar_pausas(pastas, 7, 1.26).pausa_s == 1.3  # uma casa decimal
+    assert _corte(pastas, 7).pausa_s == 1.3
+    assert edicao.mudar_pausas(pastas, 7, 0.01).pausa_s == 0.1  # dentro dos limites do Studio
+    assert edicao.mudar_pausas(pastas, 7, 99).pausa_s == 10.0
+    assert edicao.mudar_pausas(pastas, 7, 0).pausa_s == 0.0 and _corte(pastas, 7).pausa_s == 0.0
+    for ruim in (-1.0, float("nan"), float("inf")):
+        with pytest.raises(LimiteInvalido):
+            edicao.mudar_pausas(pastas, 7, ruim)
+    with pytest.raises(edicao.CorteNaoEncontrado):
+        edicao.mudar_pausas(pastas, 999, 1.0)
+
+
+def test_corte_das_pausas_pelo_servidor(cliente):
+    assert cliente.post(f"{BASE}/shorts/7/pausas", json={"pausa_s": 1.0}).status_code == 409
+    cliente.post(f"{BASE}/sessao")
+    resumo = cliente.post(f"{BASE}/shorts/7/pausas", json={"pausa_s": 0.6}).json()
+    assert resumo["pausa_s"] == 0.6 and resumo["pausa_sobra_s"] == 0.3  # metade do limiar
+    lista = {s["id"]: s for s in cliente.get(f"{BASE}/shorts").json()}
+    assert lista[7]["pausa_s"] == 0.6 and lista[3]["pausa_s"] == 0.0
+    desligado = cliente.post(f"{BASE}/shorts/7/pausas", json={"pausa_s": 0}).json()
+    assert desligado["pausa_s"] == 0.0 and desligado["pausa_sobra_s"] == 0.0
+    for ruim in ({"pausa_s": "1"}, {"pausa_s": True}, {}):
+        assert cliente.post(f"{BASE}/shorts/7/pausas", json=ruim).status_code == 400
+    assert cliente.post(f"{BASE}/shorts/7/pausas", json={"pausa_s": -2}).status_code == 422
+    assert cliente.post(f"{BASE}/shorts/999/pausas", json={"pausa_s": 1}).status_code == 404
+
+
 def test_nao_edita_enquanto_o_pc_escolhe_os_cortes(cliente, pastas):
     cliente.post(f"{BASE}/sessao")
     estado = _estado(pastas)
@@ -319,7 +347,8 @@ def test_renderizar_pelo_celular_precisa_do_video_original(cliente, pastas, tmp_
     assert ok.status_code == 200 and ok.json()["shorts"] == 1
     opcoes = _estado(pastas).opcoes
     assert opcoes.modo == "so_shorts" and not opcoes.pausar_aprovar_cortes
-    assert cliente.post(f"{BASE}/renderizar").status_code == 409  # já está rodando
+    na_fila = cliente.post(f"{BASE}/renderizar")  # já está rodando: os que faltam entram na fila
+    assert na_fila.status_code == 200 and na_fila.json()["na_fila"]
 
     assert cliente.post("/api/processamento/pausar").json()["rodando"]
     assert ExecutorFalso.criados[0].enviados == ["pausar"]

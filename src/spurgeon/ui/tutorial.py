@@ -88,7 +88,8 @@ PASSOS: tuple[Passo, ...] = (
         "2. O que gerar: o modo",
         "“Tudo” processa um sermão novo do começo ao fim. “Só Shorts” refaz apenas os Shorts de "
         "um projeto que já foi transcrito. “Só vinhetas” junta a introdução e a vinheta final a um "
-        "vídeo que já está pronto. No primeiro sermão, deixe em “Tudo”.",
+        "vídeo que já está pronto. “Só áudio” só tira o som do vídeo e o grava em WAV ou MP3. "
+        "No primeiro sermão, deixe em “Tudo”.",
         alvo="modo",
         pagina=0,
     ),
@@ -220,7 +221,7 @@ PASSOS: tuple[Passo, ...] = (
     ),
     Passo(
         "Lista de cortes: notas e categorias",
-        "À esquerda ficam os Shorts sugeridos. Marque os que quer renderizar. Cada um tem uma "
+        "À esquerda ficam os Shorts sugeridos. Aprove os que quer renderizar. Cada um tem uma "
         "nota de 0 a 100 (o que a IA achou somado ao que se mede no texto) e uma categoria, o "
         "tipo de trecho, indicada por uma cor. Ordene por nota ou pelo horário no sermão, filtre "
         "os já postados, os agendados ou os que faltam postar (o selo verde ou azul da linha diz "
@@ -282,8 +283,8 @@ PASSOS: tuple[Passo, ...] = (
         "Salvar, descartar e renderizar",
         "“Salvar alterações” guarda o que você corrigiu sem renderizar, e “Descartar alterações” "
         "joga fora o que mudou desde a última vez que salvou (ele pergunta antes). “Renderizar” "
-        "cria os arquivos dos Shorts marcados; os que já estão prontos e não mudaram não são "
-        "refeitos, e os desmarcados vão para a pasta “desmarcados” (nada é apagado). O tempo "
+        "cria os arquivos dos Shorts aprovados; os que já estão prontos e não mudaram não são "
+        "refeitos, e os sem aprovação vão para a pasta “desmarcados” (nada é apagado). O tempo "
         "estimado aparece antes de começar.",
         alvo="studio_rodape",
         vista=VISTA_STUDIO,

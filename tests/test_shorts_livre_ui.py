@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from customtkinter import CTkLabel
 
 from spurgeon.shorts.analise import separar_frases
 from spurgeon.shorts.dados import (
@@ -349,7 +350,7 @@ def test_cada_corte_diz_se_foi_gerado_automaticamente_ou_manualmente(raiz, pasta
             w.cget("text")
             for linha in editor._linhas.values()
             for w in linha.winfo_children()
-            if hasattr(w, "cget") and "gerado" in str(w.cget("text"))
+            if isinstance(w, CTkLabel) and "gerado" in str(w.cget("text"))  # não a moldura 👍/👎
         ]
         assert len(textos) == len(cortes)
     finally:

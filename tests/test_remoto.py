@@ -338,8 +338,11 @@ def test_servidor_barra_quem_nao_vem_pelo_tailscale(servidor):
 def test_servidor_entrega_o_app_e_o_icone(servidor):
     pagina = servidor.get("/")
     assert pagina.status_code == 200 and "Studio Spurgeon" in pagina.text
-    for arquivo in ("/app.js", "/sw.js", "/estilo.css", "/manifest.json"):
-        assert servidor.get(arquivo).status_code == 200, arquivo
+    assert pagina.headers["cache-control"] == "no-cache"  # o celular sempre confere com o PC
+    for arquivo in ("/app.js", "/sw.js", "/estilo.css", "/manifest.json", "/app.js?v=x"):
+        resposta = servidor.get(arquivo)
+        assert resposta.status_code == 200, arquivo
+        assert resposta.headers["cache-control"] == "no-cache", arquivo
     icone = servidor.get("/icone-192.png")
     assert icone.status_code == 200 and icone.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert servidor.get("/icone-77.png").status_code == 404

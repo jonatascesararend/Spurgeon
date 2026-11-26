@@ -1,4 +1,4 @@
-"""O ícone do programa (`recursos/studio_spurgeon.ico`) na janela, nas caixas e na barra de tarefas.
+"""O ícone do programa (`recursos/icone_studio_spurgeon.ico`) na janela, nas caixas e na barra.
 
 Sem isso o Windows mostra o ícone do Python (o programa roda no `pythonw.exe`) e o CustomTkinter
 põe o dele nas janelas. Duas coisas resolvem:
@@ -25,7 +25,7 @@ import customtkinter as ctk
 
 from spurgeon.core.config import raiz_repositorio
 
-NOME_DO_ICONE = "studio_spurgeon.ico"
+NOME_DO_ICONE = "icone_studio_spurgeon.ico"
 #: a identidade do programa para o Windows (agrupa a janela e dá o ícone certo na barra de tarefas)
 ID_DO_APLICATIVO = "StudioSpurgeon.App"
 _MARCA = "_icone_spurgeon"

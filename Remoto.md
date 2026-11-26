@@ -230,6 +230,19 @@ de fumaça no servidor de verdade; fotos do app em 393×851, temas escuro e clar
   `tailscale serve` (fica guardado no Tailscale). `spurgeon remoto iniciar` (ou só `spurgeon remoto`) sobe o servidor e o
   vigia; `spurgeon remoto inicializacao ligar` cria o atalho do Windows. O log fica em
   `%LOCALAPPDATA%\Spurgeon\Logs\remoto.log`.
+* **Ligar e fechar pela pasta do Studio** (`remoto/liga_desliga.py`): `spurgeon remoto atalhos` cria "Controle remoto -
+  ligar" e "Controle remoto - fechar" na pasta do Studio (`.lnk` para o `pythonw` do `.venv`, com o ícone; não
+  versionados). `spurgeon remoto ligar` sobe o servidor sem janela se ele ainda não roda; `spurgeon remoto parar` fecha
+  os dois processos dele (no Windows o `pythonw` do `.venv` é um lançador com o Python de verdade como filho) e, se há um
+  trabalho em andamento (filhos: o trabalhador de um processamento, o navegador de uma postagem), pergunta antes e, com
+  o sim, fecha esse trabalho também. `spurgeon remoto reiniciar` (atalho "Controle remoto - reiniciar") faz os dois.
+  As respostas vêm numa caixa do Windows. O servidor novo é aberto solto (`abrir_servidor`: fora do "job" do lançador
+  do `.venv`, que mataria o filho junto).
+* **Reiniciar pelo celular** (menu → "Reiniciar o servidor"; `POST /api/sistema/reiniciar`): recusado (409, com o
+  motivo) no meio de um processamento da fila, de uma postagem, de um Short livre ou de um download do canal
+  (`liga_desliga.motivo_para_nao_reiniciar`). Senão marca `ctx.reiniciar`, responde e encerra; o `iniciar`, depois de
+  soltar a porta, abre o servidor novo. O app mostra "Reiniciando…", espera o servidor voltar e reabre a tela em que
+  estava. Serve para pôr no ar uma mudança no código Python do servidor sem ir ao PC.
 * App: lista de projetos (situação, data, Shorts), projeto (etapas com progresso e fim do log, recarregando a cada 4 s
   enquanto processa; Shorts com filtro Marcados/Renderizados/Todos, selos de postado, agendado e renderizado, categoria
   com cor), Short (player com pulo no vídeo, título, descrição, hashtags e texto/legenda) e menu (ativar e testar avisos,
@@ -437,6 +450,66 @@ salvas.
 * **Título, descrição e hashtags no celular:** cada caixa da tela do Short tem "✎ Editar" (`POST …/shorts/<id>/textos`,
   `edicao.mudar_textos`). Título novo refaz o `slug` e renomeia o Short já renderizado e o `.txt`, como o salvar do PC
   (`sincronizar_arquivos`); com um processamento rodando só o `cortes_shorts.json` muda (o PC acerta os arquivos depois).
+* **Corte das pausas no celular:** o bloco "Corte das pausas", acima do título na tela do Short, é a caixa "Cortar as
+  pausas deste Short maiores que [x] s" do Studio (`POST …/shorts/<id>/pausas` com `{"pausa_s": n}`, 0 desliga;
+  `edicao.mudar_pausas`, de 0,1 a 10 s com uma casa). Grava só `Corte.pausa_s` e refaz o som da audição (a assinatura do
+  áudio já leva `pausa_s`); o resumo do Short leva `pausa_s` e `pausa_sobra_s` (o respiro que sobra de cada pausa).
+* **"Aprovado" no lugar de "marcado":** no PC e no celular o Short com `Corte.incluir` aparece como **aprovado**
+  ("Aprovar todos", "N de M aprovados", "✓ Aprovado"). Só os textos mudaram: o campo, a API (`/marcar`) e a pasta
+  `desmarcados/` continuam com os nomes de antes.
+* **Lista de Shorts do projeto no celular:** abre sempre em "Todos" (voltar de um Short do mesmo projeto mantém o filtro);
+  filtros Todos, Aprovados, Renderizados, Não renderizados (aprovados sem vídeo), Programados, Postados, 👍 Bons e
+  👎 Ruins, cada um com a contagem. A **categoria** se escolhe num botão que flutua no canto da tela (a lista mostra a cor
+  e quantos Shorts há em cada uma) e vale junto com o filtro. Cada Short da lista mostra onde começa e termina no sermão
+  (`⏱ 12:05 → 13:02`). "⬇ Exportar a legenda do sermão" pede confirmação e fica embaixo da lista, antes de "⚙ Opções
+  usadas no processamento".
+* **👍 / 👎 dos Shorts** (`Corte.opiniao`: `bom`, `ruim` ou vazio; só um lembrete, não entra na assinatura do render):
+  no PC, dois botões na linha de cada Short do Studio, que gravam na hora como o "já postado" (`gravar_campos_do_corte`;
+  tocar de novo tira); no celular, o bloco "O que achou deste Short?" na tela do Short (`POST …/shorts/<id>/opiniao` com
+  `{"opiniao": "bom"|"ruim"|""}`, `edicao.dar_opiniao`), o selo na lista e os filtros 👍 / 👎.
+* **🎯 Ajuste fino da legenda** (PC e celular): para quando a transcrição erra o tempo de uma palavra (a legenda
+  adiantada ou atrasada) ou come uma palavra. A pessoa ouve o trecho do sermão (na linha do tempo do vídeo original,
+  com 1 s de folga em cada ponta; `render/trecho_de_audio.py`, do áudio tratado ou do vídeo original) e acerta palavra
+  por palavra o texto, o início e o fim (±0,02 / ±0,1 s, ou "⏱ Agora": o instante que está tocando, menos 0,12 s de
+  reação), acrescenta a que faltou ("＋ Palavra depois": ocupa o silêncio até a seguinte ou a metade desta) e tira a que
+  sobrou. "Mover as seguintes junto" empurra as de depois pelo mesmo tanto. Fica em `Corte.ajuste_fino`
+  (`shorts/ajuste_fino.py`: os trechos que o Short mostrava e as palavras), nunca na transcrição; `palavras_com_a_legenda`
+  usa `base_do_corte`, então render, prévia, audição do celular e exportar seguem o ajuste. Se o texto muda,
+  `Corte.legenda` passa a ter o texto ajustado (as outras caixas mostram igual). Puxar o início ou o fim depois traz
+  as palavras novas da transcrição sem desfazer as ajustadas. O Short renderizado fica "alterado" (a assinatura e o
+  registro levam o resumo do ajuste quando ele existe). No PC: botão "🎯 Ajuste fino…" embaixo da legenda do Studio,
+  uma janela com a lista das palavras (a que toca fica acesa), velocidades 1× / 0,75× / 0,5× (`atempo`) e o
+  desfazer do Studio; vale ao salvar. No celular: a ferramenta "🎯 Ajuste fino" da tela do Short (o navegador deixa
+  mais devagar), `GET/POST …/shorts/<id>/ajuste_fino`, `POST …/ajuste_fino/desfazer` e `GET …/ajuste_fino/som` (um
+  `.m4a` em `_work/remoto/ajuste_<id>_…`, refeito quando o corte muda; 409 sem o som do sermão no PC).
+* **✨ Revisão do Gemini, Short a Short** (opcional; a chave da API do Google Gemini fica no cofre, conta `gemini`,
+  colada no cartão "Revisão dos Shorts pelo Google Gemini" da aba Integrações do PC, com "Salvar e testar"): o
+  Gemini lê a legenda, o título e a descrição do Short e responde em JSON com esquema (`shorts/revisao_gemini.py`):
+  veredito `bom` / `ajustar` / `ruim`, nota de 0 a 10, comentário, se a ideia fica completa, se título e descrição
+  combinam, e um título e uma descrição sugeridos (vazios quando os de agora já servem). O parecer fica em
+  `Corte.revisao_gemini` (gravado na hora; não entra na assinatura do render) e marca o Short como **revisado pelo
+  Gemini**: no PC, o quadro "Revisão do Gemini" no detalhe do Studio (botão "✨ Revisar com o Gemini", selo do veredito,
+  "Usar este título" / "Usar esta descrição", que valem ao salvar) e o `✨ Gemini: ajustar 7/10` na linha da lista; no
+  celular, o mesmo bloco na tela do Short (`POST …/shorts/<id>/gemini`; 409 sem chave, 422 com pouco texto, 502 quando
+  o Gemini recusa ou não responde), o selo na lista e o filtro "✨ Revisados". Usar a sugestão vai pelo `/textos` de
+  sempre. Se o título ou a descrição mudarem depois, o parecer avisa que ficou desatualizado. A chamada
+  (`shorts/gemini.py`, só `urllib`) tenta de novo nos erros passageiros (503 "alta demanda") e, se o modelo escolhido
+  (`gemini-flash-latest`) continuar lotado, usa o `gemini-flash-lite-latest`.
+* **Renderizar só este Short / Refazer** (tela do Short, aba "▶ Vídeo pronto"; num Short aprovado que ainda não tem vídeo,
+  o bloco fica embaixo da audição): `POST …/shorts/<id>/renderizar` com `{"refazer": bool}`. A fila grava
+  `_work/renderizar_so.json` (`render/shorts.pedir_render_de`) e começa a renderização como o "Renderizar" de sempre;
+  a etapa `RenderizarShorts` lê e apaga o pedido no começo (`consumir_pedido_de_render`, vale 30 min) e só renderiza
+  aqueles cortes (com `refazer`, mesmo que o pronto ainda valha). Os outros Shorts não mudam de aprovação nem de arquivo
+  (a arrumação da pasta continua olhando todos). Quando o processamento da fila termina, um pedido que não chegou à etapa
+  é apagado. Recusa (409) Short sem aprovação, acima do limite, já pronto sem `refazer` e sem o vídeo original.
+* **Prévia do tratamento de imagem no celular** (opções do projeto, grupo "Tratamento de imagem"; `remoto/tratamento.py`):
+  como o cartão do PC, um quadro do vídeo com o antes e o depois (régua que move a linha), "Outro quadro" (5 instantes
+  espalhados pelo trecho escolhido), "✨ Ajuste automático" (`POST …/tratamento/sugerir`: `sugerir_tratamento` em 5
+  quadros, grava nas opções e liga o tratamento se mudou algo), as 7 réguas de −100 a 100 (mexer refaz a prévia; soltar
+  grava) e "Zerar os ajustes". O quadro sai do FFmpeg com os filtros do render (`GET …/tratamento/quadro?i=&original=1`
+  ou com `brilho=…&contraste=…`), o `.nut` de cada instante fica em `_work/previa_tratamento/`. Um projeto criado do canal
+  ainda não tem o vídeo: o botão "⬇ Baixar o vídeo para ver a prévia" (`POST …/baixar`, `NovosProjetos.comecar(…,
+  processar=False)`) só baixa, sem começar o processamento; `configuracao` diz `video_no_pc`.
 * **Cronograma do canal** (aba "📅 Cronograma" da tela inicial; `canal/cronograma.py`, `remoto/cronograma.py`,
   `GET /api/canal/cronograma[?auto=1]`, `POST …/atualizar`): calendário do mês passado em diante com quantos Shorts (S) e
   vídeos longos (V) cada dia tem (cor forte = programado, clara = publicado); tocar no dia mostra as horas; embaixo, os
@@ -472,7 +545,11 @@ salvas.
   a duração). Na tela do projeto, enquanto nenhuma etapa saiu de "pendente", vêm as **opções** (`remoto/configuracao.py`,
   `GET/POST /api/projetos/<p>/opcoes`): o que gerar, trecho do vídeo, áudio, imagem, Shorts, revisões e processamento,
   descritas pelo servidor (tipo, limites, ajuda) e validadas por `OpcoesProcessamento` (o mesmo do PC); cada mudança é
-  gravada na hora. Introdução, vinheta e marca d'água só ligam se o arquivo já foi escolhido no PC. "▶ Começar" baixa
+  gravada na hora. Introdução, vinheta e marca d'água só ligam se o arquivo já foi escolhido no PC. O modo pode ser
+  "Só o áudio" (o arquivo pronto sai em `GET /api/projetos/<p>/audio`, botão "⬇ Baixar o áudio do sermão"), e a
+  **trilha de áudio de fora** (campo de tipo `trilha`) é enviada inteira no corpo de `POST /api/projetos/<p>/trilha?nome=`
+  (`remoto/trilha.py`, grava em `trilha_externa/`); o celular só vê o nome do arquivo e só pode voltar ao som do vídeo
+  (`audio_externo: ""`, que apaga a enviada), nunca escrever um caminho. "▶ Começar" baixa
   (se preciso), grava a entrada de verdade, confere o ambiente com as opções DO PROJETO e põe na fila. Depois de
   começar, as opções ficam só para ver ("⚙ Opções usadas").
 * **A lista de vídeos do canal fica guardada** (`rotas/canal.py`, `canal_videos.json` ao lado do `remoto.json`,
@@ -495,11 +572,55 @@ salvas.
   sempre na lista do Studio e do celular. Com um processamento rodando o `.mp4` não é movido (o PC o leva depois).
 * **Datas em dia/mês/ano:** o dia da postagem é um campo de texto `dd/mm/aaaa` (barras automáticas, 📅 abre o calendário
   do celular), porque o `<input type="date">` segue o idioma do celular e pode mostrar mês/dia/ano.
+* **A fila dos Shorts: renderizar e programar no YouTube, um passo por vez** (`shorts/fila.py`,
+  `remoto/despachante.py`). Cada projeto guarda a sua fila em `_work/fila_dos_shorts.json` (um item por Short:
+  `acao` "" = só renderizar, `postar` = programar em `quando` ou publicar agora, `reagendar` = trocar o horário; `fase`
+  "", `render` ou `youtube`; `texto` = o andamento; `erro`). O **despachante** anda a fila de todos os projetos: com
+  qualquer processamento rodando no PC (`trabalhadores_rodando`) ele espera; se há Short esperando renderização,
+  começa uma renderização "só estes" do projeto do pedido mais antigo (`Fila.iniciar(so_os_shorts=…)`); só com a
+  renderização toda parada abre o YouTube Studio e faz UM item (programa pelo `canal/postar.postar`, ou troca o
+  horário pelo `canal/postar.reprogramar`). A janela do PC e o servidor têm cada um o seu despachante, mas só o que
+  tem a **vez** anda a fila (`%LOCALAPPDATA%/Spurgeon/despachante.json`, pid + sinal; quem some ou passa 60 s sem sinal
+  a perde). Quem pega a vez volta a "esperando" o que outro deixou pela metade. Um item com erro fica parado (marca
+  "⚠ a fila parou neste Short") até ser pedido de novo ou dispensado; os outros seguem.
+  * **Programar um Short não renderizado** (o "📤 Postar" do celular aparece sempre; no PC, "⚙ Renderizar e
+    programar" sob o "Agendado para"): entra na fila, é aprovado se não estava, renderiza e depois vai ao YouTube. Um
+    horário que chega enquanto o Short espera a fila (menos de 2 min) não é programado: erro, para pedir de novo.
+  * **Renderizar com o PC ocupado** (o "Renderizar" do Studio vira "Pôr N na fila"; no celular, "Renderizar só
+    este" e "Renderizar" respondem `na_fila`): os Shorts entram na fila e são renderizados quando a vez chega.
+  * **As marcas** (Studio Shorts e celular): "⚙ renderizando agora", "⏳ na fila para renderizar", "📤 programando
+    no YouTube", "🕒 na fila de programação". O "renderizando agora" vem da própria etapa de renderização
+    (`_work/renderizando_agora.json`: pid, os ids da vez, o atual e os feitos; some no fim), então vale para
+    qualquer renderização, pedida pela fila, pelo botão do PC ou pelo celular. O Studio relê as marcas a cada 3 s; o
+    celular, a cada 4 s na tela do Short (e 5 s na lista). Filtro "⏳ Na fila" no celular.
+  * **Reagendar** (`POST /api/projetos/<p>/shorts/<c>/reagendar` `{"quando"}`; no PC, mudar o "Agendado para" de um
+    Short programado no YouTube pergunta "Reagendar no YouTube?" 1,5 s depois de parar de digitar): só até 5 minutos
+    antes do horário marcado, e o novo precisa estar mais de 5 minutos à frente (`fila.pode_reagendar`, conferido de
+    novo na hora de fazer). A automação abre a página de edição do Short, a visibilidade, o "Programar", escreve a
+    data e a hora, conclui, salva e confere na lista do canal (o JSON) que a hora mudou. "Manter o do YouTube" volta o
+    horário daqui ao de lá. Os seletores da janela de visibilidade da página de edição ainda não foram vistos num
+    reagendamento real: a primeira vez, acompanhe (as fotos ficam em `_work/remoto/postagem/reagendar_*.png`).
+  * **O PC acompanha o disco** (`EditorDeCortes._sincronizar_publicacao_do_disco`): o "agendado para" e o "já postado"
+    que a fila, o celular ou o cronograma mudam passam para a tela (a cada 30 s, quando um item sai da fila e antes de
+    salvar: salvar não desfaz mais o que a fila gravou). Uma renderização de fora deixa o editor no modo
+    "processando" (não move arquivos) como a da janela.
+  * `POST …/postar` não posta mais na hora: põe na fila (`Postagens` ficou sem uso nas rotas). `GET …/postar` traz
+    `fila` (a marca) e `youtube_quando`; `POST …/fila/tirar` tira (ou dispensa o erro).
+* **Mesclar no cronograma e o horário do YouTube manda** (`remoto/cronograma.py`): depois de cada leitura do canal,
+  `acertar_com_o_canal` faz cada Short do Spurgeon que está no canal (pelo id do YouTube no `postagens.json` ou, sem
+  id, pelo mesmo título exato) ficar com o horário do YouTube (mudado à mão lá, por exemplo) e virar postado se já
+  saiu; a tela diz "🔄 Horário do YouTube trazido para o Spurgeon: …". Um Short marcado no Spurgeon que o canal tem
+  com OUTRO nome aparece com "🔗 Mesclar com o do YouTube…": as sugestões (`parecidos`, título parecido pelo
+  `difflib` e o mesmo dia) vêm primeiro, depois os Shorts do canal mais perto da data. Mesclar
+  (`POST /api/canal/cronograma/mesclar` `{"projeto", "corte", "canal"}`) grava o id do YouTube no registro e o horário
+  de lá no Short; daí em diante ele acompanha o do canal. Um Short do canal já ligado a outro do Spurgeon é recusado.
+  O cronograma só existe no celular; o PC vê o resultado pelo disco.
 
 ## 7. Armadilhas conhecidas
 
-* **O controle remoto é opcional.** A interface importa só `remoto/sessao.py` e `remoto/fila.py` (sem dependência do
-  extra); o servidor, o Web Push e o Playwright só são importados por `spurgeon remoto`. O instalador não instala o extra.
+* **O controle remoto é opcional.** A interface importa só `remoto/sessao.py`, `remoto/fila.py`, `remoto/despachante.py`
+  e (sob demanda) `remoto/postagem.py` e `remoto/dados.py` (sem dependência do extra; o Playwright só na hora de abrir
+  o Studio); o servidor, o Web Push e o Playwright só são importados por `spurgeon remoto`. O instalador não instala o extra.
 * **O repositório é público.** Nenhum segredo, nome ou id de canal, nome de máquina do Tailscale, e-mail ou token nos
   arquivos: o nome do canal e as contas autorizadas ficam no `remoto.json` do PC; chaves no `Cofre`.
 * **Automação do YouTube Studio quebra quando a página muda.** Os seletores ficam num lugar só (`canal/`). Cada falha

@@ -88,6 +88,11 @@ ROTULOS_ORIGEM = {
     ORIGEM_AUTOMATICA: "gerado automaticamente",
     ORIGEM_MANUAL: "gerado manualmente",
 }
+#: a opinião da pessoa sobre um Short (👍 / 👎); vazio = nenhuma
+OPINIAO_BOA = "bom"
+OPINIAO_RUIM = "ruim"
+OPINIOES = (OPINIAO_BOA, OPINIAO_RUIM)
+
 #: os cortes manuais começam aqui, longe dos ids dos candidatos (numerados de 0 em diante)
 ID_BASE_DOS_MANUAIS = 1_000_000
 
@@ -187,6 +192,16 @@ class Corte:
     #: agendamento). O arquivo renderizado vai para `shorts_gerados/agendados/`; passada a hora, o
     #: Short vira "já postado" sozinho e segue para `postados/` (`shorts/agendamento.py`)
     agendado_para: str = ""
+    #: o que a pessoa achou do Short, para lembrar depois: `bom` (👍), `ruim` (👎) ou vazio. Só
+    #: um lembrete: não muda o render nem a nota
+    opiniao: str = ""
+    #: o parecer do Google Gemini sobre o Short (`shorts/revisao_gemini.RevisaoDoGemini` em
+    #: dicionário); vazio = não revisado. Só aconselha: não muda o render nem a nota
+    revisao_gemini: dict[str, Any] = field(default_factory=dict)
+    #: o ajuste fino da legenda, palavra por palavra (`shorts/ajuste_fino.py`): `{"trechos": [[de,
+    #: ate], …], "palavras": [[texto, início, fim], …]}`, em segundos do vídeo original; vazio = as
+    #: palavras e os tempos da transcrição
+    ajuste_fino: dict[str, Any] = field(default_factory=dict)
 
     @property
     def janela_s(self) -> float:

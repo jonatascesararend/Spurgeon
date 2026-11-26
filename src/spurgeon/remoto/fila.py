@@ -107,7 +107,13 @@ class Fila:
         *,
         aprovar: str | None = None,
         ajustes: dict[str, Any] | None = None,
+        so_os_shorts: list[int] | None = None,
+        refazer: bool = False,
     ) -> None:
+        """Começa o processamento do projeto. `so_os_shorts`: a renderização dos Shorts fica só
+        nestes cortes (e, com `refazer`, renderiza de novo mesmo os que ainda valem)."""
+        from spurgeon.render.shorts import esquecer_pedido_de_render, pedir_render_de
+
         with self._trava:
             motivo = self.ocupada()
             if motivo:
@@ -118,12 +124,20 @@ class Fila:
             if ajustes:
                 estado.opcoes = estado.opcoes.model_copy(update=ajustes)
                 salvar_estado(pastas.raiz, estado)
+            if so_os_shorts:
+                pedir_render_de(pastas, so_os_shorts, refazer=refazer)
+            else:
+                esquecer_pedido_de_render(pastas)  # resto de um pedido que não chegou a valer
             executor = self._criar_executor()
-            executor.iniciar(pastas.raiz, config_da_execucao(pastas), aprovar=aprovar)
+            try:
+                executor.iniciar(pastas.raiz, config_da_execucao(pastas), aprovar=aprovar)
+            except BaseException:
+                esquecer_pedido_de_render(pastas)
+                raise
             self._executor = executor
             self.projeto, self.pausado, self.etapa, self.fracao = pastas.raiz.name, False, "", 0.0
             self.ultimo_resultado = self.ultimo_erro = ""
-            threading.Thread(target=self._acompanhar, args=(executor,), daemon=True).start()
+            threading.Thread(target=self._acompanhar, args=(executor, pastas), daemon=True).start()
             log.info("Processamento iniciado pelo celular: %s%s", pastas.raiz.name,
                      f" (aprovando {aprovar})" if aprovar else "")  # fmt: skip
 
@@ -133,7 +147,7 @@ class Fila:
         assert self._executor is not None
         self._executor.enviar(comando)
 
-    def _acompanhar(self, executor: ExecutorProjeto) -> None:
+    def _acompanhar(self, executor: ExecutorProjeto, pastas: PastasProjeto | None = None) -> None:
         """Lê os eventos do trabalhador (o pipe não pode encher) até ele terminar."""
         while True:
             for evento in executor.eventos():
@@ -141,6 +155,10 @@ class Fila:
             if not executor.ativo:
                 for evento in executor.eventos():
                     self._tratar(evento)
+                if pastas is not None:  # um "só este Short" que não chegou à etapa não fica valendo
+                    from spurgeon.render.shorts import esquecer_pedido_de_render
+
+                    esquecer_pedido_de_render(pastas)
                 return
             time.sleep(0.5)
 

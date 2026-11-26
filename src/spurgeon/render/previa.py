@@ -203,13 +203,15 @@ def previa_do_corte(
     pasta_fontes: Path | None = None,
     ao_progresso: Callable[[float], None] | None = None,
     cancelar: SinalControle | None = None,
+    audio_externo: Path | None = None,
 ) -> PreviaDoShort:
     """O Short em miniatura (270×480, 12 quadros por segundo, qualidade bem baixa).
 
     É a mesma receita do render (recorte 9:16, zoom, HDR→SDR, tratamento e a legenda do `montar_ass`
     com a legenda corrigida), só que o vídeo é reduzido logo depois do recorte, antes de converter
     a cor: assim a conversão trabalha em 270×480 e a prévia sai em uma fração do tempo do Short.
-    O som é o do vídeo original (sem limpeza nem normalização) e vai num `.wav` ao lado do `.mp4`.
+    O som é o do vídeo original (sem limpeza nem normalização), ou o da trilha de fora
+    (`audio_externo`, na mesma linha do tempo), e vai num `.wav` ao lado do `.mp4`.
     A marca d'água não entra.
 
     Os saltos do corte (pedaços tirados do meio) e as pausas encurtadas (`corte.pausa_s`, veja
@@ -218,6 +220,8 @@ def previa_do_corte(
     """
     pasta = destino.parent
     pasta.mkdir(parents=True, exist_ok=True)
+    tem_som = info.tem_audio or audio_externo is not None
+    som = "1:a" if audio_externo is not None else "0:a"  # a trilha de fora é a 2ª entrada
     duracao = max(0.1, corte.janela_s)  # o que se lê do original
     duracao_da_previa = duracao  # o que a prévia dura
     etapas = [
@@ -256,32 +260,36 @@ def previa_do_corte(
             *linhas_do_video_cortado(trechos, Fraction(FPS_DA_PREVIA_DO_SHORT)),
             f"[bruto]{','.join(etapas[1:])}[v]",  # o `fps` já foi no começo do roteiro
         ]
-        if info.tem_audio:
-            linhas += linhas_do_audio_cortado(trechos, "", entrada="0:a")
+        if tem_som:
+            linhas += linhas_do_audio_cortado(trechos, "", entrada=som)
         script.write_text(";\n".join(linhas), encoding="utf-8")
         mapa_do_video: list[str | Path] = ["-/filter_complex", script.name, "-map", "[v]"]
         mapa_do_audio: list[str | Path] = ["-map", "[a]"]
     else:
         mapa_do_video = ["-map", "0:v:0", "-vf", ",".join(etapas)]
-        mapa_do_audio = ["-map", "0:a:0"]
+        mapa_do_audio = ["-map", f"{som}:0"]
     saidas: list[str | Path] = [
         *mapa_do_video, "-an", "-c:v", "libx264", "-preset", "ultrafast",
         "-crf", "34", "-pix_fmt", "yuv420p", *_COR_BT709, "-movflags", "+faststart", "-f", "mp4",
         parcial,
     ]  # fmt: skip
-    if info.tem_audio:
+    if tem_som:
         saidas += [
             *mapa_do_audio, "-vn", "-ac", "1", "-ar", str(AUDIO_DA_PREVIA_HZ),
             "-c:a", "pcm_s16le", "-f", "wav", parcial_audio,
         ]  # fmt: skip
+    entradas: list[str | Path] = []
+    for arquivo in (video, audio_externo):
+        if arquivo is not None:
+            entradas += ["-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(duracao),
+                         "-i", arquivo]  # fmt: skip
     try:
         executar_ffmpeg(
-            ["-y", "-ss", f.numero_ffmpeg(corte.inicio), "-t", f.numero_ffmpeg(duracao),
-             "-i", video, *saidas],
+            ["-y", *entradas, *saidas],
             duracao_s=duracao_da_previa, ao_progresso=ao_progresso, cancelar=cancelar, cwd=pasta,
         )  # fmt: skip
         parcial.replace(destino)
-        if info.tem_audio:
+        if tem_som:
             parcial_audio.replace(audio)
         else:
             audio.unlink(missing_ok=True)
@@ -290,7 +298,7 @@ def previa_do_corte(
         script.unlink(missing_ok=True)
         parcial.unlink(missing_ok=True)
         parcial_audio.unlink(missing_ok=True)
-    return PreviaDoShort(destino, audio if info.tem_audio else None, duracao_da_previa)
+    return PreviaDoShort(destino, audio if tem_som else None, duracao_da_previa)
 
 
 def gerar_previa(

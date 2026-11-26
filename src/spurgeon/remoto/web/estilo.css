@@ -53,7 +53,7 @@ button { font: inherit; color: inherit; }
 .faixa { padding: 10px 14px; background: var(--aviso); color: #1b1300; font-size: 14px; }
 .faixa button { margin-left: 8px; border: 0; border-radius: 8px; padding: 4px 10px; background: #1b1300; color: #fff; }
 
-main { padding: 12px 12px 32px; max-width: 720px; margin: 0 auto; }
+main { padding: 12px 12px 84px; max-width: 720px; margin: 0 auto; }
 h2 { font-size: 15px; color: var(--texto-2); font-weight: 600; margin: 18px 4px 8px; text-transform: uppercase; letter-spacing: .04em; }
 
 /* cartões e listas */
@@ -336,4 +336,97 @@ a.botao { display: block; text-align: center; text-decoration: none; }
 .linha-campo { display: flex; align-items: center; gap: 8px; }
 .linha-campo .campo { max-width: 140px; }
 .unidade { color: var(--texto-2); }
+.linha-pausas { flex-wrap: wrap; margin: 8px 0 2px; }
+.linha-pausas > .opcao { margin: 0; }
+.linha-pausas .campo { max-width: 84px; text-align: center; }
 .chip.varrido { color: var(--texto-2); border-style: dashed; }
+
+/* filtros da lista de Shorts do projeto (quebram linha no celular) */
+.filtros { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.filtros button {
+  border: 1px solid var(--linha); background: var(--cartao); color: var(--texto-2);
+  padding: 6px 11px; border-radius: 999px; font-size: 14px;
+}
+.filtros button.ativo { background: var(--destaque); border-color: var(--destaque); color: #fff; font-weight: 600; }
+.filtros .conta { margin-left: 6px; font-size: 12px; opacity: .8; }
+.exportar-legenda { margin-top: 18px; }
+
+/* a categoria do Short: um botão flutuante no canto, que abre a lista das cores */
+.seletor-flutuante {
+  position: fixed; right: 14px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 15;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: calc(100% - 28px);
+}
+.seletor-flutuante[hidden] { display: none; }
+.botao-categoria {
+  display: flex; align-items: center; gap: 8px; border: 1px solid var(--linha); background: var(--cartao-2);
+  color: var(--texto); padding: 10px 16px; border-radius: 999px; font-size: 15px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+}
+.botao-categoria.filtrando { border-color: var(--destaque); }
+.botao-categoria .seta { color: var(--texto-2); font-size: 12px; }
+.seletor-flutuante .cor { width: 12px; height: 12px; border-radius: 6px; flex: none; }
+.seletor-flutuante .cor.todas { background: conic-gradient(#e2574c, #e0a93b, #3fb27f, #4a8fd9, #a46ad9, #e2574c); }
+.lista-categorias {
+  background: var(--cartao); border: 1px solid var(--linha); border-radius: 12px; padding: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .4); max-height: 60vh; overflow-y: auto; min-width: 230px;
+}
+.opcao-categoria {
+  display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent;
+  padding: 10px; border-radius: 8px; text-align: left; font-size: 15px;
+}
+.opcao-categoria .rotulo { flex: 1; }
+.opcao-categoria .conta { color: var(--texto-2); font-size: 13px; }
+.opcao-categoria.ativo { background: var(--cartao-2); font-weight: 600; }
+.opcao-categoria:active { background: var(--cartao-2); }
+
+/* 👍 / 👎 do Short */
+.botao-opiniao {
+  flex: 1; border: 1px solid var(--linha); background: var(--cartao-2); color: var(--texto);
+  padding: 10px; border-radius: 10px; font-size: 15px;
+}
+.botao-opiniao.bom.ligado { background: color-mix(in srgb, var(--ok) 25%, var(--cartao-2)); border-color: var(--ok); font-weight: 600; }
+.botao-opiniao.ruim.ligado { background: color-mix(in srgb, var(--erro) 25%, var(--cartao-2)); border-color: var(--erro); font-weight: 600; }
+
+/* a prévia do tratamento de imagem: o antes à esquerda da linha, o depois à direita */
+.comparacao { position: relative; border-radius: 10px; overflow: hidden; background: #000; aspect-ratio: 16 / 9; margin: 8px 0 4px; }
+.comparacao img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.comparacao .quadro-tratado { clip-path: inset(0 0 0 var(--divisao, 50%)); }
+.comparacao .divisoria {
+  position: absolute; top: 0; bottom: 0; left: var(--divisao, 50%); width: 2px; margin-left: -1px;
+  background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .6); pointer-events: none;
+}
+.comparacao .rotulo-antes, .comparacao .rotulo-depois {
+  position: absolute; top: 6px; padding: 2px 8px; border-radius: 6px; font-size: 12px;
+  background: rgba(0, 0, 0, .55); color: #fff; pointer-events: none;
+}
+.comparacao .rotulo-antes { left: 6px; }
+.comparacao .rotulo-depois { right: 6px; }
+.regua-divisao, .campo-opcao.ajuste input[type="range"] { width: 100%; accent-color: var(--destaque); }
+.linha-ajuste { display: flex; justify-content: space-between; }
+.valor-ajuste { color: var(--texto-2); font-variant-numeric: tabular-nums; }
+
+/* 🎯 o ajuste fino da legenda, palavra por palavra */
+.fino-controles { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.fino-controles .botao { width: auto; }
+.fino-velocidade { margin: 0; }
+.fino-posicao { font-variant-numeric: tabular-nums; min-width: 64px; }
+.fino-lista { display: flex; flex-wrap: wrap; gap: 4px; max-height: 38vh; overflow-y: auto; padding: 4px 0; }
+.fino-palavra { border: 1px solid var(--linha); background: transparent; color: inherit; border-radius: 6px;
+  padding: 5px 7px; font-size: 15px; }
+.fino-palavra.mudou { color: var(--aviso); border-color: color-mix(in srgb, var(--aviso) 55%, transparent); }
+.fino-palavra.tocando { background: color-mix(in srgb, var(--destaque) 35%, transparent); }
+.fino-palavra.atual { outline: 2px solid var(--destaque); outline-offset: 1px; }
+.fino-editor { border-top: 1px solid var(--linha); margin-top: 8px; padding-top: 8px; }
+.fino-cabeca { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.fino-ponta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 8px 0; }
+.fino-rotulo { width: 64px; color: var(--texto-2); }
+.fino-tempo { font-variant-numeric: tabular-nums; min-width: 76px; text-align: center; font-weight: 600; }
+.fino-ponta .botao-ferramenta { padding: 6px 8px; min-width: 44px; }
+.fino-ponta .destaque { border-color: var(--destaque); color: var(--destaque); }
+
+/* a fila do PC (renderizar e programar no YouTube) */
+.chip.fila { font-weight: 600; }
+.chip.fila.renderizando, .chip.fila.na_fila_do_render { color: var(--destaque); border-color: color-mix(in srgb, var(--destaque) 45%, transparent); }
+.chip.fila.programando, .chip.fila.na_fila_da_programacao { color: var(--aviso); border-color: color-mix(in srgb, var(--aviso) 45%, transparent); }
+.chip.fila.erro { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 45%, transparent); }
+.mesclar-crono { display: block; margin-top: 6px; }

@@ -88,3 +88,6 @@ client_secret*.json
 
 # Registros (instalacao.log do instalar.bat, interface.log)
 *.log
+
+# Atalhos criados no PC (`spurgeon remoto atalhos`): apontam para caminhos desta máquina
+/*.lnk

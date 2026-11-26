@@ -310,13 +310,21 @@ function desenharAndamento(caixa, a) {
 }
 
 function chipsDoShort(s) {
-  const chips = [h("span", { class: "chip" }, h("span", { class: "cor", style: `background:${s.categoria.cor}` }), s.categoria.rotulo),
-    h("span", { class: "chip" }, duracao(s.duracao))];
+  const chips = [];
+  if (s.fila) chips.push(h("span", { class: `chip fila ${s.fila.situacao}` }, s.fila.rotulo));
+  chips.push(h("span", { class: "chip" }, h("span", { class: "cor", style: `background:${s.categoria.cor}` }), s.categoria.rotulo),
+    h("span", { class: "chip" }, duracao(s.duracao)));
   if (s.postado) chips.push(h("span", { class: "chip ok" }, `✔ Postado ${s.postado_rotulo}`.trim()));
   else if (s.agendado_rotulo) chips.push(h("span", { class: "chip azul" }, `📅 ${s.agendado_rotulo}`));
   if (s.situacao === "alterado") chips.push(h("span", { class: "chip aviso" }, "✎ Mudou: renderizar de novo"));
   else if (s.renderizado) chips.push(h("span", { class: "chip ok" }, "▶ Renderizado"));
   else if (s.incluir) chips.push(h("span", { class: "chip" }, "Não renderizado"));
+  if (s.opiniao === "bom") chips.push(h("span", { class: "chip ok" }, "👍 Bom"));
+  else if (s.opiniao === "ruim") chips.push(h("span", { class: "chip erro" }, "👎 Ruim"));
+  if (s.gemini) {
+    const classe = { bom: "ok", ajustar: "aviso", ruim: "erro" }[s.gemini.veredito] || "";
+    chips.push(h("span", { class: `chip ${classe}` }, `✨ Gemini: ${s.gemini.veredito} ${s.gemini.nota}/10`));
+  }
   if (s.reserva && !s.incluir) chips.push(h("span", { class: "chip" }, "Reserva"));
   if (s.origem === "manual") chips.push(h("span", { class: "chip" }, "Shorts livre"));
   if (s.youtube) {
@@ -326,14 +334,40 @@ function chipsDoShort(s) {
   return h("div", { class: "chips" }, ...chips);
 }
 
+/** "12:05 → 13:02": onde o Short começa e termina no sermão. */
+const trechoDoShort = (s) => `⏱ ${textoDoTempo(s.inicio)} → ${textoDoTempo(s.fim)}`;
+
 function linhaDoShort(idProjeto, s) {
   return h("a", { class: `cartao short ${s.incluir ? "" : "desmarcado"}`, href: `#/p/${enc(idProjeto)}/s/${s.id}` },
     h("span", { class: `num ${s.numero ? "" : "fora"}` }, s.numero ?? "–"),
-    h("div", { class: "corpo" }, h("div", { class: "nome" }, s.titulo), chipsDoShort(s)),
+    h("div", { class: "corpo" }, h("div", { class: "nome" }, s.titulo),
+      h("div", { class: "meta" }, trechoDoShort(s)), chipsDoShort(s)),
   );
 }
 
-let filtroDosShorts = "marcados";
+const estaProgramado = (s) => !s.postado && (Boolean(s.agendado_rotulo) || (s.youtube && s.youtube.estado === "agendado"));
+const estaPostado = (s) => Boolean(s.postado) || Boolean(s.youtube && s.youtube.estado === "enviado");
+
+/** Os filtros da lista de Shorts do projeto: [chave, rótulo, quem entra]. */
+const FILTROS_DOS_SHORTS = [
+  ["todos", "Todos", () => true],
+  ["aprovados", "Aprovados", (s) => s.incluir],
+  ["renderizados", "Renderizados", (s) => s.renderizado],
+  ["nao_renderizados", "Não renderizados", (s) => s.incluir && !s.renderizado],
+  ["programados", "Programados", estaProgramado],
+  ["postados", "Postados", estaPostado],
+  ["bons", "👍 Bons", (s) => s.opiniao === "bom"],
+  ["ruins", "👎 Ruins", (s) => s.opiniao === "ruim"],
+  ["gemini", "✨ Revisados", (s) => Boolean(s.gemini)],
+  ["fila", "⏳ Na fila", (s) => Boolean(s.fila)],
+];
+
+// os filtros voltam a "Todos" (e a todas as categorias) cada vez que um projeto é aberto; voltar
+// de um Short do mesmo projeto mantém o que estava
+let filtroDosShorts = "todos";
+let categoriaDosShorts = "";
+let rotaAtual = "";
+let rotaAnterior = "";
 
 /** O que dá para fazer no projeto agora: aprovar a revisão, acompanhar o processamento, renderizar. */
 function acoesDoProjeto(id, a, atualizar) {
@@ -344,7 +378,7 @@ function acoesDoProjeto(id, a, atualizar) {
     if (revisao.id === "aprovar_cortes") {
       itens.push(h("div", { class: "cartao destaque" },
         h("div", { class: "nome" }, "✋ Os cortes esperam a sua aprovação"),
-        h("div", { class: "meta" }, "Marque os que viram Shorts e aprove: o PC segue o processamento."),
+        h("div", { class: "meta" }, "Aprove os cortes que viram Shorts e continue: o PC segue o processamento."),
         h("a", { class: "botao", href: `#/p/${enc(id)}/aprovar` }, "Revisar e aprovar os cortes")));
     } else {
       itens.push(h("div", { class: "cartao destaque" },
@@ -388,7 +422,7 @@ function acoesDoProjeto(id, a, atualizar) {
   if (!fila && !a.em_andamento && !revisao && a.a_renderizar > 0) {
     itens.push(h("button", { class: "botao", onclick: async (ev) => {
       const n = a.a_renderizar;
-      if (!confirm(`Renderizar ${plural(n, "Short", "Shorts")} no PC (os marcados que são novos ou mudaram)? O celular avisa quando terminar.`)) return;
+      if (!confirm(`Renderizar ${plural(n, "Short", "Shorts")} no PC (os aprovados que são novos ou mudaram)? O celular avisa quando terminar.`)) return;
       ev.currentTarget.disabled = true;
       try { await post(`/api/projetos/${enc(id)}/renderizar`); avisar("Renderização iniciada no PC."); await atualizar(); }
       catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
@@ -424,7 +458,45 @@ function blocoDasOpcoes(id, projeto, aoComecar) {
     desenhar();
   };
 
+  // a trilha de áudio de fora: o arquivo vai inteiro no corpo (XMLHttpRequest mostra o envio)
+  const enviarTrilha = (arquivo, situacao, botoes) => {
+    const pedido = new XMLHttpRequest();
+    pedido.open("POST", `/api/projetos/${enc(id)}/trilha?nome=${enc(arquivo.name)}`);
+    botoes.forEach((b) => { b.disabled = true; });
+    situacao.textContent = "Enviando o áudio… 0%";
+    pedido.upload.addEventListener("progress", (ev) => {
+      if (ev.lengthComputable) situacao.textContent = `Enviando o áudio… ${Math.floor((100 * ev.loaded) / ev.total)}%`;
+    });
+    pedido.addEventListener("load", () => {
+      let resposta = {};
+      try { resposta = JSON.parse(pedido.responseText); } catch (_) { /* resposta sem JSON */ }
+      if (pedido.status === 200) { config = resposta; avisar("Trilha de áudio enviada: ela substitui o som do vídeo."); }
+      else avisar(resposta.erro || `Não deu para enviar o áudio (erro ${pedido.status}).`);
+      desenhar();
+    });
+    pedido.addEventListener("error", () => { avisar("A conexão com o PC caiu durante o envio."); desenhar(); });
+    pedido.send(arquivo);
+  };
+
+  const campoDaTrilha = (c, pode) => {
+    const escolher = h("input", { type: "file", accept: "audio/*,video/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus", hidden: true });
+    const situacao = h("p", { class: "nota" }, c.valor ? `🎵 ${c.valor}` : "O som do próprio vídeo.");
+    const enviar = h("button", { class: "botao secundario", disabled: !pode || null, onclick: () => escolher.click() },
+      c.valor ? "Trocar o áudio…" : "⬆ Enviar um áudio…");
+    const doVideo = c.valor ? h("button", { class: "botao secundario", disabled: !pode || null, onclick: () => {
+      if (confirm("Voltar a usar o som do próprio vídeo? O áudio enviado é apagado do PC.")) salvar(c.campo, "");
+    } }, "Usar o som do vídeo") : null;
+    escolher.addEventListener("change", () => {
+      const arquivo = escolher.files && escolher.files[0];
+      if (arquivo) enviarTrilha(arquivo, situacao, [enviar, doVideo].filter(Boolean));
+    });
+    return h("div", { class: "campo-opcao" }, h("div", { class: "rotulo-opcao" }, c.rotulo), situacao,
+      h("div", { class: "linha-botoes" }, enviar, doVideo), escolher,
+      c.ajuda ? h("p", { class: "nota" }, c.ajuda) : null);
+  };
+
   const campoDaOpcao = (c, pode) => {
+    if (c.tipo === "trilha") return campoDaTrilha(c, pode);
     const desligado = !pode || (c.desligado && !c.valor);
     const ajuda = c.desligado && !c.valor ? c.desligado : c.ajuda;
     let controle;
@@ -468,38 +540,121 @@ function blocoDasOpcoes(id, projeto, aoComecar) {
       try { tarefa = await api("/api/canal/tarefa"); } catch (_) { continue; }
       desenharAndamento();
       if (tarefa && !tarefa.rodando) {
-        if (tarefa.erro) avisar(`Não deu para começar: ${tarefa.erro}`);
-        else { avisar(tarefa.texto); await aoComecar(); }
+        const soBaixou = tarefa.processar === false;
+        if (tarefa.erro) avisar(`${soBaixou ? "Não deu para baixar" : "Não deu para começar"}: ${tarefa.erro}`);
+        else { avisar(tarefa.texto); if (soBaixou) await bloco.recarregar(); else await aoComecar(); }
       }
     }
   };
 
   const desenharAndamento = () => {
     if (!tarefa) { encher(andamento); return; }
+    const soBaixar = tarefa.processar === false;
+    if (soBaixar && !tarefa.rodando && !tarefa.erro) { encher(andamento); return; } // o vídeo já veio: a prévia mostra
     encher(andamento, h("div", { class: `cartao ${tarefa.erro ? "aviso-bloco" : "destaque"}` },
-      h("div", { class: "nome" }, tarefa.rodando ? "⏳ Começando…" : tarefa.erro ? "Não deu para começar" : "Começou"),
+      h("div", { class: "nome" }, tarefa.rodando ? (soBaixar ? "⏳ Baixando o vídeo…" : "⏳ Começando…")
+        : tarefa.erro ? (soBaixar ? "Não deu para baixar o vídeo" : "Não deu para começar") : "Começou"),
       h("p", { class: "nota" }, tarefa.erro || tarefa.texto)));
+  };
+
+  // --- o tratamento de imagem, com a prévia de um quadro do vídeo (como o cartão do PC) -----
+  let quadroDoTratamento = 0; // "Outro quadro" passa para o próximo
+  let divisaoDoTratamento = 50; // onde está a linha entre o antes e o depois, em %
+  const salvarVarios = async (mudancas, redesenhar = true) => {
+    try { config = await post(`/api/projetos/${enc(id)}/opcoes`, mudancas); }
+    catch (e) { avisar(e.message); redesenhar = true; }
+    if (redesenhar) desenhar();
+  };
+  const blocoDoTratamento = (g, pode) => {
+    const ajustes = g.campos.filter((c) => c.tipo === "ajuste");
+    const outros = g.campos.filter((c) => c.tipo !== "ajuste");
+    const caixas = outros.map((c) => campoDaOpcao(c, pode));
+    if (!config.video_no_pc) {
+      const baixando = tarefa && tarefa.rodando;
+      return [h("p", { class: "nota" }, "A prévia mostra um quadro do vídeo com os ajustes, mas o vídeo ainda não está no PC."),
+        h("button", { class: "botao secundario", disabled: (!config.pode_mudar || baixando) || null, onclick: async (ev) => {
+          if (!confirm("Baixar o vídeo agora pelo YouTube Studio (sem começar o processamento), para ver a prévia?")) return;
+          ev.currentTarget.disabled = true;
+          try { tarefa = await post(`/api/projetos/${enc(id)}/baixar`); desenhar(); acompanhar(); }
+          catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+        } }, baixando ? "⏳ Baixando o vídeo…" : "⬇ Baixar o vídeo para ver a prévia"),
+        ...caixas, ...ajustes.map((c) => reguaDoAjuste(c, pode, () => {}))];
+    }
+    const valores = Object.fromEntries(ajustes.map((c) => [c.campo.replace("tratamento_", ""), c.valor]));
+    const base = `/api/projetos/${enc(id)}/tratamento/quadro?i=${quadroDoTratamento}`;
+    const aviso = h("p", { class: "nota" }, "Carregando um quadro do vídeo…");
+    const original = h("img", { class: "quadro-original", alt: "Quadro original", loading: "lazy" });
+    const tratado = h("img", { class: "quadro-tratado", alt: "O mesmo quadro com os ajustes", loading: "lazy" });
+    const comparacao = h("div", { class: "comparacao", style: `--divisao:${divisaoDoTratamento}%` }, original, tratado,
+      h("div", { class: "divisoria" }), h("span", { class: "rotulo-antes" }, "Antes"), h("span", { class: "rotulo-depois" }, "Depois"));
+    const linha = h("input", { type: "range", class: "regua-divisao", min: "0", max: "100", value: String(divisaoDoTratamento),
+      "aria-label": "Linha entre o antes e o depois" });
+    linha.addEventListener("input", () => { divisaoDoTratamento = Number(linha.value); comparacao.style.setProperty("--divisao", `${divisaoDoTratamento}%`); });
+    let espera = null;
+    const pedirPrevia = () => {
+      clearTimeout(espera);
+      espera = setTimeout(() => {
+        tratado.src = `${base}&${new URLSearchParams(Object.entries(valores).map(([k, v]) => [k, String(v)]))}`;
+      }, 250);
+    };
+    original.addEventListener("load", () => { aviso.textContent = "Arraste a régua abaixo do quadro para comparar o antes e o depois."; });
+    original.addEventListener("error", () => { aviso.textContent = "Não deu para ler um quadro do vídeo."; });
+    original.src = `${base}&original=1`;
+    pedirPrevia();
+    const ligado = (outros.find((c) => c.campo === "tratamento_ativo") || {}).valor;
+    return [comparacao, linha, aviso,
+      ligado ? null : h("p", { class: "nota" }, "Desligado: o vídeo sai sem o tratamento (a prévia mostra como ficaria)."),
+      h("div", { class: "linha-botoes" },
+        h("button", { class: "botao secundario", disabled: !pode || null, onclick: async (ev) => {
+          ev.currentTarget.disabled = true;
+          aviso.textContent = "Medindo a imagem do vídeo…";
+          try {
+            config = await post(`/api/projetos/${enc(id)}/tratamento/sugerir`);
+            avisar(config.sugestao_neutra ? "A imagem já está equilibrada: a sugestão não mudou nada." : "Ajuste automático aplicado: é um ponto de partida, ajuste a seu gosto.");
+          } catch (e) { avisar(e.message); }
+          desenhar();
+        } }, "✨ Ajuste automático"),
+        h("button", { class: "botao secundario", onclick: () => { quadroDoTratamento += 1; desenhar(); } }, "Outro quadro")),
+      ...caixas,
+      ...ajustes.map((c) => reguaDoAjuste(c, pode, (v) => { valores[c.campo.replace("tratamento_", "")] = v; pedirPrevia(); })),
+      h("button", { class: "botao secundario", disabled: !pode || null, onclick: () => {
+        if (!confirm("Zerar todos os ajustes do tratamento?")) return;
+        salvarVarios(Object.fromEntries(ajustes.map((c) => [c.campo, 0])));
+      } }, "Zerar os ajustes")];
+  };
+  // uma régua de −100 a 100: mexer atualiza a prévia; soltar grava no projeto
+  const reguaDoAjuste = (c, pode, aoMexer) => {
+    const numero = h("span", { class: "valor-ajuste" }, String(Math.round(c.valor)));
+    const regua = h("input", { type: "range", min: String(c.min), max: String(c.max), step: String(c.passo),
+      value: String(c.valor), disabled: !pode || null, "aria-label": c.rotulo });
+    regua.addEventListener("input", () => { numero.textContent = regua.value; aoMexer(Number(regua.value)); });
+    regua.addEventListener("change", () => salvarVarios({ [c.campo]: Number(regua.value) }, false));
+    regua.addEventListener("dblclick", () => { regua.value = "0"; numero.textContent = "0"; aoMexer(0); salvarVarios({ [c.campo]: 0 }, false); });
+    return h("div", { class: "campo-opcao ajuste" },
+      h("div", { class: "rotulo-opcao linha-ajuste" }, h("span", {}, c.rotulo), numero), regua,
+      c.ajuda ? h("p", { class: "nota" }, c.ajuda) : null);
   };
 
   const desenhar = () => {
     if (!config) { encher(bloco, h("p", { class: "nota" }, "Carregando as opções…")); return; }
     const pode = config.pode_mudar && !(tarefa && tarefa.rodando);
+    const baixado = config.video_no_pc ?? projeto.baixado;
     const comecar = config.pode_mudar ? h("button", { class: "botao", disabled: (tarefa && tarefa.rodando) || null, onclick: async (ev) => {
-      const texto = projeto.baixado
+      const texto = baixado
         ? "Começar o processamento no PC com estas opções?"
         : "Baixar o vídeo pelo YouTube Studio e começar o processamento no PC com estas opções?";
       if (!confirm(texto)) return;
       ev.currentTarget.disabled = true;
       try { tarefa = await post(`/api/projetos/${enc(id)}/comecar`); desenhar(); acompanhar(); }
       catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
-    } }, projeto.baixado ? "▶ Começar o processamento" : "▶ Começar (baixa o vídeo e processa)") : null;
+    } }, baixado ? "▶ Começar o processamento" : "▶ Começar (baixa o vídeo e processa)") : null;
     encher(bloco,
       h("h3", {}, config.pode_mudar ? "Opções do processamento" : "Opções usadas"),
       config.pode_mudar
-        ? h("p", { class: "nota" }, `Ajuste antes de começar: cada mudança já fica salva no projeto.${projeto.baixado ? "" : " O vídeo só é baixado quando você tocar em Começar."}`)
+        ? h("p", { class: "nota" }, `Ajuste antes de começar: cada mudança já fica salva no projeto.${baixado ? "" : " O vídeo só é baixado quando você tocar em Começar (ou no botão da prévia do tratamento)."}`)
         : h("p", { class: "nota" }, config.motivo),
       ...config.grupos.map((g) => h("details", { class: "grupo-opcoes", open: config.pode_mudar || null },
-        h("summary", {}, g.titulo), ...g.campos.map((c) => campoDaOpcao(c, pode)))),
+        h("summary", {}, g.titulo), ...(g.tratamento ? blocoDoTratamento(g, pode) : g.campos.map((c) => campoDaOpcao(c, pode))))),
       andamento, comecar);
     desenharAndamento();
   };
@@ -527,17 +682,50 @@ async function telaProjeto(id) {
   pintarSituacao(projeto.andamento);
   desenharAndamento(caixaAndamento, projeto.andamento);
 
-  const segmentos = h("div", { class: "segmentos" });
+  if (!rotaAnterior.startsWith(`#/p/${enc(id)}/`)) { filtroDosShorts = "todos"; categoriaDosShorts = ""; }
+  const segmentos = h("div", { class: "filtros" });
   const titulo = h("h2");
+  // a categoria: um botão que flutua no canto da tela e abre a lista das cores
+  const flutuante = h("div", { class: "seletor-flutuante" });
+  let listaAberta = false;
   let shorts = [];
+  const pintarCategorias = () => {
+    const contagem = new Map();
+    for (const s of shorts) {
+      const c = contagem.get(s.categoria.chave) || { ...s.categoria, n: 0 };
+      c.n += 1;
+      contagem.set(s.categoria.chave, c);
+    }
+    const categorias = [...contagem.values()].sort((a, b) => a.rotulo.localeCompare(b.rotulo, "pt-BR"));
+    if (categoriaDosShorts && !contagem.has(categoriaDosShorts)) categoriaDosShorts = "";
+    flutuante.hidden = categorias.length < 2;
+    const atual = contagem.get(categoriaDosShorts);
+    const escolher = (chave) => { categoriaDosShorts = chave; listaAberta = false; pintarShorts(); };
+    const opcao = (chave, cor, rotulo, n) => h("button", {
+      class: `opcao-categoria ${categoriaDosShorts === chave ? "ativo" : ""}`, role: "option",
+      "aria-selected": String(categoriaDosShorts === chave), onclick: () => escolher(chave),
+    }, h("span", { class: `cor ${cor ? "" : "todas"}`, style: cor ? `background:${cor}` : null }), h("span", { class: "rotulo" }, rotulo), h("span", { class: "conta" }, n));
+    encher(flutuante,
+      listaAberta ? h("div", { class: "lista-categorias", role: "listbox", "aria-label": "Categoria do Short" },
+        opcao("", "", "Todas as categorias", shorts.length),
+        ...categorias.map((c) => opcao(c.chave, c.cor, c.rotulo, c.n))) : null,
+      h("button", { class: `botao-categoria ${atual ? "filtrando" : ""}`, "aria-expanded": String(listaAberta),
+        onclick: () => { listaAberta = !listaAberta; pintarCategorias(); } },
+      h("span", { class: `cor ${atual ? "" : "todas"}`, style: atual ? `background:${atual.cor}` : null }),
+      atual ? atual.rotulo : "Categoria", h("span", { class: "seta" }, listaAberta ? "▾" : "▴")));
+  };
   const pintarShorts = () => {
-    titulo.textContent = `Shorts (${shorts.filter((s) => s.incluir).length} marcados)`;
-    encher(segmentos, ...[["marcados", "Marcados"], ["renderizados", "Renderizados"], ["todos", "Todos"]].map(([k, r]) =>
-      h("button", { class: filtroDosShorts === k ? "ativo" : "", onclick: () => { filtroDosShorts = k; pintarShorts(); } }, r)));
-    const visiveis = shorts.filter((s) => filtroDosShorts === "todos" || (filtroDosShorts === "renderizados" ? s.renderizado : s.incluir));
+    titulo.textContent = `Shorts (${shorts.filter((s) => s.incluir).length} aprovados)`;
+    const daCategoria = shorts.filter((s) => !categoriaDosShorts || s.categoria.chave === categoriaDosShorts);
+    encher(segmentos, ...FILTROS_DOS_SHORTS.map(([k, r, entra]) =>
+      h("button", { class: filtroDosShorts === k ? "ativo" : "", onclick: () => { filtroDosShorts = k; pintarShorts(); } },
+        r, h("span", { class: "conta" }, daCategoria.filter(entra).length))));
+    const entra = (FILTROS_DOS_SHORTS.find(([k]) => k === filtroDosShorts) || FILTROS_DOS_SHORTS[0])[2];
+    const visiveis = daCategoria.filter(entra);
     encher(caixaShorts, ...(visiveis.length
       ? visiveis.map((s) => linhaDoShort(id, s))
       : [h("div", { class: "vazio-lista" }, shorts.length ? "Nenhum Short neste filtro." : "Este projeto ainda não tem Shorts.")]));
+    pintarCategorias();
   };
   shorts = await api(`/api/projetos/${enc(id)}/shorts`);
   pintarShorts();
@@ -545,7 +733,13 @@ async function telaProjeto(id) {
     ? h("a", { class: "botao secundario", href: `#/p/${enc(id)}/livre` }, "✚ Shorts livre: criar um Short de qualquer trecho")
     : null;
   const exportar = projeto.tem_transcricao
-    ? h("a", { class: "botao secundario", href: `/api/projetos/${enc(id)}/legenda.txt`, download: "" }, "⬇ Exportar a legenda do sermão (texto com os tempos)")
+    ? h("a", { class: "botao secundario exportar-legenda", href: `/api/projetos/${enc(id)}/legenda.txt`, download: "", onclick: (ev) => {
+      if (!confirm("Exportar a legenda do sermão? O celular baixa um arquivo de texto com cada frase e o tempo dela.")) ev.preventDefault();
+    } }, "⬇ Exportar a legenda do sermão (texto com os tempos)")
+    : null;
+  const baixarAudio = projeto.audio_pronto
+    ? h("a", { class: "botao secundario exportar-legenda", href: `/api/projetos/${enc(id)}/audio`, download: "" },
+      `⬇ Baixar o áudio do sermão (${projeto.audio_pronto.split(".").pop().toUpperCase()})`)
     : null;
 
   const etapasAbertas = projeto.andamento.em_andamento || projeto.andamento.esperando_revisao;
@@ -555,7 +749,7 @@ async function telaProjeto(id) {
   const opcoes = blocoDasOpcoes(id, projeto, async () => { if (atualizar) await atualizar(); });
   // antes de começar, as opções vêm primeiro; depois, ficam recolhidas lá embaixo
   const opcoesDepois = naoComecou ? null : h("details", { class: "bloco-espaco" }, h("summary", {}, "⚙ Opções usadas no processamento"), opcoes);
-  encher(tela, situacao, caixaAcoes, naoComecou ? opcoes : null, blocoEtapas, exportar, titulo, segmentos, livre, caixaShorts, opcoesDepois, blocoDoEspaco(id));
+  encher(tela, situacao, caixaAcoes, baixarAudio, naoComecou ? opcoes : null, blocoEtapas, titulo, segmentos, livre, caixaShorts, exportar, opcoesDepois, blocoDoEspaco(id), flutuante);
 
   let andava = projeto.andamento.em_andamento;
   let comecou = !naoComecou;
@@ -581,11 +775,11 @@ async function telaAprovar(id) {
   const lista = h("div");
   const aprovar = h("button", { class: "botao" });
   const pintar = () => {
-    const marcados = shorts.filter((s) => s.incluir).length;
-    aprovar.textContent = `Aprovar e continuar (${plural(marcados, "marcado", "marcados")})`;
-    aprovar.disabled = marcados === 0;
+    const aprovados = shorts.filter((s) => s.incluir).length;
+    aprovar.textContent = `Aprovar e continuar (${plural(aprovados, "aprovado", "aprovados")})`;
+    aprovar.disabled = aprovados === 0;
     encher(lista, ...shorts.map((s) => {
-      const caixa = h("button", { class: `marcador ${s.incluir ? "ligado" : ""}`, "aria-label": s.incluir ? "Desmarcar" : "Marcar", "aria-pressed": String(s.incluir),
+      const caixa = h("button", { class: `marcador ${s.incluir ? "ligado" : ""}`, "aria-label": s.incluir ? "Tirar a aprovação" : "Aprovar", "aria-pressed": String(s.incluir),
         onclick: async (ev) => {
           ev.currentTarget.disabled = true;
           try {
@@ -597,11 +791,11 @@ async function telaAprovar(id) {
         } }, s.incluir ? "✓" : "");
       return h("div", { class: `cartao short ${s.incluir ? "" : "desmarcado"}` }, caixa,
         h("a", { class: "corpo", href: `#/p/${enc(id)}/s/${s.id}` },
-          h("div", { class: "nome" }, s.titulo), h("div", { class: "meta" }, `Nota ${Math.round(s.nota)}`), chipsDoShort(s)));
+          h("div", { class: "nome" }, s.titulo), h("div", { class: "meta" }, `Nota ${Math.round(s.nota)} · ${trechoDoShort(s)}`), chipsDoShort(s)));
     }));
   };
   aprovar.addEventListener("click", async () => {
-    if (!confirm("Aprovar os cortes marcados e continuar o processamento no PC?")) return;
+    if (!confirm("Confirmar os cortes aprovados e continuar o processamento no PC?")) return;
     aprovar.disabled = true;
     try {
       await post(`/api/projetos/${enc(id)}/aprovar`, { etapa: "aprovar_cortes" });
@@ -798,6 +992,178 @@ async function editorDaLegenda(painel, base, aoSalvar, aoFechar) {
     botaoTranscricao));
 }
 
+/** O ajuste fino da legenda: cada palavra do Short com o início e o fim, ouvindo o sermão. Nada vai
+ * ao PC até "Salvar no PC". Devolve `{ pendente(), limpar() }` para a tela do Short perguntar antes
+ * de sair com mudanças e parar o som. */
+async function editorDoAjusteFino(painel, base, aoSalvar, aoFechar) {
+  const ed = await api(`${base}/ajuste_fino`);
+  const original = ed.palavras.map((p) => [p.texto, p.inicio, p.fim]);
+  let itens = original.map((p) => [...p]);
+  let atual = 0;
+  let tocando = null; // índice da palavra que toca agora
+  let paraEm = null; // segundos (do vídeo) em que o som para sozinho ("Ouvir esta palavra")
+  let quadro = 0;
+  const MINIMA = 0.04;
+  const som = h("audio", { preload: "auto", src: `${base}/ajuste_fino/som` });
+  let semSom = "";
+  som.addEventListener("error", () => { semSom = "Não deu para tocar o som do trecho (o vídeo original ainda está no PC?)."; pintarControles(); });
+  const seguintes = h("input", { type: "checkbox", id: "fino-seguintes" });
+  const lista = h("div", { class: "fino-lista" });
+  const controles = h("div", { class: "fino-controles" });
+  const editor = h("div", { class: "fino-editor" });
+  const nota = h("p", { class: "nota" });
+
+  const tempo = (s) => {
+    const c = Math.max(0, Math.round(s * 100));
+    const m = Math.floor(c / 6000), seg = Math.floor((c % 6000) / 100), cent = c % 100;
+    return `${m}:${doisDigitos(seg)},${doisDigitos(cent)}`;
+  };
+  const posicao = () => ed.som_de + som.currentTime;
+  const pendente = () => JSON.stringify(itens) !== JSON.stringify(original);
+  const limpar = () => { som.pause(); cancelAnimationFrame(quadro); };
+
+  const palavraEm = (s) => {
+    for (let k = itens.length - 1; k >= 0; k--) {
+      if (itens[k][1] <= s) return s <= itens[k][2] + 0.05 ? k : null;
+    }
+    return null;
+  };
+  const acompanhar = () => {
+    if (som.paused) { tocando = null; pintarLista(); pintarControles(); return; }
+    const agora = posicao();
+    if (paraEm !== null && agora >= paraEm) { som.pause(); paraEm = null; }
+    const k = palavraEm(agora);
+    if (k !== tocando) {
+      tocando = k; pintarLista();
+      const el = lista.children[k];
+      if (el && paraEm === null) el.scrollIntoView({ block: "nearest" });
+    }
+    const rotulo = controles.querySelector(".fino-posicao");
+    if (rotulo) rotulo.textContent = tempo(agora);
+    quadro = requestAnimationFrame(acompanhar);
+  };
+  const tocar = async (desde, ate = null) => {
+    document.querySelectorAll("audio").forEach((a) => { if (a !== som) a.pause(); });
+    som.currentTime = Math.max(0, desde - ed.som_de);
+    paraEm = ate;
+    try { await som.play(); } catch (e) { avisar("Toque de novo para ouvir."); return; }
+    cancelAnimationFrame(quadro);
+    quadro = requestAnimationFrame(acompanhar);
+    pintarControles();
+  };
+
+  const mover = (ponta, delta) => {
+    if (!delta) return;
+    const item = itens[atual];
+    if (seguintes.checked) { // pelo início anda a palavra inteira; pelo fim, só o fim dela
+      if (ponta === "inicio") item[1] += delta;
+      item[2] += delta;
+      for (const p of itens.slice(atual + 1)) { p[1] += delta; p[2] += delta; }
+    } else if (ponta === "inicio") item[1] = Math.min(item[1] + delta, item[2] - MINIMA);
+    else item[2] = Math.max(item[2] + delta, item[1] + MINIMA);
+    for (const p of itens.slice(atual)) {
+      p[1] = Math.min(Math.max(p[1], ed.inicio), ed.fim);
+      p[2] = Math.min(Math.max(p[2], p[1]), ed.fim);
+    }
+    pintarTudo();
+  };
+  const agora = (ponta) => {
+    if (som.paused) { avisar("Toque em ▶ Tocar e aperte ⏱ quando a palavra começar (ou terminar)."); return; }
+    const instante = posicao() - 0.12 * som.playbackRate; // desconta o tempo de reação
+    mover(ponta, instante - itens[atual][ponta === "inicio" ? 1 : 2]);
+  };
+  const acrescentar = () => {
+    const [, inicio, fim] = itens[atual];
+    const seguinte = atual + 1 < itens.length ? itens[atual + 1][1] : ed.fim;
+    let nova;
+    if (seguinte - fim >= 0.15) nova = ["…", fim, Math.min(seguinte, fim + 0.6)];
+    else { const meio = (inicio + fim) / 2; itens[atual][2] = meio; nova = ["…", meio, fim]; }
+    itens.splice(atual + 1, 0, nova);
+    atual += 1;
+    pintarTudo();
+    const campo = editor.querySelector("input.campo");
+    if (campo) { campo.focus(); campo.select(); }
+  };
+  const tirar = () => {
+    if (itens.length <= 1) return;
+    itens.splice(atual, 1);
+    atual = Math.min(atual, itens.length - 1);
+    pintarTudo();
+  };
+
+  const pintarControles = () => {
+    const velocidade = (v, r) => h("button", { class: som.playbackRate === v ? "ativo" : "", onclick: () => { som.playbackRate = v; pintarControles(); } }, r);
+    encher(controles,
+      h("button", { class: "botao", disabled: semSom ? true : null, onclick: () => {
+        if (!som.paused) { som.pause(); return; }
+        tocar(itens[atual][1] - 0.3);
+      } }, som.paused ? "▶ Tocar daqui" : "⏸ Parar"),
+      h("div", { class: "segmentos fino-velocidade" }, velocidade(1, "1×"), velocidade(0.75, "0,75×"), velocidade(0.5, "0,5×")),
+      h("span", { class: "fino-posicao nota" }, som.paused ? "" : tempo(posicao())),
+      semSom ? h("p", { class: "nota erro" }, semSom) : null);
+  };
+  const pintarLista = () => encher(lista, ...itens.map(([texto], k) => {
+    const mudou = !original[k] || JSON.stringify(original[k]) !== JSON.stringify(itens[k]);
+    return h("button", { class: `fino-palavra ${k === atual ? "atual" : ""} ${k === tocando ? "tocando" : ""} ${mudou ? "mudou" : ""}`,
+      onclick: () => { atual = k; pintarTudo(); } }, texto || "∅");
+  }));
+  const linhaDaPonta = (ponta, rotulo) => {
+    const i = ponta === "inicio" ? 1 : 2;
+    const botao = (d) => h("button", { class: "botao-ferramenta", onclick: () => mover(ponta, d) }, `${d > 0 ? "+" : "−"}${String(Math.abs(d)).replace(".", ",")}`);
+    return h("div", { class: "fino-ponta" }, h("span", { class: "fino-rotulo" }, rotulo),
+      botao(-0.1), botao(-0.02), h("span", { class: "fino-tempo" }, tempo(itens[atual][i])), botao(0.02), botao(0.1),
+      h("button", { class: "botao-ferramenta destaque", onclick: () => agora(ponta) }, "⏱ Agora"));
+  };
+  const pintarEditor = () => {
+    const [texto, inicio, fim] = itens[atual];
+    const campo = h("input", { class: "campo", value: texto, autocapitalize: "off", spellcheck: "true", lang: "pt-BR",
+      "aria-label": "Texto da palavra" });
+    campo.addEventListener("change", () => { itens[atual][0] = campo.value.trim().split(/\s+/).join(" "); pintarLista(); });
+    encher(editor,
+      h("div", { class: "fino-cabeca" }, h("strong", {}, `Palavra ${atual + 1} de ${itens.length}`),
+        h("span", { class: "nota" }, `dura ${String((fim - inicio).toFixed(2)).replace(".", ",")} s`)),
+      campo,
+      linhaDaPonta("inicio", "Começa"),
+      linhaDaPonta("fim", "Termina"),
+      h("label", { class: "opcao", for: "fino-seguintes" }, seguintes, " Mover as seguintes junto"),
+      h("div", { class: "linha-botoes" },
+        h("button", { class: "botao secundario", disabled: semSom ? true : null, onclick: () => tocar(inicio - 0.25, fim + 0.25) }, "▶ Ouvir"),
+        h("button", { class: "botao secundario", onclick: acrescentar }, "＋ Depois"),
+        h("button", { class: "botao secundario", onclick: tirar }, "✕ Tirar")),
+      h("div", { class: "linha-botoes" },
+        h("button", { class: "botao secundario", disabled: atual === 0 || null, onclick: () => { atual -= 1; pintarTudo(); } }, "◀ Anterior"),
+        h("button", { class: "botao secundario", disabled: atual >= itens.length - 1 || null, onclick: () => { atual += 1; pintarTudo(); } }, "Próxima ▶")));
+  };
+  const pintarTudo = () => { pintarLista(); pintarEditor(); pintarControles(); };
+
+  const salvar = h("button", { class: "botao", onclick: async () => {
+    const campo = editor.querySelector("input.campo");
+    if (campo) itens[atual][0] = campo.value.trim().split(/\s+/).join(" ");
+    salvar.disabled = true;
+    try {
+      const novo = await editar(`${base}/ajuste_fino`, { palavras: itens.map(([texto, inicio, fim]) => ({ texto, inicio, fim })) });
+      limpar();
+      avisar("Ajuste fino salvo no PC.");
+      await aoSalvar(novo);
+    } catch (e) { avisar(e.message); salvar.disabled = false; }
+  } }, "Salvar no PC");
+  const desfazer = ed.ajustado ? h("button", { class: "botao secundario", onclick: async () => {
+    if (!confirm("Voltar os tempos das palavras deste Short aos da transcrição? O texto corrigido continua.")) return;
+    try { const novo = await editar(`${base}/ajuste_fino/desfazer`, {}); limpar(); avisar("Ajuste fino desfeito."); await aoSalvar(novo); }
+    catch (e) { avisar(e.message); }
+  } }, "Desfazer o ajuste fino") : null;
+  const fechar = h("button", { class: "botao secundario", onclick: () => {
+    if (pendente() && !confirm("Fechar sem salvar o ajuste fino?")) return;
+    limpar(); aoFechar();
+  } }, "Fechar");
+
+  nota.textContent = "Toque numa palavra, ouça e acerte o texto, o começo e o fim. ⏱ Agora marca o instante que está tocando (mais fácil em 0,5×). As palavras em laranja mudaram.";
+  encher(painel, h("div", { class: "bloco fino" }, h("h3", {}, "🎯 Ajuste fino da legenda"), nota, controles, lista, editor,
+    h("div", { class: "linha-botoes" }, fechar, salvar), desfazer, som));
+  pintarTudo();
+  return { pendente, limpar };
+}
+
 /** Início, fim e borracha do corte como RASCUNHO no celular: nada vai ao PC (nem o áudio é refeito)
  * até "Salvar alterações", trocar de ferramenta ou de aba, ou sair do Short. Devolve
  * `{ pendente(), salvar() }` para a tela do Short salvar sozinha nessas horas. */
@@ -962,81 +1328,94 @@ function campoDeData(inicial) {
   return { caixa: h("div", { class: "campo-data" }, campo, calendario, nativo), iso: () => isoDeDataBr(campo.value) };
 }
 
-/** Postar no YouTube pelo PC (o YouTube Studio, sem a API): programar ou publicar agora (Fase R4). */
-async function editorDaPostagem(painel, base, idProjeto, aoTerminar, aoFechar) {
+/** Postar no YouTube pelo PC (o YouTube Studio, sem a API), pela fila do PC: programar ou
+ * publicar agora (renderiza antes, se o Short ainda não está pronto) e trocar o horário de um
+ * Short já programado (até 5 minutos antes dele sair). */
+async function editorDaPostagem(painel, base, s, aoTerminar, aoFechar) {
   const prep = await api(`${base}/postar`);
   const yt = prep.youtube;
   const estado = yt ? h("div", { class: `bloco ${yt.estado === "erro" || yt.estado === "rascunho" ? "aviso-bloco" : ""}` },
     h("h3", {}, "No YouTube"),
     h("p", {}, { agendado: "📅 Programado", enviado: "✔ Publicado", rascunho: "⚠ Ficou como rascunho privado (a próxima tentativa o retoma)", erro: "✕ A última tentativa falhou" }[yt.estado] || yt.estado,
-      yt.quando && yt.estado === "agendado" ? ` para ${new Date(yt.quando).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}` : ""),
+      prep.youtube_quando ? ` para ${dataBr(prep.youtube_quando.slice(0, 10))} às ${prep.youtube_quando.slice(11, 16)}` : ""),
     yt.url ? h("p", {}, h("a", { href: yt.url, target: "_blank", rel: "noopener" }, yt.url)) : null,
     yt.detalhe ? h("p", { class: "nota" }, yt.detalhe) : null) : null;
-  const jaFeito = yt && (yt.estado === "agendado" || yt.estado === "enviado");
+  const naFila = prep.fila ? h("div", { class: `bloco ${prep.fila.situacao === "erro" ? "aviso-bloco" : ""}` },
+    h("div", { class: "cabeca-do-bloco" }, h("h3", {}, "Na fila do PC"), h("span", { class: `chip fila ${prep.fila.situacao}` }, prep.fila.rotulo)),
+    prep.fila.detalhe ? h("p", { class: "nota" }, prep.fila.detalhe) : null) : null;
+  const publicado = yt && yt.estado === "enviado";
+  const reagendar = Boolean(prep.youtube_quando);
+  const pronto = s.renderizado && s.situacao === "pronto";
+  const ocupado = prep.fila && prep.fila.situacao === "programando";
 
-  let modo = "programar";
+  let modo = reagendar ? "reagendar" : "programar";
   const modos = h("div", { class: "segmentos" });
-  const sugestao = new Date(Date.now() + 60 * 60 * 1000);
+  let sugestao = new Date(Date.now() + 60 * 60 * 1000);
   sugestao.setMinutes(sugestao.getMinutes() < 30 ? 30 : 60, 0, 0);
+  if (reagendar) sugestao = new Date(`${prep.youtube_quando}:00`);
   const dia = campoDeData(sugestao);
   const hora = h("input", { type: "time", class: "campo", value: `${doisDigitos(sugestao.getHours())}:${doisDigitos(sugestao.getMinutes())}`, step: "300" });
   const quando = h("div", { class: "linha-botoes" }, dia.caixa, hora);
+  const botao = h("button", { class: "botao", disabled: ocupado || null });
   const pintarModos = () => {
-    encher(modos, ...[["programar", "📅 Programar"], ["agora", "Publicar agora"]].map(([k, r]) =>
-      h("button", { class: modo === k ? "ativo" : "", onclick: () => { modo = k; pintarModos(); } }, r)));
-    quando.hidden = modo !== "programar";
+    if (!reagendar) {
+      encher(modos, ...[["programar", "📅 Programar"], ["agora", "Publicar agora"]].map(([k, r]) =>
+        h("button", { class: modo === k ? "ativo" : "", onclick: () => { modo = k; pintarModos(); } }, r)));
+    }
+    quando.hidden = modo === "agora";
+    botao.textContent = modo === "reagendar" ? "🕒 Reagendar no YouTube"
+      : !pronto ? (modo === "agora" ? "⚙ Renderizar e publicar" : "⚙ Renderizar e programar")
+        : modo === "agora" ? "📤 Publicar agora" : "📤 Programar no YouTube";
   };
   pintarModos();
   const vincular = h("input", { type: "checkbox", checked: true, id: "vincular" });
   const relacionado = h("input", { type: "text", class: "campo", value: prep.relacionado });
-  const andamento = h("p", { class: "nota" });
-  const botao = h("button", { class: "botao" }, jaFeito ? "Postar de novo no YouTube" : "📤 Postar no YouTube");
 
-  const acompanhar = async () => {
-    botao.disabled = true;
-    for (;;) {
-      let e;
-      try { e = await api(`/api/projetos/${enc(idProjeto)}/postagem`); } catch (_) { await new Promise((r) => setTimeout(r, 3000)); continue; }
-      if (!e) break;
-      andamento.textContent = e.texto;
-      if (!e.rodando) {
-        if (e.erro) { avisar(`Não deu para postar: ${e.erro}`); andamento.textContent = `Não deu para postar: ${e.erro}`; botao.disabled = false; }
-        else { avisar(e.texto); await aoTerminar(); aoFechar(); }
-        return;
-      }
-      if (!document.body.contains(andamento)) return; // saiu da tela: o aviso chega
-      await new Promise((r) => setTimeout(r, 2500));
-    }
-    botao.disabled = false;
-  };
   botao.addEventListener("click", async () => {
-    let corpo = { relacionado: vincular.checked ? relacionado.value.trim() : "", forcar: Boolean(jaFeito) };
+    const corpo = {};
     let resumo;
-    if (modo === "programar") {
+    if (modo !== "agora") {
       if (!dia.iso()) { avisar("Escreva o dia como dd/mm/aaaa (por exemplo, 05/12/2026)."); return; }
       if (!hora.value) { avisar("Escolha a hora."); return; }
       corpo.quando = `${dia.iso()}T${hora.value}`;
-      resumo = `Programar no YouTube para ${dataBr(dia.iso())} às ${hora.value}`;
-    } else {
-      resumo = "Publicar agora no YouTube";
     }
+    if (modo === "reagendar") {
+      if (corpo.quando === prep.youtube_quando) { avisar("Escolha um horário diferente do que está programado."); return; }
+      resumo = `Reagendar no YouTube: de ${dataBr(prep.youtube_quando.slice(0, 10))} às ${prep.youtube_quando.slice(11, 16)} para ${dataBr(dia.iso())} às ${hora.value}?\n\nO PC abre o YouTube Studio e troca o horário (pela fila, quando chegar a vez).`;
+      if (!confirm(resumo)) return;
+      botao.disabled = true;
+      try { await editar(`${base}/reagendar`, corpo); avisar("O reagendamento entrou na fila do PC."); await aoTerminar(); aoFechar(); }
+      catch (e) { avisar(e.message); botao.disabled = false; }
+      return;
+    }
+    corpo.relacionado = vincular.checked ? relacionado.value.trim() : "";
+    resumo = modo === "agora" ? "Publicar agora no YouTube" : `Programar no YouTube para ${dataBr(dia.iso())} às ${hora.value}`;
     if (corpo.relacionado) resumo += `, vinculado a “${corpo.relacionado}”`;
-    if (jaFeito) resumo += ". ATENÇÃO: ele já está no YouTube; isto cria outro vídeo";
+    if (!pronto) resumo += ".\n\nO Short ainda não está renderizado: o PC o renderiza antes (pela fila) e só depois posta";
     if (!confirm(`${resumo}?`)) return;
-    try { await editar(`${base}/postar`, corpo); acompanhar(); }
-    catch (e) { avisar(e.message); }
+    botao.disabled = true;
+    try {
+      await editar(`${base}/postar`, corpo);
+      avisar(pronto ? "Entrou na fila do PC para ir ao YouTube." : "Entrou na fila do PC: renderiza e depois vai ao YouTube.");
+      await aoTerminar(); aoFechar();
+    } catch (e) { avisar(e.message); botao.disabled = false; }
   });
 
-  encher(painel, h("div", { class: "bloco" },
-    h("h3", {}, "Postar no YouTube"),
-    estado,
-    h("p", { class: "nota" }, "O PC posta pelo YouTube Studio da igreja (uma janela do Chrome abre lá e faz tudo sozinha). Leva alguns minutos."),
-    modos, quando,
-    h("label", { class: "opcao", for: "vincular" }, vincular, " Vincular ao vídeo do sermão (vídeo relacionado)"),
-    relacionado,
-    botao, andamento,
-    h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar")));
-  if (prep.envio && prep.envio.rodando) acompanhar();
+  const partes = [h("h3", {}, "Postar no YouTube"), estado, naFila];
+  if (publicado) {
+    partes.push(h("p", { class: "nota" }, "Este Short já saiu no YouTube."));
+  } else {
+    partes.push(
+      h("p", { class: "nota" }, reagendar
+        ? "Troque a data ou a hora: o PC abre o YouTube Studio e muda o horário de postagem (só até 5 minutos antes dele sair)."
+        : "O PC posta pelo YouTube Studio da igreja (uma janela do Chrome abre lá e faz tudo sozinha). Tudo passa pela fila do PC: primeiro as renderizações, depois o YouTube, um Short por vez."),
+      modos, quando);
+    if (!reagendar) partes.push(h("label", { class: "opcao", for: "vincular" }, vincular, " Vincular ao vídeo do sermão (vídeo relacionado)"), relacionado);
+    partes.push(botao);
+    if (ocupado) partes.push(h("p", { class: "nota" }, "Ele está sendo feito no YouTube agora: espere terminar."));
+  }
+  partes.push(h("button", { class: "botao secundario", onclick: aoFechar }, "Fechar"));
+  encher(painel, h("div", { class: "bloco" }, ...partes));
 }
 
 async function telaShort(id, corte) {
@@ -1055,7 +1434,8 @@ async function telaShort(id, corte) {
   const ferramentas = h("div", { class: "ferramentas" });
   const info = h("div");
 
-  const pintarCabecalho = () => cabecalho(s.numero ? `Short ${s.numero}` : "Corte desmarcado", duracao(s.duracao), voltarPara);
+  const pintarCabecalho = () => cabecalho(s.titulo || (s.numero ? `Short ${s.numero}` : "Corte não aprovado"),
+    [s.numero ? `Short ${s.numero}` : "Corte não aprovado", duracao(s.duracao)].join(" · "), voltarPara);
   // título, descrição e hashtags: cada caixa com o ✎ Editar (grava no PC ao tocar em Salvar)
   let editandoTexto = ""; // "", "titulo", "descricao" ou "hashtags"
   // `cabeca`: o que vai ao lado do ✎ Editar (o título vai ali mesmo; os outros, o rótulo)
@@ -1087,7 +1467,147 @@ async function telaShort(id, corte) {
     return h("div", { class: "bloco editando" }, h("h3", {}, rotulo), caixa, contador,
       h("div", { class: "linha-botoes" }, cancelar, salvar));
   };
+  // o corte das pausas deste Short (como a caixa do Studio do PC): grava na hora e refaz o som
+  let pausaLembrada = s.pausa_s || 1;
+  const numeroBr = (v) => String(Math.round(v * 10) / 10).replace(".", ",");
+  const blocoDasPausas = () => {
+    const ligado = Boolean(s.pausa_s);
+    const caixa = h("input", { type: "checkbox", id: "cortar-pausas", checked: ligado || null });
+    const campo = h("input", { type: "number", class: "campo", inputmode: "decimal", min: "0.1", max: "10",
+      step: "0.1", value: String(ligado ? s.pausa_s : pausaLembrada), "aria-label": "Tamanho da pausa, em segundos" });
+    const gravar = async () => {
+      const segundos = Number(String(campo.value).replace(",", "."));
+      if (!Number.isFinite(segundos) || segundos < 0.1 || segundos > 10) {
+        avisar("Escreva um tamanho de 0,1 a 10 segundos."); pintarInfo(); return;
+      }
+      pausaLembrada = Math.round(segundos * 10) / 10;
+      const nova = caixa.checked ? pausaLembrada : 0;
+      if (Math.abs(nova - (s.pausa_s || 0)) < 1e-9) return;
+      caixa.disabled = true; campo.disabled = true;
+      try {
+        const novo = await editar(`${base}/pausas`, { pausa_s: nova });
+        avisar(nova ? `Pausas de ${numeroBr(nova)} s ou mais cortadas neste Short.` : "Este Short volta a manter as pausas.");
+        await depoisDeMudar(novo);
+      } catch (e) { avisar(e.message); pintarInfo(); }
+    };
+    caixa.addEventListener("change", gravar);
+    campo.addEventListener("change", gravar);
+    const explicacao = ligado
+      ? `Pausas de ${numeroBr(s.pausa_s)} s ou mais ficam com ${numeroBr(s.pausa_sobra_s)} s.${modo === "ouvir" ? " O som acima já está assim." : s.renderizado ? " O vídeo pronto só muda quando o PC renderizar de novo." : ""}`
+      : "Desligado: este Short mantém todas as pausas da fala.";
+    return h("div", { class: "bloco" },
+      h("h3", {}, "Corte das pausas"),
+      h("div", { class: "linha-campo linha-pausas" },
+        h("label", { class: "opcao", for: "cortar-pausas" }, caixa, " Cortar as pausas maiores que"),
+        campo, h("span", { class: "unidade" }, "s")),
+      h("p", { class: "nota" }, explicacao));
+  };
+  // 👍 / 👎: só um lembrete de quais Shorts ficaram bons ou ruins (tocar de novo tira)
+  const blocoDaOpiniao = () => {
+    const botao = (valor, simbolo, rotulo) => h("button", {
+      class: `botao-opiniao ${valor} ${s.opiniao === valor ? "ligado" : ""}`, "aria-pressed": String(s.opiniao === valor),
+      onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        try { s = await editar(`${base}/opiniao`, { opiniao: s.opiniao === valor ? "" : valor }); }
+        catch (e) { avisar(e.message); }
+        pintarInfo();
+      } }, `${simbolo} ${rotulo}`);
+    return h("div", { class: "bloco" }, h("h3", {}, "O que achou deste Short?"),
+      h("div", { class: "linha-botoes" }, botao("bom", "👍", "Ficou bom"), botao("ruim", "👎", "Ficou ruim")));
+  };
+  // ✨ o Gemini revisa este Short: se o corte ficou bom e se o título e a descrição combinam
+  let revisandoGemini = false;
+  let erroDoGemini = "";
+  const blocoDoGemini = () => {
+    const r = s.gemini;
+    const pedir = h("button", { class: "botao secundario", disabled: revisandoGemini || null, onclick: async () => {
+      revisandoGemini = true; erroDoGemini = ""; pintarInfo();
+      try {
+        s = await editar(`${base}/gemini`, {});
+        avisar("O Gemini revisou este Short.");
+      } catch (e) { erroDoGemini = e.message; }
+      revisandoGemini = false; pintarInfo();
+    } }, revisandoGemini ? "O Gemini está lendo…" : r ? "↻ Revisar de novo" : "✨ Revisar com o Gemini");
+    const usar = (campo, valor, rotulo) => {
+      const emUso = (campo === "titulo" ? s.titulo : s.descricao).trim() === valor.trim();
+      return h("div", { class: "sugestao-gemini" },
+        h("p", {}, h("strong", {}, `${rotulo}: `), valor),
+        h("button", { class: "botao secundario pequeno", disabled: emUso || null, onclick: async (ev) => {
+          ev.currentTarget.disabled = true;
+          try {
+            s = await editar(`${base}/textos`, { [campo]: valor });
+            avisar(campo === "titulo" ? "Título trocado pelo do Gemini." : "Descrição trocada pela do Gemini.");
+            pintarCabecalho();
+          } catch (e) { avisar(e.message); }
+          pintarInfo();
+        } }, emUso ? "✔ Em uso" : campo === "titulo" ? "Usar este título" : "Usar esta descrição"));
+    };
+    const marca = (sim, textoSim, textoNao) => (sim ? `✔ ${textoSim}` : `✖ ${textoNao}`);
+    const classe = r ? ({ bom: "ok", ajustar: "aviso", ruim: "erro" }[r.veredito] || "") : "";
+    return h("div", { class: "bloco" },
+      h("div", { class: "cabeca-do-bloco" }, h("h3", {}, "Revisão do Gemini"),
+        r ? h("span", { class: `chip ${classe}` }, `✨ ${r.rotulo} · ${r.nota}/10`) : null),
+      r ? h("p", { class: "nota" }, `Revisado em ${r.quando_rotulo} (${r.modelo}).`
+        + (r.desatualizada ? " O título ou a descrição mudaram depois disso." : "")) : h("p", { class: "nota" }, "Ainda não revisado pelo Gemini."),
+      r && r.comentario ? h("p", {}, r.comentario) : null,
+      r ? h("p", { class: "nota" }, [marca(r.corte_completo, "ideia completa", "depende do contexto"),
+        marca(r.titulo_combina, "título combina", "título não combina"),
+        marca(r.descricao_combina, "descrição combina", "descrição não combina")].join(" · ")) : null,
+      r && r.titulo_sugerido ? usar("titulo", r.titulo_sugerido, "Título sugerido") : null,
+      r && r.descricao_sugerida ? usar("descricao", r.descricao_sugerida, "Descrição sugerida") : null,
+      erroDoGemini ? h("p", { class: "nota erro" }, erroDoGemini) : null,
+      h("div", { class: "linha-botoes" }, pedir));
+  };
+  // renderizar só este Short (sem desmarcar os outros) ou refazer o que já está pronto
+  const blocoDoRender = () => {
+    if (!s.incluir) return h("div", { class: "bloco" }, h("h3", {}, "Renderizar"), h("p", { class: "nota" }, "Aprove este Short para poder renderizá-lo."));
+    const refazer = s.renderizado && s.situacao === "pronto";
+    const texto = refazer ? "↻ Refazer este Short" : "▶ Renderizar só este Short";
+    const explicacao = refazer
+      ? "O vídeo pronto é renderizado de novo do zero (os outros Shorts não mudam)."
+      : s.renderizado ? "Este Short mudou depois do vídeo pronto: renderiza só ele, com as mudanças."
+        : "Renderiza só este Short no PC, sem esperar pelos outros.";
+    return h("div", { class: "bloco" }, h("h3", {}, "Renderizar"), h("p", { class: "nota" }, explicacao),
+      h("button", { class: "botao", onclick: async (ev) => {
+        if (!confirm(refazer ? "Refazer este Short no PC? O vídeo pronto dele é substituído." : "Renderizar só este Short no PC?")) return;
+        ev.currentTarget.disabled = true;
+        try {
+          const r = await post(`${base}/renderizar`, { refazer });
+          avisar(r.na_fila ? "O PC está ocupado: este Short entrou na fila para renderizar." : "Renderização deste Short começou no PC. O celular avisa quando terminar.");
+          s = await pegar(); pintarInfo();
+        } catch (e) { avisar(e.message); ev.currentTarget.disabled = false; }
+      } }, texto));
+  };
+  const blocoDaFila = () => {
+    if (!s.fila) return null;
+    const classe = s.fila.situacao === "erro" ? "aviso-bloco" : "";
+    return h("div", { class: `bloco ${classe}` },
+      h("div", { class: "cabeca-do-bloco" }, h("h3", {}, "Fila do PC"), h("span", { class: `chip fila ${s.fila.situacao}` }, s.fila.rotulo)),
+      s.fila.detalhe ? h("p", { class: "nota" }, s.fila.detalhe) : null,
+      s.fila.pode_tirar ? h("button", { class: "botao secundario", onclick: async (ev) => {
+        if (!confirm("Tirar este Short da fila?")) return;
+        ev.currentTarget.disabled = true;
+        try { await post(`${base}/fila/tirar`, {}); avisar("Tirado da fila."); } catch (e) { avisar(e.message); }
+        s = await pegar(); pintarInfo();
+      } }, s.fila.situacao === "erro" ? "Dispensar" : "Tirar da fila") : null);
+  };
+  // enquanto o Short está na fila, a marca acompanha (renderizando → na fila de programação → …)
+  let marcaDaFila = JSON.stringify(s.fila);
+  repetir(async () => {
+    if (!s.fila) return;
+    const novo = await pegar();
+    if (!novo || JSON.stringify(novo.fila) === marcaDaFila) return;
+    marcaDaFila = JSON.stringify(novo.fila);
+    const ficouPronto = novo.renderizado !== s.renderizado || novo.situacao !== s.situacao;
+    s = novo; pintarCabecalho(); pintarInfo(); pintarFerramentas();
+    if (ficouPronto) pintarSeletor();
+  }, 4000);
   const pintarInfo = () => encher(info,
+    blocoDaFila(),
+    blocoDaOpiniao(),
+    blocoDoGemini(),
+    !s.renderizado ? blocoDoRender() : null,
+    blocoDasPausas(),
     caixaDeTexto("titulo", "Título", s.titulo, () => chipsDoShort(s), h("p", { class: "titulo-short" }, s.titulo)),
     caixaDeTexto("descricao", "Descrição", s.descricao, (v) => h("p", { class: v ? "texto-longo" : "nota" }, v || "Sem descrição.")),
     caixaDeTexto("hashtags", "Hashtags", s.hashtags.join(" "), (v) => h("p", { class: v ? "" : "nota" }, v || "Sem hashtags.")));
@@ -1096,15 +1616,14 @@ async function telaShort(id, corte) {
     encher(ferramentas, 
       h("button", { class: `botao-ferramenta ${edicao === "legenda" || edicao === "texto" ? "ativo" : ""}`, onclick: () => abrir(edicao ? "" : "legenda") }, edicao === "legenda" || edicao === "texto" ? "✓ Pronto" : "✎ Corrigir a legenda"),
       h("button", { class: `botao-ferramenta ${edicao === "pontas" ? "ativo" : ""}`, onclick: () => abrir(edicao === "pontas" ? "" : "pontas") }, "⇤ Início e fim ⇥"),
-      s.renderizado && s.situacao === "pronto"
-        ? h("button", { class: `botao-ferramenta ${edicao === "postar" ? "ativo" : ""}`, onclick: () => abrir(edicao === "postar" ? "" : "postar") }, "📤 Postar")
-        : null,
+      h("button", { class: `botao-ferramenta ${edicao === "fino" ? "ativo" : ""}`, onclick: () => abrir(edicao === "fino" ? "" : "fino") }, "🎯 Ajuste fino"),
+      h("button", { class: `botao-ferramenta ${edicao === "postar" ? "ativo" : ""}`, onclick: () => abrir(edicao === "postar" ? "" : "postar") }, "📤 Postar"),
       h("button", { class: `botao-ferramenta ${s.incluir ? "marcado" : ""}`, onclick: async (ev) => {
         ev.currentTarget.disabled = true;
-        try { s = await editar(`${base}/marcar`, { incluir: !s.incluir }); avisar(s.incluir ? "Corte marcado." : "Corte desmarcado."); }
+        try { s = await editar(`${base}/marcar`, { incluir: !s.incluir }); avisar(s.incluir ? "Corte aprovado." : "Aprovação retirada."); }
         catch (e) { avisar(e.message); }
         pintarCabecalho(); pintarInfo(); pintarFerramentas();
-      } }, s.incluir ? "✓ Marcado" : "Desmarcado"));
+      } }, s.incluir ? "✓ Aprovado" : "Aprovar"));
   };
   const pintarSeletor = () => {
     seletor.hidden = !s.renderizado;
@@ -1125,8 +1644,13 @@ async function telaShort(id, corte) {
   };
   const fecharEditor = () => { abrir(""); };
   let rascunho = null; // o editor de início e fim com mudanças que ainda não foram ao PC
+  let ajuste = null; // o ajuste fino aberto (pergunta antes de sair com mudanças)
 
   async function abrir(qual) {
+    if (ajuste && qual !== "fino") { // sair do ajuste fino: pergunta se há o que salvar e para o som
+      if (ajuste.pendente() && !confirm("Sair do ajuste fino sem salvar?")) { pintarFerramentas(); return; }
+      ajuste.limpar(); ajuste = null;
+    }
     // trocar de ferramenta ou de aba salva o rascunho de início, fim e borracha (o áudio é refeito uma vez)
     if (rascunho && rascunho.pendente() && qual !== "pontas") {
       const salvo = await rascunho.salvar();
@@ -1146,7 +1670,11 @@ async function telaShort(id, corte) {
         await editorDaLegenda(painel, base, async (novo) => { edicao = "legenda"; await depoisDeMudar(novo); }, () => abrir("legenda"));
       }
       else if (qual === "pontas") rascunho = await editorDasPontas(painel, base, depoisDeMudar, fecharEditor);
-      else if (qual === "postar") await editorDaPostagem(painel, base, id, async () => { s = await pegar(); pintarCabecalho(); pintarInfo(); pintarFerramentas(); }, fecharEditor);
+      else if (qual === "fino") {
+        if (audicao && audicao.pausar) audicao.pausar();
+        ajuste = await editorDoAjusteFino(painel, base, async (novo) => { ajuste = null; edicao = ""; await depoisDeMudar(novo); }, () => { ajuste = null; fecharEditor(); });
+      }
+      else if (qual === "postar") await editorDaPostagem(painel, base, s, async () => { s = await pegar(); marcaDaFila = JSON.stringify(s.fila); pintarCabecalho(); pintarInfo(); pintarFerramentas(); }, fecharEditor);
       else encher(painel);
     } catch (e) {
       encher(painel, h("div", { class: "bloco aviso-bloco" }, e.message || String(e)));
@@ -1162,6 +1690,7 @@ async function telaShort(id, corte) {
       encher(painel);
       encher(area, h("div", { class: "player" },
         h("video", { src: `${base}/video`, controls: true, playsinline: true, preload: "metadata" })),
+        blocoDoRender(),
         h("div", { class: "bloco" }, h("h3", {}, s.legenda ? "Legenda (corrigida)" : "Texto do trecho"), h("p", {}, s.legenda || s.texto)));
       return;
     }
@@ -1173,6 +1702,7 @@ async function telaShort(id, corte) {
       const limparAudicao = audicao.limpar;
       limparTela = () => { // sair do Short: o rascunho de início e fim vai para o PC
         limparAudicao();
+        if (ajuste) { ajuste.limpar(); ajuste = null; }
         if (rascunho && rascunho.pendente()) rascunho.salvar();
       };
     } catch (e) {
@@ -1450,15 +1980,18 @@ const diaIso = (d) => `${d.getFullYear()}-${doisDigitos(d.getMonth() + 1)}-${doi
 const deIso = (iso) => { const [a, m, d] = iso.slice(0, 10).split("-").map(Number); return new Date(a, m - 1, d); };
 const diaDaSemana = (iso) => DIAS_DA_SEMANA[deIso(iso).getDay()];
 
-function linhaDoItem(item) {
+function linhaDoItem(item, aoMesclar = null) {
   const tipo = item.tipo === "short" ? "Short" : "Vídeo";
+  const podeMesclar = aoMesclar && item.origem === "spurgeon" && item.corte !== null && item.corte !== undefined;
   return h("div", { class: `item-crono ${item.tipo} ${item.situacao}` },
     h("span", { class: "hora-crono" }, item.quando.slice(11, 16)),
     h("span", { class: `marca-tipo ${item.tipo}` }, tipo),
     h("span", { class: "titulo-crono" }, item.titulo,
       h("span", { class: "nota" }, ` · ${item.situacao === "programado" ? "programado" : "publicado"}${item.duracao_s ? ` · ${duracao(item.duracao_s)}` : ""}`),
       relacionadoDoItem(item),
-      item.origem === "spurgeon" ? h("span", { class: "origem-crono" }, "Marcado no Spurgeon (ainda não conferido no YouTube)") : null));
+      item.origem === "spurgeon" ? h("span", { class: "origem-crono" }, "Marcado no Spurgeon (ainda não conferido no YouTube)") : null,
+      podeMesclar ? h("button", { class: "botao secundario pequeno mesclar-crono", onclick: () => aoMesclar(item) },
+        item.parecidos && item.parecidos.length ? "🔗 Mesclar com o do YouTube…" : "🔗 Mesclar…") : null));
 }
 
 /** O sermão do Short (o vídeo relacionado no YouTube), para saber de onde ele é. */
@@ -1519,6 +2052,7 @@ async function telaCronograma() {
     encher(situacao, h("div", { class: "bloco" },
       r.rodando ? h("p", { class: "nota" }, "⏳ Lendo o canal no YouTube Studio (uns 20 segundos)…") : h("p", { class: "nota" }, lido),
       r.erro ? h("p", { class: "nota erro-texto" }, r.erro) : null,
+      r.acertados && r.acertados.length ? h("p", { class: "nota" }, `🔄 Horário do YouTube trazido para o Spurgeon: ${r.acertados.join("; ")}.`) : null,
       h("button", { class: "botao secundario", disabled: r.rodando, onclick: async () => {
         try { dados = await post("/api/canal/cronograma/atualizar"); desenhar(); acompanhar(); } catch (e) { avisar(e.message); }
       } }, "↻ Atualizar agora")));
@@ -1553,14 +2087,38 @@ async function telaCronograma() {
       const doDia = escolhido && escolhido.startsWith(`${ano}-${doisDigitos(mes + 1)}`) ? porDia.get(escolhido) || [] : [];
       meses.push(h("div", { class: "bloco" }, grade,
         doDia.length ? h("div", { class: "dia-escolhido" },
-          h("h3", {}, `${diaDaSemana(escolhido)}, ${dataBr(escolhido)} · ${contagem(doDia)}`), ...doDia.map(linhaDoItem)) : null));
+          h("h3", {}, `${diaDaSemana(escolhido)}, ${dataBr(escolhido)} · ${contagem(doDia)}`), ...doDia.map((i) => linhaDoItem(i, mesclar))) : null));
     }
     const dias = [...new Set(futuros.map((i) => i.quando.slice(0, 10)))];
     const proximos = futuros.length ? h("div", { class: "bloco" }, h("h3", {}, "Próximos agendados"),
       ...dias.map((dia) => h("div", { class: "grupo-crono" },
         h("div", { class: "dia-grupo" }, `${diaDaSemana(dia)}, ${dataBr(dia)}`),
-        ...futuros.filter((i) => i.quando.startsWith(dia)).map(linhaDoItem)))) : null;
+        ...futuros.filter((i) => i.quando.startsWith(dia)).map((i) => linhaDoItem(i, mesclar))))) : null;
     encher(corpo, resumo, ...meses, proximos);
+  };
+
+  // o mesmo Short marcado no Spurgeon e postado no YouTube com outro nome: junta os dois (vale o
+  // horário do YouTube, e o Short do Spurgeon passa a acompanhar o do canal)
+  const mesclar = async (item) => {
+    const doCanal = dados.itens.filter((i) => i.tipo === "short" && i.origem !== "spurgeon");
+    const porId = new Map(doCanal.map((i) => [i.id, i]));
+    const sugeridos = (item.parecidos || []).map((id) => porId.get(id)).filter(Boolean);
+    const perto = doCanal.filter((i) => !sugeridos.includes(i))
+      .sort((a, b) => Math.abs(deIso(a.quando) - deIso(item.quando)) - Math.abs(deIso(b.quando) - deIso(item.quando))).slice(0, 8);
+    const rotulo = (i) => `${dataBr(i.quando.slice(0, 10))} ${i.quando.slice(11, 16)} · ${i.titulo}`;
+    const opcoes = [...sugeridos.map((i) => [i.id, `★ ${rotulo(i)}`, "secundario"]), ...perto.map((i) => [i.id, rotulo(i), "secundario"])];
+    if (!opcoes.length) { avisar("Nenhum Short do canal na última leitura: atualize o cronograma."); return; }
+    const escolhido = await escolher(`Qual Short do YouTube é “${item.titulo}”?`, opcoes);
+    if (!escolhido) return;
+    const doYoutube = porId.get(escolhido);
+    if (!confirm(`Mesclar “${item.titulo}” com “${doYoutube.titulo}”?
+
+O Spurgeon fica com o horário do YouTube (${dataBr(doYoutube.quando.slice(0, 10))} às ${doYoutube.quando.slice(11, 16)}).`)) return;
+    try {
+      dados = await post("/api/canal/cronograma/mesclar", { projeto: item.projeto, corte: item.corte, canal: escolhido });
+      avisar("Mesclado: vale o horário do YouTube.");
+      desenhar();
+    } catch (e) { avisar(e.message); }
   };
 
   const acompanhar = async () => {
@@ -1606,6 +2164,8 @@ async function rotear() {
   const partes = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
   const eraRestauracao = restaurando;
   restaurando = false;
+  rotaAnterior = rotaAtual;
+  rotaAtual = location.hash;
   guardarUltimaTela();
   try {
     if (partes[0] === "canal") await telaCanal();
@@ -1685,6 +2245,27 @@ acao("dormir", async () => {
   mostrarDormindo(r.dormindo);
   fecharMenu();
   if (!r.dormindo) rotear();
+});
+acao("reiniciar", async () => {
+  if (!confirm("Reiniciar o servidor no PC? Leva alguns segundos; o app reconecta sozinho.")) return;
+  const voltar = location.hash;
+  const antes = sistema && sistema.versao;
+  await post("/api/sistema/reiniciar"); // recusado (com o motivo) no meio de um trabalho
+  fecharMenu();
+  pararRepeticao();
+  marcarPonto("fora");
+  encher(tela, h("div", { class: "vazio-lista" }, "Reiniciando o servidor no PC…"));
+  await new Promise((r) => setTimeout(r, 3000)); // o servidor velho ainda responde por um instante
+  for (let i = 0; i < 40; i++) {
+    try {
+      const s = await api("/api/sistema");
+      marcarPonto(s.dormindo ? "dormindo" : "ok");
+      avisar(antes && s.versao !== antes ? `Servidor reiniciado (versão ${s.versao}).` : "Servidor reiniciado.");
+      if (location.hash === voltar) rotear(); else location.hash = voltar;
+      return;
+    } catch (_) { await new Promise((r) => setTimeout(r, 2000)); }
+  }
+  encher(tela, h("div", { class: "vazio-lista" }, "O servidor não voltou. No PC, use o atalho “Controle remoto - ligar”."));
 });
 acao("encerrar", async () => {
   if (!confirm("Encerrar o servidor? Ele só volta no PC (ou quando o Windows reiniciar).")) return;

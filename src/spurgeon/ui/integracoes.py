@@ -17,6 +17,7 @@ import customtkinter as ctk
 from spurgeon.core.erros import Cancelado, ErroSpurgeon
 from spurgeon.publicacao.cofre import Cofre
 from spurgeon.publicacao.modelo import Campo, Plataforma
+from spurgeon.shorts import gemini
 from spurgeon.ui import dialogos
 from spurgeon.ui.assincrono import Tarefas
 from spurgeon.ui.dicas import dica
@@ -312,6 +313,173 @@ class CartaoDaConta(ctk.CTkFrame):
             self._ao_mudar()
 
 
+_COMO_PEGAR_A_CHAVE_DO_GEMINI = (
+    "1. Entre em aistudio.google.com/apikey com uma conta Google (pode ser a da igreja).\n"
+    "2. Clique em “Create API key” (Criar chave de API) e escolha ou crie um projeto.\n"
+    "3. Copie a chave (começa com “AIza…”), cole no campo abaixo e clique em Testar.\n"
+    "O plano grátis basta para revisar os Shorts de um culto; o Google pode usar o texto enviado "
+    "no plano grátis para melhorar os modelos dele (só vai o texto do Short, nunca o vídeo)."
+)
+
+
+class CartaoDoGemini(ctk.CTkFrame):
+    """A chave da API do Google Gemini, para a segunda revisão dos Shorts (opcional)."""
+
+    def __init__(self, master, *, cofre: Cofre, tarefas: Tarefas):
+        super().__init__(master, corner_radius=8)
+        self.cofre = cofre
+        self._tarefas = tarefas
+        self.testando = False
+        self.columnconfigure(0, weight=1)
+
+        linha = ctk.CTkFrame(self, fg_color="transparent")
+        linha.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 0))
+        linha.columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            linha, text="Revisão dos Shorts pelo Google Gemini (opcional)", anchor="w",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")  # fmt: skip
+        self.situacao = ctk.CTkLabel(linha, text="", anchor="e", font=ctk.CTkFont(weight="bold"))
+        self.situacao.grid(row=0, column=1, sticky="e")
+        dica(self.situacao, "Se a segunda revisão pelo Gemini está ligada.")
+
+        ctk.CTkLabel(
+            self,
+            text=(
+                "Depois que a IA do computador corta os Shorts e escreve título e descrição, o "
+                "Gemini confere de novo os gerados automaticamente: se o corte ficou bom e se o "
+                "título e a descrição combinam com o que o pregador diz. Sem chave, o "
+                "processamento segue como sempre, sem a segunda revisão."
+            ),
+            anchor="w", justify="left", wraplength=_LARGURA_DO_TEXTO, text_color=_COR_SUAVE,
+        ).grid(row=1, column=0, sticky="ew", padx=14, pady=(2, 6))  # fmt: skip
+
+        self.passo_a_passo = SecaoRecolhivel(
+            self, "Como conseguir a chave", ajuda="Onde criar a chave grátis do Gemini."
+        )
+        self.passo_a_passo.grid(row=2, column=0, sticky="ew", padx=6)
+        ctk.CTkLabel(
+            self.passo_a_passo.corpo, text=_COMO_PEGAR_A_CHAVE_DO_GEMINI, anchor="w",
+            justify="left", wraplength=_LARGURA_DO_TEXTO - 20,
+        ).pack(fill="x", padx=14, pady=(6, 8))  # fmt: skip
+
+        campos = ctk.CTkFrame(self, fg_color="transparent")
+        campos.grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 0))
+        campos.columnconfigure(1, weight=1)
+        ctk.CTkLabel(campos, text="Chave da API", anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=3
+        )
+        self.entrada_chave = ctk.CTkEntry(campos, show="•", width=420)
+        self.entrada_chave.grid(row=0, column=1, sticky="ew", pady=3)
+        dica(self.entrada_chave, _DICA_DO_SEGREDO)
+        ctk.CTkLabel(campos, text="Modelo (opcional)", anchor="w").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=3
+        )
+        self.entrada_modelo = ctk.CTkEntry(campos, width=420, placeholder_text=gemini.MODELO_PADRAO)
+        self.entrada_modelo.grid(row=1, column=1, sticky="ew", pady=3)
+        dica(
+            self.entrada_modelo,
+            f"Em branco usa “{gemini.MODELO_PADRAO}”, que o Google mantém apontando para o Flash "
+            "mais novo. Só troque se quiser um modelo específico (ex.: gemini-3.5-flash).",
+        )
+
+        botoes = ctk.CTkFrame(self, fg_color="transparent")
+        botoes.grid(row=4, column=0, sticky="ew", padx=14, pady=(8, 4))
+        self.botao_salvar = ctk.CTkButton(botoes, text="Salvar", width=90, command=self.salvar)
+        self.botao_salvar.pack(side="left")
+        dica(self.botao_salvar, "Guarda a chave (criptografada) e o modelo, sem testar.")
+        self.botao_testar = ctk.CTkButton(
+            botoes, text="Salvar e testar", width=130, command=self.testar
+        )
+        self.botao_testar.pack(side="left", padx=(8, 0))
+        dica(self.botao_testar, "Guarda e manda um pedido mínimo ao Gemini para ver se responde.")
+        self.botao_apagar = ctk.CTkButton(
+            botoes, text="Apagar a chave", width=120, fg_color=("gray70", "gray30"),
+            command=self.apagar,
+        )  # fmt: skip
+        self.botao_apagar.pack(side="right")
+        dica(self.botao_apagar, "Tira a chave do computador; a segunda revisão fica desligada.")
+
+        self.mensagem = RotuloQueSome(
+            self, anchor="w", justify="left", wraplength=_LARGURA_DO_TEXTO, text=""
+        )
+        self.mensagem.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 10))
+        self.atualizar()
+
+    def atualizar(self) -> None:
+        config = gemini.configuracao(self.cofre)
+        if self.testando:
+            self.situacao.configure(text="… testando", text_color=_COR_SUAVE)
+        elif config is None:
+            self.situacao.configure(text="○ Desligada (sem chave)", text_color=_COR_SUAVE)
+        else:
+            self.situacao.configure(text=f"● Ligada · {config.modelo}", text_color=_COR_OK)
+        self.entrada_chave.delete(0, "end")
+        self.entrada_chave.configure(
+            placeholder_text="guardada (digite para trocar)" if config else "AIza…"
+        )
+        if not self.entrada_modelo.get():
+            modelo = self.cofre.obter(gemini.CONTA, gemini.CAMPO_MODELO)
+            if modelo:
+                self.entrada_modelo.insert(0, modelo)
+        estado = "disabled" if self.testando else "normal"
+        self.botao_salvar.configure(state=estado)
+        self.botao_testar.configure(state=estado)
+        self.botao_apagar.configure(state="disabled" if self.testando or not config else "normal")
+
+    def _dizer(self, texto: str, *, erro: bool = False) -> None:
+        self.mensagem.configure(text=texto, text_color=_COR_ERRO if erro else _COR_OK)
+
+    def salvar(self) -> None:
+        """Chave em branco não apaga a guardada; o modelo é guardado como está (vazio = padrão)."""
+        chave = "".join(self.entrada_chave.get().split())  # sem espaços nem quebras coladas
+        if chave:
+            self.cofre.definir(gemini.CONTA, gemini.CAMPO_CHAVE, chave, segredo=True)
+        modelo = self.entrada_modelo.get().strip()
+        self.cofre.definir(gemini.CONTA, gemini.CAMPO_MODELO, modelo)
+        self._dizer("Chave guardada neste computador." if chave else "Modelo guardado.")
+        self.atualizar()
+
+    def testar(self) -> None:
+        if self.testando:
+            return
+        self.salvar()
+        config = gemini.configuracao(self.cofre)
+        if config is None:
+            self._dizer("Cole a chave da API antes de testar.", erro=True)
+            return
+        self.testando = True
+        self.mensagem.configure(text="")
+        self.atualizar()
+        self._tarefas.rodar(lambda: gemini.testar(config), self._testou, self._falhou)
+
+    def _testou(self, resumo: str) -> None:
+        self.testando = False
+        self._dizer(f"Tudo certo: {resumo}.")
+        self.atualizar()
+
+    def _falhou(self, erro: Exception) -> None:
+        self.testando = False
+        texto = str(erro) if isinstance(erro, ErroSpurgeon) else f"Erro inesperado: {erro}"
+        self._dizer(texto, erro=True)
+        self.atualizar()
+
+    def apagar(self) -> None:
+        if self.testando or not dialogos.confirmar(
+            self.winfo_toplevel(),
+            "Apagar a chave",
+            "Apagar a chave do Gemini deste computador? Os próximos projetos ficam sem a segunda "
+            "revisão (os Shorts já revisados não mudam).",
+            sim="Apagar",
+            nao="Voltar",
+        ):
+            return
+        self.cofre.remover(gemini.CONTA)
+        self.entrada_modelo.delete(0, "end")
+        self._dizer("Chave apagada: a segunda revisão está desligada.")
+        self.atualizar()
+
+
 class AbaIntegracoes(ctk.CTkFrame):
     """A aba inteira: uma explicação, um cartão por conta e o registro do que o Spurgeon fez."""
 
@@ -354,13 +522,15 @@ class AbaIntegracoes(ctk.CTkFrame):
             )
             cartao.grid(row=linha, column=0, sticky="ew", padx=10, pady=6)
             self.cartoes[conta] = cartao
+        self.gemini = CartaoDoGemini(corpo, cofre=cofre, tarefas=tarefas)
+        self.gemini.grid(row=len(contas), column=0, sticky="ew", padx=10, pady=6)
 
         rotulo = ctk.CTkLabel(
             corpo, text="O que o Spurgeon fez por aqui", anchor="w", font=ctk.CTkFont(weight="bold")
         )
-        rotulo.grid(row=len(contas), column=0, sticky="w", padx=14, pady=(10, 2))
+        rotulo.grid(row=len(contas) + 1, column=0, sticky="w", padx=14, pady=(10, 2))
         self.atividade = ctk.CTkTextbox(corpo, height=120, state="disabled", wrap="word")
-        self.atividade.grid(row=len(contas) + 1, column=0, sticky="ew", padx=10, pady=(0, 14))
+        self.atividade.grid(row=len(contas) + 2, column=0, sticky="ew", padx=10, pady=(0, 14))
         dica(
             self.atividade,
             "As últimas postagens, agendamentos e avisos desta sessão (a fila do Instagram também "

@@ -164,27 +164,55 @@ def test_aviso_da_postagem(pastas):
 # --- pelo servidor --------------------------------------------------------------------------
 
 
-def test_postar_pelo_servidor(pastas, tmp_path):
+def test_postar_pelo_servidor_entra_na_fila(pastas, tmp_path):
+    """Postar pelo celular põe o Short na fila do PC (um não renderizado também: a fila o renderiza
+    antes); o despachante o programa quando chega a vez."""
+    from spurgeon.remoto.despachante import Despachante, Vez
+    from spurgeon.shorts import fila
+
     cofre = Cofre(tmp_path / "c.json", proteger=lambda b: b, revelar=lambda b: b)
     ctx = Contexto(
         ConfigRemoto(usuarios=[CONTA]), pastas.raiz.parent, Avisos(cofre, TransporteFalso()), "x",
         gravar_config=lambda _c: None,
-        postagens=postagem.Postagens(postar=lambda *a: FEITO, renovar_s=0.01),
     )  # fmt: skip
     cliente = TestClient(criar_app(ctx), headers={"Tailscale-User-Login": CONTA})
     base = f"/api/projetos/{NOME_DO_PROJETO}"
     preparo = cliente.get(f"{base}/shorts/3/postar").json()
-    assert preparo == {"relacionado": "09. Sermão de teste", "youtube": None, "envio": None}
+    assert preparo["relacionado"] == "09. Sermão de teste" and preparo["youtube"] is None
+    assert preparo["fila"] is None and preparo["youtube_quando"] == ""
     pedido = {"quando": "2099-01-01T18:30", "relacionado": "09. Sermão de teste"}
     assert cliente.post(f"{base}/shorts/3/postar", json=pedido).json() == {"erro": "sem_trava"}
     cliente.post(f"{base}/sessao")
-    assert (
-        cliente.post(f"{base}/shorts/7/postar", json=pedido).status_code == 409
-    )  # não renderizado
+    ainda_nao = cliente.post(f"{base}/shorts/7/postar", json=pedido)  # não renderizado: na fila
+    assert ainda_nao.status_code == 200
+    assert ainda_nao.json()["fila"]["situacao"] == fila.NA_FILA_DO_RENDER
     iniciado = cliente.post(f"{base}/shorts/3/postar", json=pedido)
-    assert iniciado.status_code == 200 and iniciado.json()["corte"] == 3
-    ctx.postagens.esperar(5)
-    assert cliente.get(f"{base}/postagem").json()["link"].endswith("XyZ98765abc")
-    assert cliente.get(f"{base}/shorts/3/postar").json()["youtube"]["estado"] == AGENDADO
+    assert iniciado.status_code == 200
+    assert iniciado.json()["fila"]["situacao"] == fila.NA_FILA_DA_PROGRAMACAO
+    assert cliente.post(f"{base}/shorts/3/fila/tirar").status_code == 200
+    assert cliente.get(f"{base}/shorts/3/postar").json()["fila"] is None
+    fila.tirar_da_fila(pastas, 7)
+    cliente.post(f"{base}/shorts/3/postar", json=pedido)
+
+    def programar(p, item, andamento):
+        postagem.registrar_sucesso(p, item.corte, FEITO, item.horario(), mover_arquivos=False)
+        return "Programado."
+
+    class SemRender:
+        rodando = False
+
+    despachante = Despachante(
+        lambda: pastas.raiz.parent, fila=SemRender(), vez=Vez(tmp_path / "vez.json"),
+        procurar=lambda: [], programar=programar,
+    )  # fmt: skip
+    despachante.passo()
+    preparo = cliente.get(f"{base}/shorts/3/postar").json()
+    assert preparo["youtube"]["estado"] == AGENDADO and preparo["fila"] is None
+    assert preparo["youtube_quando"] == "2099-01-01T18:30"
     de_novo = cliente.post(f"{base}/shorts/3/postar", json=pedido)
     assert de_novo.status_code == 409 and "já foi programado" in de_novo.json()["erro"]
+    reagendar = cliente.post(f"{base}/shorts/3/reagendar", json={"quando": "2099-01-02T09:00"})
+    assert reagendar.status_code == 200
+    assert reagendar.json()["fila"]["situacao"] == fila.NA_FILA_DA_PROGRAMACAO
+    perto = cliente.post(f"{base}/shorts/3/reagendar", json={"quando": "2000-01-01T09:00"})
+    assert perto.status_code == 409 and "5 minutos" in perto.json()["erro"]

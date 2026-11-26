@@ -17,6 +17,7 @@
 > | 1.9 | Os Shorts cortados do vídeo longo já tratado, o ícone do programa e a lista de projetos ao abrir |
 > | 2.0 | **Controle remoto pelo celular** (opcional): ver, editar, aprovar, renderizar, Shorts livre, postar no YouTube pelo navegador, começar projetos do canal; e "Exportar a legenda do sermão" no Studio |
 > | 2.1 | Shorts saem desmarcados (sem a pausa de aprovação); no celular: cronograma do canal, editar título/descrição/hashtags, varrer e apagar projetos, opções antes de começar, postagem conferida no canal |
+> | 2.2 | Fila dos Shorts (renderizar e programar no YouTube, um por vez), revisão do Gemini, ajuste fino da legenda, 👍/👎, modo **Só áudio**, trilha de áudio de fora e o ícone novo (púlpito com a Bíblia) |
 >
 > **Controle remoto** (extra opcional `remoto`): decisões, estrutura e fases no [Remoto.md](Remoto.md).
 
@@ -49,7 +50,7 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 
 1. Selecionar o vídeo longo (a janela abre em `Downloads/`) ou colar o caminho — **ou** clicar em **Abrir projeto…** e escolher a pasta de um projeto já criado, para aproveitar tudo o que ele já tem (a tela volta com o nome, a data, o vídeo e as opções do projeto).
 2. Conferir nome do sermão e data da gravação (preenchidos automaticamente, editáveis).
-3. Escolher o **modo** (Tudo, Só Shorts ou Só vinhetas; a janela mostra só o que vale para ele), cortar o começo e o fim e ajustar o zoom, o tratamento, a marca d'água, os pontos de revisão e o processamento, e clicar em **Iniciar Processamento**.
+3. Escolher o **modo** (Tudo, Só Shorts, Só vinhetas ou Só áudio; a janela mostra só o que vale para ele), cortar o começo e o fim e ajustar o zoom, o tratamento, a marca d'água, os pontos de revisão e o processamento, e clicar em **Iniciar Processamento**.
 4. O app cria a pasta do projeto, **abre-a no Explorer** e inicia o log `processamento.log`.
 5. O pipeline roda em segundo plano (subprocesso) com barra de progresso, tempo restante estimado e painel de logs em tempo real.
 6. Em dois pontos o processo **pausa para revisão humana** (transcrição e cortes dos Shorts). Esses pontos podem ser desligados.
@@ -91,7 +92,7 @@ Aplicação do limite: `cpu_threads` do faster-whisper, `-threads` do FFmpeg, `n
 
 **Depois do pipeline (Studio Shorts e redes).** O pipeline termina nos arquivos de `shorts_gerados/`. Dali em diante, a pessoa trabalha no **Studio Shorts** (ajusta o corte e a legenda, renderiza só o que falta, marca "agendado para" ou "já postado") e na aba **Integrações** (liga as contas), e o botão "Postar nas redes…" envia cada Short ao YouTube, Instagram, Facebook e TikTok, agora ou no horário escolhido (`publicacao/`; decisões na Rodada 1.8 e pesquisa no [Integracoes.md](Integracoes.md)). O arquivo de cada Short acompanha o seu estado: `shorts_gerados/` (pronto), `agendados/` (com horário marcado), `postados/` (já foi ao ar) e `desmarcados/` (fora da seleção).
 
-**Modos (v1.1).** O mesmo pipeline roda em três modos (`OpcoesProcessamento.modo`): `completo` (tudo o que estiver marcado); `so_shorts` (os passos do vídeo longo ficam de fora, e a transcrição e a análise já feitas são aproveitadas); `so_vinhetas` (só a etapa `adicionar_vinhetas`: codifica a introdução e a vinheta com o mesmo preset do vídeo, emenda sem recodificar o vídeo principal e desloca o `.srt`; o resultado é `video_longo_com_vinhetas.mp4`). `Pipeline.ativas` filtra as etapas pelo modo, e o registro das etapas fora do modo fica em `estado.etapas_guardadas`, para não se perder o que já foi feito.
+**Modos (v1.1).** O mesmo pipeline roda em três modos (`OpcoesProcessamento.modo`): `completo` (tudo o que estiver marcado); `so_shorts` (os passos do vídeo longo ficam de fora, e a transcrição e a análise já feitas são aproveitadas); `so_vinhetas` (só a etapa `adicionar_vinhetas`: codifica a introdução e a vinheta com o mesmo preset do vídeo, emenda sem recodificar o vídeo principal e desloca o `.srt`; o resultado é `video_longo_com_vinhetas.mp4`); `so_audio` (2.2: só `extrair_audio`, `limpar_audio` e `normalizar_audio` se marcados, `exportar_audio` e `finalizar`; grava `audio_do_sermao.wav` ou `.mp3` (`audio_formato`) na pasta do projeto, com o começo e o fim do vídeo aplicados por `atrim`; sem transcrição; a etapa é `entrega`, então `_work/` é limpa no fim). `Pipeline.ativas` filtra as etapas pelo modo, e o registro das etapas fora do modo fica em `estado.etapas_guardadas`, para não se perder o que já foi feito.
 
 **Por que transcrever uma vez antes de cortar silêncio:** o .srt sempre bate com o vídeo final, os Shorts são decididos no material original (e cortados do vídeo longo pelo mesmo mapa de tempo), e não é preciso retranscrever depois de cortar. O vínculo entre as duas linhas do tempo é um **mapa de tempo** (lista de trechos mantidos → função `t_original → t_editado`).
 
@@ -537,7 +538,7 @@ Os seis pedidos da rodada (registrados no fim da seção 6), todos feitos e test
 **2. "O que gerar" mostra só o que vale para o modo** (`PainelOpcoes._montar_gerar`, `_mostrar_grupos`).
 
 * Quatro grupos com título e fio: **Áudio** (limpar, normalizar), **Vídeo completo** (vídeo sem silêncios + .srt, tamanho mínimo da pausa), **Introdução e vinheta final** (arquivos, fade) e **Shorts (vertical 9:16)** (gerar Shorts, legendas dinâmicas). Cada opção tem uma legendinha cinza.
-* **Tudo** mostra os quatro; **Só Shorts** mostra Áudio e Shorts (sem a caixa "Gerar Shorts", que no modo já é o produto); **Só vinhetas** mostra só a introdução e a vinheta. Os grupos escondidos continuam existindo (só saem da tela), então o estado e a validação não mudam.
+* **Tudo** mostra os quatro; **Só Shorts** mostra Áudio e Shorts (sem a caixa "Gerar Shorts", que no modo já é o produto); **Só vinhetas** mostra só a introdução e a vinheta; **Só áudio** (2.2) mostra só o Áudio, com o formato do arquivo (WAV ou MP3). Os grupos escondidos continuam existindo (só saem da tela), então o estado e a validação não mudam.
 
 **3. Elementos do YouTube Shorts sobre a prévia** (`ui/youtube_shorts.py`, `ui/painel_shorts.py`).
 
@@ -1262,3 +1263,28 @@ As decisões (R1 a R19), a estrutura e o estado de cada fase estão no [Remoto.m
     "varrido" na lista de projetos; **varrer** e **apagar** projeto (com confirmação); projeto do canal criado na hora,
     com as **opções antes de "Começar"**; a lista do canal fica guardada até "Atualizar". Nome do canal só no
     `remoto.json` do PC.
+
+### Rodada 2.2 (2026-11-25): só o áudio, a trilha de áudio de fora e o ícone novo
+
+94. **Modo "Só áudio"** (`so_audio`, PC, celular e `spurgeon processar --modo so_audio --formato-audio mp3`): tira o som
+    do vídeo, limpa e normaliza se marcado, e grava `audio_do_sermao.wav` (sem perdas) ou `.mp3` (`libmp3lame -q:a 2`) na
+    pasta do projeto (`audio/exportar.py`, etapa `exportar_audio`, `entrega = True`). O começo e o fim do vídeo valem
+    (`atrim`). Sem transcrição nem render; a pré-verificação não pede o Whisper e confere o MP3 no FFmpeg. As opções de
+    imagem, marca e Shorts ficam guardadas como estavam (voltar ao Tudo não perde nada). `Etapa.no_modo_audio` diz
+    quais etapas rodam nele, como o `no_modo_vinhetas`. No celular, "⬇ Baixar o áudio do sermão"
+    (`GET /api/projetos/<p>/audio`).
+95. **Trilha de áudio de fora** (`OpcoesProcessamento.audio_externo`): um áudio melhorado em outro programa (ou gravado
+    da mesa de som) **substitui** o som do vídeo em tudo: a extração (`audio/extrair.fonte_do_audio`) lê dele, então
+    transcrição, pausas, vídeo longo, Shorts, a prévia do Studio (`previa_do_corte(audio_externo=)`), o ajuste fino e o
+    "ouvir" do celular usam o mesmo som. Ele precisa estar na mesma linha do tempo do vídeo (o log avisa se a duração
+    difere mais de 2 s); não há alinhamento automático. Trocar a trilha refaz tudo o que vem do áudio
+    (`ExtrairAudio.opcoes_relevantes`); o campo vazio não muda a assinatura de projetos antigos. É de cada vídeo: não vira
+    preferência salva. Escolha sem consulta: "adicionar outra trilha" foi lido como **substituir** o som (e não pôr uma
+    segunda faixa de áudio no `.mp4`). No celular o arquivo é enviado inteiro (`POST /api/projetos/<p>/trilha?nome=`,
+    `remoto/trilha.py`, até 4 GB) para `trilha_externa/` do projeto; o celular nunca escreve um caminho do PC.
+96. **Ícone novo**: um púlpito com uma cruz vazada e uma Bíblia aberta em cima, em branco sobre o mesmo quadrado azul
+    (#1F6AA5, borda #144673). Desenhado por código (`ui/desenho_do_icone.py`, em 1024 px e reduzido para 16 a 256 px;
+    até 64 px sem as linhas do texto da Bíblia, que viravam borrão). O arquivo passou a se chamar
+    `recursos/icone_studio_spurgeon.ico` porque a atualização pelo GitHub nunca sobrescreve um recurso que já existe:
+    com o nome novo ele chega a quem já tem o programa. Os atalhos antigos continuam com o ícone velho até o instalador
+    rodar de novo (a janela, a barra de tarefas e o celular já mostram o novo).

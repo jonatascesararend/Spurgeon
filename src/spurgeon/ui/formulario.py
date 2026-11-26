@@ -42,6 +42,11 @@ ROTULOS_MODO = {
     "completo": "Tudo",
     "so_shorts": "Só Shorts",
     "so_vinhetas": "Só vinhetas",
+    "so_audio": "Só áudio",
+}
+ROTULOS_FORMATO_AUDIO = {
+    "wav": "WAV (sem perdas)",
+    "mp3": "MP3 (bem menor)",
 }
 DICAS_MODO = {
     "completo": "Processa o sermão do começo e gera o que estiver marcado abaixo.",
@@ -52,6 +57,10 @@ DICAS_MODO = {
     "so_vinhetas": (
         "Só junta a introdução e a vinheta final a um vídeo longo que já está pronto. "
         "Escolha o projeto com “Abrir projeto…”. Leva poucos minutos."
+    ),
+    "so_audio": (
+        "Só tira o áudio do vídeo e o grava na pasta do projeto (audio_do_sermao), limpo e com o "
+        "volume normalizado se estiver marcado abaixo. Não transcreve nem renderiza vídeo."
     ),
 }
 
@@ -112,6 +121,8 @@ class ValoresFormulario:
     # O que gerar
     limpar_audio: bool = False
     normalizar_volume: bool = False
+    audio_externo: str = ""  # outra trilha de áudio no lugar do som do vídeo ("" = a do vídeo)
+    audio_formato: str = "wav"
     gerar_video_longo: bool = True
     limiar_pausa: str = "10,0"
     introducao: bool = False
@@ -178,6 +189,8 @@ class ValoresFormulario:
             qualidade=o.qualidade,
             limpar_audio=o.limpar_audio,
             normalizar_volume=o.normalizar_volume,
+            audio_externo=o.audio_externo,
+            audio_formato=o.audio_formato,
             gerar_video_longo=o.gerar_video_longo,
             limiar_pausa=_texto_decimal(o.limiar_pausa_s),
             introducao=o.introducao,
@@ -235,6 +248,8 @@ class Habilitacoes:
     """O que fica ativo ou apagado na tela conforme as escolhas feitas."""
 
     limpar_audio: bool
+    audio_externo: bool
+    audio_formato: bool
     gerar_video_longo: bool
     gerar_shorts: bool
     limiar_pausa: bool
@@ -275,11 +290,15 @@ def calcular_habilitacoes(
 ) -> Habilitacoes:
     completo = v.modo == "completo"
     so_vinhetas = v.modo == "so_vinhetas"
+    so_audio = v.modo == "so_audio"
+    sem_imagem = so_vinhetas or so_audio  # nada de vídeo é renderizado
     longo = video_longo_do_formulario(v)
     shorts = shorts_do_formulario(v)
     vinhetas_valem = longo or so_vinhetas
     return Habilitacoes(
         limpar_audio=not so_vinhetas,
+        audio_externo=not so_vinhetas,
+        audio_formato=so_audio,
         gerar_video_longo=completo,
         gerar_shorts=completo,
         limiar_pausa=longo,
@@ -292,19 +311,21 @@ def calcular_habilitacoes(
         # no Só vinhetas o fade sempre passa pelo preto: não há o que escolher
         fade_estilo=longo and v.fade_vinhetas and (v.introducao or v.vinheta_final),
         aparar=not so_vinhetas,
-        zoom=not so_vinhetas,
-        zoom_nos_shorts=not so_vinhetas and shorts,
-        tratamento=not so_vinhetas,
-        tratamento_nos_shorts=not so_vinhetas and shorts,
+        zoom=not sem_imagem,
+        zoom_nos_shorts=not sem_imagem and shorts,
+        tratamento=not sem_imagem,
+        tratamento_nos_shorts=not sem_imagem and shorts,
         legendas_dinamicas=shorts,
-        revisar_transcricao=not so_vinhetas,
+        revisar_transcricao=not sem_imagem,
         campos_shorts=shorts,
-        marca_dagua=not so_vinhetas,
-        marca_campos=v.marca_dagua and not so_vinhetas,
+        marca_dagua=not sem_imagem,
+        marca_campos=v.marca_dagua and not sem_imagem,
         marca_no_video_longo=v.marca_dagua and longo,
         marca_nos_shorts=v.marca_dagua and shorts,
         qualidade_personalizada=v.qualidade == "personalizado",
-        pode_iniciar=(v.introducao or v.vinheta_final) if so_vinhetas else (longo or shorts),
+        pode_iniciar=(
+            (v.introducao or v.vinheta_final) if so_vinhetas else (so_audio or longo or shorts)
+        ),
     )
 
 
@@ -314,6 +335,7 @@ def para_opcoes(
     """Valida o formulário e devolve as opções. `base` guarda o que a tela não mostra."""
     erros: list[str] = []
     so_vinhetas = v.modo == "so_vinhetas"
+    so_audio = v.modo == "so_audio"
     longo = video_longo_do_formulario(v)
     shorts = shorts_do_formulario(v)
     marca = v.marca_dagua and not so_vinhetas
@@ -324,6 +346,9 @@ def para_opcoes(
         "qualidade": v.qualidade,
         "limpar_audio": v.limpar_audio and not so_vinhetas,
         "normalizar_volume": v.normalizar_volume,
+        # a trilha fica guardada mesmo no Só vinhetas (tirá-la refaria o áudio depois)
+        "audio_externo": v.audio_externo.strip(),
+        "audio_formato": v.audio_formato if v.audio_formato in ROTULOS_FORMATO_AUDIO else "wav",
         "gerar_video_longo": v.gerar_video_longo,
         "introducao": v.introducao and (longo or so_vinhetas),
         "vinheta_final": v.vinheta_final and (longo or so_vinhetas),
@@ -351,7 +376,10 @@ def para_opcoes(
     def decimal(texto, rotulo, faixa):
         return _numero(texto, rotulo, faixa, erros, inteiro=False)
 
-    if marca:
+    trilha = v.audio_externo.strip()
+    if trilha and not so_vinhetas and not Path(trilha).is_file():
+        erros.append(f"A trilha de áudio escolhida não foi encontrada: {trilha}")
+    if marca and not so_audio:  # no Só áudio a marca não entra, mas continua guardada
         minimo, maximo = _LIMITE_MARCA
         if not minimo <= v.marca_tamanho_pct <= maximo:
             erros.append(

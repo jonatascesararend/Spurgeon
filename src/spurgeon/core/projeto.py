@@ -120,6 +120,18 @@ class PastasProjeto:
     def cortes(self) -> Path:
         return self.work / "cortes.json"
 
+    def audio_exportado(self, formato: str) -> Path:
+        """O áudio que o modo "Só o áudio" entrega (`wav` ou `mp3`)."""
+        return self.raiz / f"audio_do_sermao.{formato}"
+
+    def audios_exportados(self) -> list[Path]:
+        return [p for p in (self.audio_exportado("wav"), self.audio_exportado("mp3")) if p.exists()]
+
+    @property
+    def trilhas_externas(self) -> Path:
+        """Onde fica a trilha de áudio enviada pelo celular (`remoto/trilha.py`)."""
+        return self.raiz / "trilha_externa"
+
     def audio_base(self, opcoes: OpcoesProcessamento) -> Path:
         """O áudio sem o volume ajustado: o limpo, se a limpeza foi pedida; senão o original."""
         return self.audio_limpo if opcoes.limpar_audio else self.audio_original
@@ -272,6 +284,7 @@ def descrever_projeto(pastas: PastasProjeto) -> str:
         partes.append("vídeo com introdução e vinheta")
     if pastas.cortes_shorts.exists():
         partes.append(_frase_dos_shorts(pastas))
+    partes += [f"áudio do sermão ({p.suffix[1:].upper()})" for p in pastas.audios_exportados()]
     return (
         "Já existe: " + ", ".join(partes) + "." if partes else "O projeto ainda não tem resultados."
     )
@@ -320,6 +333,8 @@ def resumo_dos_resultados(pastas: PastasProjeto) -> str:
         partes.append("vídeo longo")
     if pastas.cortes_shorts.exists():
         partes.append(_frase_dos_shorts(pastas))
+    if pastas.audios_exportados():
+        partes.append("áudio do sermão")
     if not partes and pastas.transcricao.exists():
         partes.append("só a transcrição")
     return " · ".join(partes) if partes else "sem resultados ainda"

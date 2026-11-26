@@ -153,6 +153,7 @@ class PainelEntrada(ctk.CTkFrame):
         self.shorts: PainelShorts | None = None
         self._bloqueado = False
         self._so_vinhetas = False
+        self._so_audio = False
         self._shorts = True
 
         entrada = self._controles[0]
@@ -328,12 +329,14 @@ class PainelEntrada(ctk.CTkFrame):
             controle.configure(state=estado)
         self._habilitar_secoes()
 
-    def modo_so_vinhetas(self, so_vinhetas: bool, *, shorts: bool) -> None:
-        """No modo só vinhetas o vídeo não é recodificado: cortar e dar zoom não valem."""
-        if (so_vinhetas, shorts) == (self._so_vinhetas, self._shorts):
+    def modo_so_vinhetas(self, so_vinhetas: bool, *, shorts: bool, so_audio: bool = False) -> None:
+        """No modo só vinhetas o vídeo não é recodificado: cortar e dar zoom não valem. No só áudio
+        o começo e o fim valem (cortam o áudio), mas o zoom não."""
+        if (so_vinhetas, shorts, so_audio) == (self._so_vinhetas, self._shorts, self._so_audio):
             return  # nada mudou (isto roda a cada ajuste de um controle deslizante)
         self._so_vinhetas = so_vinhetas
         self._shorts = shorts
+        self._so_audio = so_audio
         self._habilitar_secoes()
 
     def _habilitar_secoes(self) -> None:
@@ -341,7 +344,7 @@ class PainelEntrada(ctk.CTkFrame):
             return
         livre = not self._bloqueado and not self._so_vinhetas
         self.aparar.habilitar(livre)
-        self.zoom.habilitar(livre, shorts=self._shorts)
+        self.zoom.habilitar(livre and not self._so_audio, shorts=self._shorts)
         self.shorts.habilitar(livre and self._shorts)
 
     def valores(self) -> dict:

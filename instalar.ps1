@@ -67,7 +67,7 @@ $Raiz = $PSScriptRoot
 $PastaFerramentas = Join-Path $Raiz 'modelos\ferramentas'
 $Py = Join-Path $Raiz '.venv\Scripts\python.exe'
 $Pyw = Join-Path $Raiz '.venv\Scripts\pythonw.exe'
-$Icone = Join-Path $Raiz 'recursos\studio_spurgeon.ico'
+$Icone = Join-Path $Raiz 'recursos\icone_studio_spurgeon.ico'
 $Log = Join-Path $Raiz 'instalacao.log'
 $script:Pendencias = New-Object System.Collections.Generic.List[string]
 

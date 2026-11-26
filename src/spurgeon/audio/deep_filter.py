@@ -157,6 +157,7 @@ class LimparAudio(Etapa):
     nome = "Limpando o ruído do áudio (DeepFilterNet)"
     depende_de = ("extrair_audio",)
     peso = 8.0
+    no_modo_audio = True
 
     def ativa(self, opcoes) -> bool:
         return opcoes.limpar_audio

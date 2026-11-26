@@ -69,12 +69,26 @@ class Porteiro:
         await self.app(scope, receive, send)
 
 
+class ArquivosDoApp(StaticFiles):
+    """Os arquivos do app do celular, sempre conferidos com o PC (`no-cache`).
+
+    Sem `Cache-Control` o navegador do celular decide sozinho por quanto tempo reaproveita o
+    `app.js` (horas, se o arquivo antigo tinha dias) e uma mudança no app não aparecia nem depois de
+    reiniciar o servidor. Com `no-cache` ele pergunta a cada vez; sem mudança, a resposta é um 304.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        resposta = await super().get_response(path, scope)
+        resposta.headers["Cache-Control"] = "no-cache"
+        return resposta
+
+
 @cache
 def icone_png(tamanho: int) -> bytes:
-    """O ícone do Studio (`recursos/studio_spurgeon.ico`) no tamanho que o celular pede."""
+    """O ícone do Studio (`recursos/icone_studio_spurgeon.ico`) no tamanho que o celular pede."""
     from PIL import Image
 
-    caminho = raiz_repositorio() / "recursos" / "studio_spurgeon.ico"
+    caminho = raiz_repositorio() / "recursos" / "icone_studio_spurgeon.ico"
     with Image.open(caminho) as ico:
         maior = max(ico.info.get("sizes", {ico.size}), key=lambda s: s[0])
         ico.size = maior
@@ -109,7 +123,7 @@ def criar_app(ctx: Contexto) -> ASGIApp:
         *postagem.rotas(ctx),
         *canal.rotas(ctx),
         Route("/icone-{tamanho:int}.png", _icone),
-        Mount("/", app=StaticFiles(directory=PASTA_WEB, html=True), name="web"),
+        Mount("/", app=ArquivosDoApp(directory=PASTA_WEB, html=True), name="web"),
     ]
     app = Starlette(routes=rotas, exception_handlers={HTTPException: _erro_http})
     return Porteiro(app, ctx)

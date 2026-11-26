@@ -17,21 +17,45 @@ _TRECHO_PROVA_S = 60.0
 _MEDIA = re.compile(r"mean_volume:\s*(-?[\d.]+|-inf)\s*dB")
 
 
+def fonte_do_audio(ctx: ContextoProjeto) -> tuple[Path, bool]:
+    """(arquivo de onde sai o som, se é a trilha externa). A trilha externa troca o som do vídeo."""
+    externo = ctx.opcoes.audio_externo.strip()
+    if externo:
+        return Path(externo), True
+    return Path(ctx.estado.entrada.caminho), False
+
+
 class ExtrairAudio(Etapa):
     id = "extrair_audio"
     nome = "Extraindo o áudio do vídeo"
+    # trocar a trilha refaz tudo o que vem do áudio (o padrão, vazio, não muda a assinatura)
+    opcoes_relevantes = ("audio_externo",)
     peso = 1.0
+    no_modo_audio = True
 
     def artefatos(self, ctx: ContextoProjeto) -> list[Path]:
         return [ctx.pastas.audio_original]
 
     def executar(self, ctx: ContextoProjeto) -> None:
-        entrada = Path(ctx.estado.entrada.caminho)
+        entrada, externo = fonte_do_audio(ctx)
         if not entrada.is_file():
+            if externo:
+                raise ErroSpurgeon(f"A trilha de áudio escolhida não está mais em {entrada}.")
             raise ErroSpurgeon(f"O vídeo não está mais em {entrada}.")
         info = sondar(entrada)
         if not info.tem_audio:
-            raise ErroSpurgeon("O vídeo não tem trilha de áudio.")
+            raise ErroSpurgeon(
+                f"O arquivo {entrada.name} não tem áudio." if externo
+                else "O vídeo não tem trilha de áudio."
+            )  # fmt: skip
+        duracao_do_video = info.duracao_s
+        if externo:
+            ctx.log.info(
+                "Usando a trilha de áudio de fora: %s (no lugar do som do vídeo).", entrada
+            )
+            video = Path(ctx.estado.entrada.caminho)
+            if video.is_file():
+                duracao_do_video = sondar(video).duracao_s
 
         mono = _e_dual_mono(ctx, entrada, info.duracao_s, info.canais_audio or 1)
         ctx.log.info(
@@ -58,12 +82,13 @@ class ExtrairAudio(Etapa):
         ctx.log.info(
             "Áudio extraído: %s (%.0f MB).", formatar_duracao(duracao), destino.stat().st_size / 1e6
         )
-        if abs(duracao - info.duracao_s) > 2.0:
+        if abs(duracao - duracao_do_video) > 2.0:
             ctx.log.warning(
                 "A duração do áudio (%.1f s) difere da do vídeo (%.1f s); os tempos podem "
-                "ficar defasados.",
+                "ficar defasados.%s",
                 duracao,
-                info.duracao_s,
+                duracao_do_video,
+                " Confira se a trilha de fora começa junto com o vídeo." if externo else "",
             )
 
 

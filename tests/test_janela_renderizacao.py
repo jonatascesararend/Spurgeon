@@ -45,7 +45,11 @@ def test_studio_fica_a_mao_nas_etapas_de_renderizacao(tela, projeto_pronto, etap
     _rodando(tela, etapa)
     assert tela.studio._motivo_bloqueio is None and _editor_a_vista(tela)
     assert tela.studio.processando and tela.studio.editor._processando
-    assert str(tela.studio._botao_renderizar.cget("state")) == "disabled"
+    n = tela.studio.pendentes()  # renderizar agora põe os que faltam na fila (não espera mais)
+    botao = tela.studio._botao_renderizar
+    assert (str(botao.cget("state")), botao.cget("text")) == (
+        ("normal", f"Pôr {n} na fila") if n else ("disabled", "Renderizar")
+    )
     assert "Renderização em andamento" in tela.studio._estado.cget("text")
     assert str(tela.studio._botao_salvar.cget("state")) == "disabled"  # nada para salvar ainda
 
@@ -105,16 +109,14 @@ def test_fim_do_processamento_sem_alteracoes_relê_o_projeto(tela, projeto_pront
     assert tela.studio.editor is not editor and not tela.studio.editor.mudou
 
 
-def test_renderizar_durante_a_renderizacao_so_avisa(tela, projeto_pronto, monkeypatch):
+def test_renderizar_durante_a_renderizacao_nao_comeca_outra(tela, projeto_pronto, monkeypatch):
     tela._abrir_projeto(projeto_pronto.pastas.raiz)
     _rodando(tela, "renderizar_shorts")
     chamadas = []
     monkeypatch.setattr(tela, "_iniciar", lambda ajustes=None: chamadas.append(ajustes))
     tela._renderizar_do_studio()
-    assert chamadas == []
-    assert any(
-        t == "Renderizar os Shorts" and "em andamento" in m for t, m in tela.caixas.mostradas
-    )
+    assert chamadas == []  # os Shorts vão para a fila (o teste de baixo)
+    assert any(t == "Renderizar os Shorts" and "na fila" in m for t, m in tela.caixas.mostradas)
 
 
 def test_a_aba_do_studio_nao_e_travada_pelo_processamento_na_renderizacao(tela, projeto_pronto):
@@ -234,3 +236,18 @@ def test_nao_fecha_se_comecou_outro_processamento(tela, projeto_pronto, fecha):
     tela.execucao.definir_estado(EstadoUI.EXECUTANDO)  # a pessoa já iniciou outro
     tela._fechar_ao_terminar()
     assert fecha["destroy"] == [] and any("outro processamento" in t for t in fecha["log"])
+
+
+def test_renderizar_com_o_pc_ocupado_poe_os_shorts_na_fila(tela, projeto_pronto, monkeypatch):
+    from spurgeon.shorts.fila import FilaDoProjeto
+
+    vistos = []
+    monkeypatch.setattr(app_mod.dialogos, "aviso", lambda _j, titulo, texto: vistos.append(texto))
+    tela._abrir_projeto(projeto_pronto.pastas.raiz)
+    _rodando(tela, "renderizar_shorts")
+    pendentes = [c.id for c in tela.studio.editor.pendentes()]
+    assert pendentes  # o projeto pronto tem Shorts aprovados por renderizar
+    tela._renderizar_do_studio()
+    itens = FilaDoProjeto(projeto_pronto.pastas).itens()
+    assert sorted(i.corte for i in itens) == sorted(pendentes) and all(i.renderizar for i in itens)
+    assert "na fila" in vistos[-1]

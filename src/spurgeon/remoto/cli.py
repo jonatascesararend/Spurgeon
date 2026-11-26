@@ -116,10 +116,17 @@ def _iniciar(args: argparse.Namespace) -> int:
     ctx.cronograma = Cronograma(
         caminho_config_remoto().parent / NOME_DO_ARQUIVO, pasta_projetos=pasta_projetos
     )
+    ctx.cronograma.pode_mover = lambda: not trabalhadores_rodando()
     ctx.postagens = Postagens(
         ao_terminar=lambda e: avisar_da_postagem(ctx, e),
         processando=lambda: bool(trabalhadores_rodando()),
     )
+    from spurgeon.remoto.despachante import Despachante, Vez, arquivo_da_vez
+
+    ctx.despachante = Despachante(
+        lambda: pasta_projetos, fila=ctx.fila, vez=Vez(arquivo_da_vez()),
+        ao_terminar=lambda e: avisar_da_fila(ctx, e),
+    )  # fmt: skip
     vigia = Vigia(
         pasta_projetos, ctx.avisos.enviar, intervalo_s=INTERVALO_DO_VIGIA_S,
         pode_avisar=lambda: ctx.config.avisos_ligados and not ctx.config.dormindo,
@@ -131,12 +138,21 @@ def _iniciar(args: argparse.Namespace) -> int:
         f"Controle remoto: {config.endereco or 'sem endereço do Tailscale'} (log: {caminho_do_log})"
     )
     try:
-        servir(ctx, config.porta, ao_iniciar=vigia.iniciar, ao_terminar=vigia.parar)
+        servir(
+            ctx, config.porta,
+            ao_iniciar=lambda: (vigia.iniciar(), ctx.despachante.iniciar()),
+            ao_terminar=lambda: (vigia.parar(), ctx.despachante.parar()),
+        )  # fmt: skip
     except OSError as erro:
         _dizer(f"A porta {config.porta} está ocupada (o servidor já está rodando?): {erro}")
         return 1
     except KeyboardInterrupt:
         pass
+    if ctx.reiniciar:  # o celular pediu: a porta já foi solta, o servidor novo a pega
+        from spurgeon.remoto.liga_desliga import abrir_servidor
+
+        _dizer("Reiniciando o controle remoto (pedido pelo celular).")
+        abrir_servidor()
     return 0
 
 
@@ -169,6 +185,21 @@ def avisar_da_postagem(ctx, envio) -> None:
     ctx.avisos.enviar(Aviso("YouTube", texto, url=url, marca=f"postagem-{envio.projeto}"))
 
 
+def avisar_da_fila(ctx, evento) -> None:
+    """Um Short da fila foi renderizado, programado no YouTube ou parou com erro: avisa."""
+    from urllib.parse import quote
+
+    from spurgeon.remoto.avisos import Aviso
+
+    ctx.cronograma.marcar_velho()  # o canal mudou: a próxima abertura do cronograma lê de novo
+    if ctx.config.dormindo or not ctx.config.avisos_ligados:
+        return
+    url = f"/#/p/{quote(evento.projeto, safe='')}/s/{evento.corte}"
+    texto = evento.texto if not evento.erro else f"A fila parou: {evento.erro}"
+    ctx.avisos.enviar(Aviso(evento.titulo or "Fila dos Shorts", texto, url=url,
+                            marca=f"fila-{evento.projeto}-{evento.corte}"))  # fmt: skip
+
+
 def avisar_do_projeto_novo(ctx, tarefa) -> None:
     """O vídeo do canal foi baixado e o processamento começou (ou não deu): avisa o celular."""
     from urllib.parse import quote
@@ -182,7 +213,9 @@ def avisar_do_projeto_novo(ctx, tarefa) -> None:
     else:
         url, texto = (
             f"/#/p/{quote(tarefa.projeto, safe='')}",
-            "Baixado; o processamento começou no PC.",
+            "Baixado; o processamento começou no PC."
+            if tarefa.processar
+            else "Vídeo baixado: já dá para ver a prévia do tratamento e começar.",
         )
     ctx.avisos.enviar(Aviso(tarefa.titulo, texto, url=url, marca=f"novo-{tarefa.video_id}"))
 
@@ -229,11 +262,41 @@ def _aviso_teste(args: argparse.Namespace) -> int:
     return 0 if all(e.ok for e in entregas) else 1
 
 
+def _ligar(_args: argparse.Namespace) -> int:
+    from spurgeon.remoto import liga_desliga
+
+    return liga_desliga.ligar()
+
+
+def _parar(_args: argparse.Namespace) -> int:
+    from spurgeon.remoto import liga_desliga
+
+    return liga_desliga.parar()
+
+
+def _reiniciar(_args: argparse.Namespace) -> int:
+    from spurgeon.remoto import liga_desliga
+
+    return liga_desliga.reiniciar()
+
+
+def _atalhos(_args: argparse.Namespace) -> int:
+    from spurgeon.remoto import liga_desliga
+
+    for atalho in liga_desliga.criar_atalhos():
+        _dizer(f"Atalho criado: {atalho}")
+    return 0
+
+
 _ACOES = {
     "iniciar": _iniciar,
     "configurar": _configurar,
     "inicializacao": _inicializacao,
     "aviso-teste": _aviso_teste,
+    "ligar": _ligar,
+    "parar": _parar,
+    "reiniciar": _reiniciar,
+    "atalhos": _atalhos,
 }
 
 
@@ -258,6 +321,10 @@ def adicionar_comando(sub) -> None:
     )
     inic = acoes.add_parser("inicializacao", help="abrir (ou não) o servidor com o Windows")
     inic.add_argument("acao", choices=("ligar", "desligar"))
+    acoes.add_parser("ligar", help="liga o servidor sem janela, se ainda não está rodando")
+    acoes.add_parser("parar", help="fecha o servidor (pergunta se ele está no meio de um trabalho)")
+    acoes.add_parser("reiniciar", help="fecha e liga o servidor de novo")
+    acoes.add_parser("atalhos", help="cria os atalhos ligar, fechar e reiniciar na pasta do Studio")
     teste = acoes.add_parser("aviso-teste", help="manda um aviso de teste ao celular")
     teste.add_argument("texto", nargs="?", default="Teste: os avisos do PC chegam neste aparelho.")
     remoto.set_defaults(funcao=_despachar)

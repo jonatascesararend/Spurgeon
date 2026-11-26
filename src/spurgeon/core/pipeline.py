@@ -310,6 +310,8 @@ class Etapa(ABC):
     entrega: ClassVar[bool] = False
     #: True nas etapas do modo "só introdução e vinheta" (todas as outras ficam de fora).
     no_modo_vinhetas: ClassVar[bool] = False
+    #: True nas etapas do modo "só o áudio" (extrair, limpar, normalizar, exportar e conferir).
+    no_modo_audio: ClassVar[bool] = False
 
     def ativa(self, opcoes: OpcoesProcessamento) -> bool:
         return True
@@ -346,6 +348,8 @@ class Pipeline:
         ativas = [e for e in self.etapas if e.ativa(opcoes)]
         if opcoes.so_vinhetas:
             return [e for e in ativas if e.no_modo_vinhetas]
+        if opcoes.so_audio:
+            return [e for e in ativas if e.no_modo_audio]
         return ativas
 
     def preparar(self, ctx: ContextoProjeto) -> None:

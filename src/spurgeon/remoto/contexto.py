@@ -10,10 +10,12 @@ from pathlib import Path
 from spurgeon.remoto.avisos import Avisos
 from spurgeon.remoto.config import ConfigRemoto, salvar_config_remoto
 from spurgeon.remoto.cronograma import Cronograma
+from spurgeon.remoto.despachante import Despachante
 from spurgeon.remoto.fila import Fila
 from spurgeon.remoto.livre import Criacoes
 from spurgeon.remoto.novo import NovosProjetos
 from spurgeon.remoto.postagem import Postagens
+from spurgeon.shorts import gemini
 
 
 def listar_o_canal() -> list:
@@ -34,6 +36,8 @@ class Contexto:
     gravar_config: Callable[[ConfigRemoto], object] = salvar_config_remoto
     #: pede ao servidor para sair (o `servir` liga isto ao uvicorn)
     encerrar: Callable[[], None] = lambda: None
+    #: o celular pediu para reiniciar: ao sair, o `iniciar` abre um servidor novo no lugar
+    reiniciar: bool = False
     #: o processamento que o celular pede (um por vez no PC)
     fila: Fila = field(default_factory=Fila)
     #: o Short livre que a IA está criando (um por vez)
@@ -49,11 +53,17 @@ class Contexto:
     #: onde a última lista de vídeos do canal fica guardada (None = só na memória; o `servir` põe
     #: o arquivo ao lado do `remoto.json`)
     arquivo_da_lista: Path | None = None
+    #: a chave do Gemini (a mesma do cofre da aba Integrações do PC); None = sem chave
+    gemini: Callable[[], gemini.Configuracao | None] = field(default=None)  # type: ignore[assignment]
+    #: anda a fila dos Shorts (renderizar e programar no YouTube); None = ninguém (os testes)
+    despachante: Despachante | None = None
     _trava: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         if self.listar_canal is None:
             self.listar_canal = listar_o_canal
+        if self.gemini is None:
+            self.gemini = lambda: gemini.configuracao(self.avisos.cofre)
         if self.novos is None:
             self.novos = NovosProjetos(
                 iniciar_processamento=lambda pastas: self.fila.iniciar(pastas),

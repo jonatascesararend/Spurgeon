@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from spurgeon.core.arquivos import ler_json
-from spurgeon.core.erros import ErroFerramenta
+from spurgeon.core.erros import ErroFerramenta, ErroFFmpeg
 from spurgeon.core.ffmpeg import sondar
 from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.pipeline import ContextoProjeto, Etapa
@@ -41,13 +41,19 @@ def fim_da_ultima_legenda(texto_srt: str) -> tuple[int, float]:
 class Finalizar(Etapa):
     id = "finalizar"
     nome = "Conferindo o resultado"
-    depende_de = ("renderizar_shorts", "renderizar_video_longo", "gerar_srt")
+    depende_de = ("renderizar_shorts", "renderizar_video_longo", "gerar_srt", "exportar_audio")
     peso = 0.5
 
     no_modo_vinhetas = True
+    no_modo_audio = True
 
     def ativa(self, opcoes) -> bool:
-        return opcoes.processa_video_longo or opcoes.processa_shorts or opcoes.so_vinhetas
+        return (
+            opcoes.processa_video_longo
+            or opcoes.processa_shorts
+            or opcoes.so_vinhetas
+            or opcoes.so_audio
+        )
 
     def executar(self, ctx: ContextoProjeto) -> None:
         problemas: list[str] = []
@@ -59,6 +65,8 @@ class Finalizar(Etapa):
             self._shorts(ctx, problemas, avisos, resumo)
         if ctx.opcoes.so_vinhetas:
             self._com_vinhetas(ctx, problemas, resumo)
+        if ctx.opcoes.so_audio:
+            self._audio(ctx, problemas, resumo)
 
         ctx.log.info("Resultado em %s:", ctx.pastas.raiz)
         for linha in resumo:
@@ -149,6 +157,32 @@ class Finalizar(Etapa):
         if ctx.pastas.srt_com_vinhetas.exists():
             resumo.append(f"{ctx.pastas.srt_com_vinhetas.name}: legendas com o tempo da introdução")
 
+    # --- só o áudio ---------------------------------------------------------------------------
+    def _audio(self, ctx, problemas: list[str], resumo: list[str]) -> None:
+        arquivo = ctx.pastas.audio_exportado(ctx.opcoes.audio_formato)
+        if not arquivo.exists():
+            problemas.append(f"O arquivo de áudio não foi gerado ({arquivo.name}).")
+            return
+        info = sondar(arquivo)
+        if not info.tem_audio:
+            problemas.append(f"{arquivo.name} está sem som.")
+            return
+        try:
+            fonte = sondar(ctx.pastas.audio_final(ctx.opcoes)).duracao_s
+        except (ErroFFmpeg, OSError):  # o intermediário já não existe: nada a comparar
+            fonte = 0.0
+        if fonte:
+            inicio, fim = ctx.opcoes.janela_do_video(fonte)
+            if abs(info.duracao_s - (fim - inicio)) > TOLERANCIA_VIDEO_S:
+                problemas.append(
+                    f"{arquivo.name} tem {formatar_duracao(info.duracao_s)}, mas o esperado era "
+                    f"{formatar_duracao(fim - inicio)}."
+                )
+        resumo.append(
+            f"{arquivo.name}: {formatar_duracao(info.duracao_s)}, "
+            f"{arquivo.stat().st_size / 1e6:.0f} MB"
+        )
+
     # --- Shorts -----------------------------------------------------------------------------
     def _shorts(self, ctx, problemas: list[str], avisos: list[str], resumo: list[str]) -> None:
         if not ctx.pastas.cortes_shorts.exists():
@@ -157,7 +191,7 @@ class Finalizar(Etapa):
         planejados = planejar_shorts(carregar_cortes(ctx.pastas.cortes_shorts))
         if not planejados:
             avisos.append(
-                "Nenhum Short marcado ainda: escolha, ajuste e renderize no Studio Shorts."
+                "Nenhum Short aprovado ainda: escolha, ajuste e renderize no Studio Shorts."
             )
             return
         total_s = total_bytes = 0.0

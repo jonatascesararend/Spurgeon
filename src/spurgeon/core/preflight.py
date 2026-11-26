@@ -19,6 +19,7 @@ from spurgeon.core.ffmpeg import (
     sondar,
     versao_ffmpeg,
 )
+from spurgeon.core.formatacao import formatar_duracao
 from spurgeon.core.hardware import detectar_hardware, recomendar
 from spurgeon.core.ollama import URL_OLLAMA, localizar_ollama
 
@@ -63,9 +64,14 @@ def executar_preflight(
         resultados.append(_marca(opcoes))
     if especifico and opcoes.tem_janela and not opcoes.so_vinhetas:
         resultados.append(_janela_do_video(Path(video), opcoes))
+    if especifico and opcoes.audio_externo.strip() and not opcoes.so_vinhetas:
+        resultados.append(_audio_externo(opcoes))
+    if especifico and opcoes.so_audio and opcoes.audio_formato == "mp3":
+        resultados.append(_codificador_mp3())
     if (opcoes.limpar_audio and not opcoes.so_vinhetas) or not especifico:
         resultados.append(_deep_filter(config))
-    if not (opcoes.so_vinhetas and especifico):  # só emendar vinhetas não transcreve nada
+    # só emendar vinhetas ou só tirar o áudio não transcrevem nada
+    if not ((opcoes.so_vinhetas or opcoes.so_audio) and especifico):
         resultados += _whisper(config, opcoes)
     resultados += _hardware_e_disco(config, video, opcoes)
     if opcoes.processa_shorts or not especifico:
@@ -151,6 +157,32 @@ def _janela_do_video(video: Path, opcoes: OpcoesProcessamento) -> Verificacao:
         )
     return Verificacao(
         "Começo e fim do vídeo", Nivel.OK, f"usa de {inicio:.0f} s a {fim:.0f} s de {duracao:.0f} s"
+    )
+
+
+def _audio_externo(opcoes: OpcoesProcessamento) -> Verificacao:
+    """A trilha de áudio de fora precisa existir e ter som."""
+    arquivo = Path(opcoes.audio_externo.strip())
+    if not arquivo.is_file():
+        return Verificacao("Trilha de áudio", Nivel.ERRO, f"arquivo não encontrado: {arquivo}")
+    try:
+        info = sondar(arquivo)
+    except (ErroFFmpeg, ErroConfiguracao) as erro:
+        return Verificacao(
+            "Trilha de áudio", Nivel.ERRO, f"não deu para ler {arquivo.name}: {erro}"
+        )
+    if not info.tem_audio:
+        return Verificacao("Trilha de áudio", Nivel.ERRO, f"{arquivo.name} não tem som")
+    return Verificacao(
+        "Trilha de áudio", Nivel.OK, f"{arquivo.name} ({formatar_duracao(info.duracao_s)})"
+    )
+
+
+def _codificador_mp3() -> Verificacao:
+    if "libmp3lame" in codificadores_disponiveis():
+        return Verificacao("MP3", Nivel.OK, "libmp3lame")
+    return Verificacao(
+        "MP3", Nivel.ERRO, "este FFmpeg não grava MP3 (falta o libmp3lame): escolha WAV"
     )
 
 
@@ -304,6 +336,8 @@ def _espaco_necessario_gb(video: Path, opcoes: OpcoesProcessamento) -> float:
     crf = opcoes.preset_qualidade().crf
     if opcoes.so_vinhetas:  # uma cópia do vídeo longo já pronto, com a introdução e a vinheta
         return estimar_tamanho_bytes(duracao, crf) * 1.1 / 1024**3 + _MARGEM_DISCO_GB
+    if opcoes.so_audio:  # os WAV intermediários e o arquivo final (no máximo outro WAV)
+        return duracao * 48000 * 2 * (_AUDIOS_INTERMEDIARIOS + 1) / 1024**3 + _MARGEM_DISCO_GB
     total = duracao * 48000 * 2 * _AUDIOS_INTERMEDIARIOS
     if opcoes.processa_video_longo:
         total += estimar_tamanho_bytes(duracao, crf) * 1.15

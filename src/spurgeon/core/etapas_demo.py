@@ -39,6 +39,7 @@ class ExtrairAudioDemo(_EtapaDemo):
     id = "demo_extrair"
     nome = "Extraindo o áudio (demonstração)"
     peso = 1.0
+    no_modo_audio = True
 
 
 class TranscreverDemo(_EtapaDemo):

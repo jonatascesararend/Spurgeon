@@ -27,8 +27,23 @@ DURACAO_IDEAL_SHORT_S = 60.0
 ModeloWhisper = Literal["tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"]
 Qualidade = Literal["maxima", "alta", "equilibrado", "rapido", "personalizado"]
 #: o que o processamento faz: tudo; só os Shorts (aproveitando o que já foi feito); ou só juntar
-#: introdução e vinheta final a um vídeo longo que já está pronto
-Modo = Literal["completo", "so_shorts", "so_vinhetas"]
+#: introdução e vinheta final a um vídeo longo que já está pronto; ou só tirar o áudio do vídeo
+Modo = Literal["completo", "so_shorts", "so_vinhetas", "so_audio"]
+#: o arquivo que o modo "Só o áudio" entrega: WAV sem perdas ou MP3 (bem menor)
+FormatoAudio = Literal["wav", "mp3"]
+#: arquivos aceitos como trilha de áudio de fora (um vídeo também serve: usa o som dele)
+EXTENSOES_AUDIO = (
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".wma",
+    ".aif",
+    ".aiff",
+)
 #: como a introdução e a vinheta se ligam ao vídeo: `mesclar` funde as duas imagens e os dois sons
 #: (uma sobreposição); `preto` escurece até o preto e volta
 EstiloDoFade = Literal["mesclar", "preto"]
@@ -129,6 +144,7 @@ CAMPOS_NOVOS_NA_1_2 = frozenset(
         "video_inicio_s", "video_fim_s", "zoom_pct", "zoom_centro_x_pct", "zoom_centro_y_pct",
         "zoom_nos_shorts", "tratamento_ativo", "tratamento_nos_shorts", *CAMPOS_DO_TRATAMENTO,
         "shorts_zoom_pct", "shorts_zoom_centro_x_pct", "shorts_zoom_centro_y_pct",
+        "audio_externo", "audio_formato",
     }
 )  # fmt: skip
 
@@ -146,6 +162,12 @@ class OpcoesProcessamento(BaseModel):
     legendas_dinamicas: bool = False
     limpar_audio: bool = False
     normalizar_volume: bool = False
+    #: outra trilha de áudio (um áudio melhorado em outro programa, por exemplo) que substitui o som
+    #: do vídeo em tudo: transcrição, pausas, vídeo longo e Shorts. Vazio = o som do próprio vídeo.
+    #: Precisa estar na mesma linha do tempo do vídeo (começar junto com ele).
+    audio_externo: str = ""
+    #: o arquivo do modo "Só o áudio"
+    audio_formato: FormatoAudio = "wav"
     introducao: bool = False
     vinheta_final: bool = False
     #: arquivos escolhidos pela pessoa; vazio = o padrão de `recursos/` (introducao, vinheta_final)
@@ -322,7 +344,18 @@ class OpcoesProcessamento(BaseModel):
     @property
     def processa_shorts(self) -> bool:
         """Analisa e renderiza os Shorts."""
-        return self.modo != "so_vinhetas" and self.gerar_shorts
+        return self.modo in ("completo", "so_shorts") and self.gerar_shorts
+
+    @property
+    def trilha_externa(self) -> Path | None:
+        """A trilha de áudio de fora, se foi escolhida e o arquivo existe."""
+        caminho = self.audio_externo.strip()
+        return Path(caminho) if caminho and Path(caminho).is_file() else None
+
+    @property
+    def so_audio(self) -> bool:
+        """Só tira o áudio do vídeo (limpo e normalizado, se pedido) e o entrega num arquivo."""
+        return self.modo == "so_audio"
 
     @property
     def marca_no_longo(self) -> bool:
@@ -350,6 +383,8 @@ class OpcoesProcessamento(BaseModel):
         elif self.modo == "so_shorts":
             if not self.gerar_shorts:
                 achados.append("No modo só Shorts, a geração de Shorts precisa estar ligada.")
+        elif self.so_audio:
+            pass  # o áudio é o produto: não há o que marcar
         elif not (self.gerar_video_longo or self.gerar_shorts):
             achados.append("Marque ao menos um produto: vídeo longo ou Shorts.")
         if self.legendas_dinamicas and not self.gerar_shorts:

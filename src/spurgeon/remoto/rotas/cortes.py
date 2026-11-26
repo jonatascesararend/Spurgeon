@@ -14,12 +14,15 @@ from typing import Any
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
+from spurgeon.core.erros import ErroSpurgeon
 from spurgeon.core.estado import StatusEtapa, carregar_estado
 from spurgeon.remoto import dados, edicao, sessao
 from spurgeon.remoto.contexto import Contexto
+from spurgeon.render import trecho_de_audio
+from spurgeon.shorts import revisao_gemini
 from spurgeon.shorts.edicao import LimiteInvalido
 
 #: as etapas que podem estar rodando enquanto o celular edita (como o Studio do PC)
@@ -62,9 +65,10 @@ def rotas(ctx: Contexto) -> list[Route]:
             raise HTTPException(409, "O PC ainda está escolhendo os cortes. Espere essa etapa.")
 
     def _resposta_do_short(pastas, id_do_corte: int) -> JSONResponse:
-        for short in dados.shorts_no_disco(pastas):
-            if short.corte.id == id_do_corte:
-                return JSONResponse(dados.resumo_do_short(short))
+        # o mesmo resumo da lista (com a marca da fila e o YouTube): a tela do Short o acompanha
+        for resumo in dados.shorts(pastas):
+            if resumo["id"] == id_do_corte:
+                return JSONResponse(resumo)
         raise HTTPException(404, "Este corte não existe no projeto.")
 
     # --- a trava --------------------------------------------------------------------------------
@@ -144,6 +148,92 @@ def rotas(ctx: Contexto) -> list[Route]:
             _mudar, request, corpo, lambda p, c, d: edicao.marcar(p, c, bool(d["incluir"]))
         )
 
+    async def opiniao(request: Request) -> JSONResponse:
+        """👍 / 👎 do Short (`opiniao`: "bom", "ruim" ou "" para tirar)."""
+        corpo = await _corpo(request)
+
+        def fazer(p, c, d):
+            valor = d["opiniao"]
+            if not isinstance(valor, str):
+                raise TypeError("opiniao")
+            return edicao.dar_opiniao(p, c, valor)
+
+        return await run_in_threadpool(_mudar, request, corpo, fazer)
+
+    # --- ajuste fino da legenda ----------------------------------------------------------------
+    def ajuste_fino(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(
+                edicao.para_o_ajuste_fino(_pastas(request), request.path_params["corte"])
+            )
+        except edicao.CorteNaoEncontrado as erro:
+            raise HTTPException(404, "Este corte não existe no projeto.") from erro
+        except (OSError, ValueError) as erro:
+            raise HTTPException(404, "A transcrição deste projeto não foi encontrada.") from erro
+
+    async def salvar_ajuste_fino(request: Request) -> JSONResponse:
+        corpo = await _corpo(request)
+        return await run_in_threadpool(
+            _mudar, request, corpo,
+            lambda p, c, d: edicao.salvar_ajuste_fino(p, c, d["palavras"]),
+        )  # fmt: skip
+
+    async def desfazer_ajuste_fino(request: Request) -> JSONResponse:
+        return await run_in_threadpool(
+            _mudar, request, {}, lambda p, c, _d: edicao.desfazer_ajuste_fino(p, c)
+        )
+
+    def _som_do_ajuste(request: Request) -> FileResponse:
+        pastas = _pastas(request)
+        try:
+            arquivo = edicao.som_do_ajuste_fino(pastas, request.path_params["corte"])
+        except edicao.CorteNaoEncontrado as erro:
+            raise HTTPException(404, "Este corte não existe no projeto.") from erro
+        except trecho_de_audio.SemSom as erro:
+            raise HTTPException(409, str(erro)) from erro
+        except (ErroSpurgeon, OSError, ValueError) as erro:
+            raise HTTPException(500, f"Não consegui montar o som do trecho: {erro}") from erro
+        return FileResponse(arquivo, media_type="audio/mp4")
+
+    async def som_do_ajuste(request: Request) -> FileResponse:
+        return await run_in_threadpool(_som_do_ajuste, request)
+
+    def _revisar(request: Request) -> JSONResponse:
+        pastas = _pastas(request)
+        _pode_editar(pastas)
+        config = ctx.gemini()
+        if config is None:
+            raise HTTPException(
+                409,
+                "Sem a chave do Gemini: cole a chave na aba Integrações do programa no PC.",
+            )
+        id_do_corte = request.path_params["corte"]
+        try:
+            edicao.revisar_com_gemini(pastas, id_do_corte, config)
+        except edicao.CorteNaoEncontrado as erro:
+            raise HTTPException(404, "Este corte não existe no projeto.") from erro
+        except revisao_gemini.TextoCurto as erro:
+            raise HTTPException(422, str(erro)) from erro
+        except ErroSpurgeon as erro:  # a API do Gemini recusou ou não respondeu
+            raise HTTPException(502, str(erro)) from erro
+        return _resposta_do_short(pastas, id_do_corte)
+
+    async def gemini(request: Request) -> JSONResponse:
+        """O Gemini revisa este Short (leva de alguns segundos a um minuto)."""
+        return await run_in_threadpool(_revisar, request)
+
+    async def pausas(request: Request) -> JSONResponse:
+        """O corte das pausas deste Short (`pausa_s`: 0 desliga)."""
+        corpo = await _corpo(request)
+
+        def fazer(p, c, d):
+            valor = d["pausa_s"]
+            if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+                raise TypeError("pausa_s")
+            return edicao.mudar_pausas(p, c, float(valor))
+
+        return await run_in_threadpool(_mudar, request, corpo, fazer)
+
     async def textos(request: Request) -> JSONResponse:
         """Título, descrição e hashtags (cada um só se vier no pedido)."""
         corpo = await _corpo(request)
@@ -170,4 +260,19 @@ def rotas(ctx: Contexto) -> list[Route]:
         Route("/api/projetos/{projeto}/shorts/{corte:int}/legenda", legenda, methods=["POST"]),
         Route("/api/projetos/{projeto}/shorts/{corte:int}/pontas", pontas, methods=["POST"]),
         Route("/api/projetos/{projeto}/shorts/{corte:int}/marcar", marcar, methods=["POST"]),
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/pausas", pausas, methods=["POST"]),
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/opiniao", opiniao, methods=["POST"]),
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/gemini", gemini, methods=["POST"]),
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/ajuste_fino", ajuste_fino),
+        Route(
+            "/api/projetos/{projeto}/shorts/{corte:int}/ajuste_fino",
+            salvar_ajuste_fino,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/projetos/{projeto}/shorts/{corte:int}/ajuste_fino/desfazer",
+            desfazer_ajuste_fino,
+            methods=["POST"],
+        ),
+        Route("/api/projetos/{projeto}/shorts/{corte:int}/ajuste_fino/som", som_do_ajuste),
     ]
